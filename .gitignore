@@ -1,0 +1,52 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+.venv-tests/
+env/
+.tox/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Node / npm (if any tooling lands)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Logs + scratch
+*.log
+logs/
+tmp/
+scratch/
+
+# Local-only Hermes state
+state/
+*.sqlite
+*.db

@@ -1,0 +1,116 @@
+{
+  "_comment": "Cron entries to APPEND into ~/.hermes/cron/jobs.json on the VPS. Do NOT replace the existing file — the daily-note-prefill and internship-watcher jobs must be preserved. Append these entries inside the `jobs` array and update `updated_at`. All three use script mode (no LLM turn = $0 marginal cost) and deliver stdout verbatim to Telegram.",
+  "_script_path_note": "Hermes' cron dispatcher refuses scripts outside ~/.hermes/scripts/ (sandbox: 'resolved script path is outside the allowed scripts directory'). The repo scripts are mirrored into that root by scripts/deploy.sh on every deploy, with a 'health_' prefix to avoid collision with bundled Hermes scripts. The script paths here reference the mirrored copies, NOT the repo paths.",
+  "_apply_procedure": "See docs/DEPLOY.md → 'Adding cron entries'. Use the deploy script's merge helper rather than hand-editing.",
+
+  "jobs_to_append": [
+    {
+      "id": "a1f5d3c9b2e0",
+      "name": "health-morning-nudge",
+      "prompt": null,
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/health_morning_weigh_in_nudge.sh",
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "15 7 * * *",
+        "display": "15 7 * * *"
+      },
+      "schedule_display": "15 7 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-05-26T13:30:00-04:00",
+      "next_run_at": null,
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "/home/hermes/vault"
+    },
+    {
+      "id": "b3c7e9f1a4d2",
+      "name": "health-lunch-check",
+      "prompt": null,
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/health_lunch_check.sh",
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 13 * * *",
+        "display": "0 13 * * *"
+      },
+      "schedule_display": "0 13 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-05-26T13:30:00-04:00",
+      "next_run_at": null,
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "/home/hermes/vault"
+    },
+    {
+      "id": "c8d4a2b1e5f9",
+      "name": "health-evening-summary-nudge",
+      "prompt": null,
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/health_evening_summary.sh",
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 21 * * *",
+        "display": "0 21 * * *"
+      },
+      "schedule_display": "0 21 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-05-26T13:30:00-04:00",
+      "next_run_at": null,
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "/home/hermes/vault"
+    }
+  ]
+}

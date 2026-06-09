@@ -1,0 +1,69 @@
+# Hermes MCP server config snippet — Phase 1 (food + nutrient lookup).
+#
+# HOW TO APPLY:
+#   This is a SNIPPET to be merged into the existing `mcp_servers:` block
+#   in ~/.hermes/config.yaml on the VPS. DO NOT replace the whole file.
+#
+#   See docs/DEPLOY.md → Step 4 for the merge procedure + critical gotchas.
+#
+# IMPORTANT: USDA_API_KEY is a placeholder here. Substitute the real key on
+# the VPS only (never commit). Hermes does NOT substitute ${VAR} in `env:`
+# blocks — it passes the literal string. So the key must appear verbatim in
+# the on-VPS config. Same goes for any future secrets.
+
+mcp_servers:
+
+  # Food-tracker MCP — backed by USDA FoodData Central.
+  # Exposes: search_food, log_food, get_daily_log, set_goals, get_summary, delete_entry.
+  # Source: https://github.com/neonwatty/food-tracker-mcp
+  #
+  # GOTCHAS (learned the hard way 2026-05-26):
+  #   1. food-tracker-mcp hardcodes its SQLite DB path to `../../data.db` relative to
+  #      the package's `dist/` dir. If you `npm install -g` as root, this becomes
+  #      /usr/lib/node_modules/@neonwatty/data.db — NOT writable by `hermes`.
+  #      → Install user-local instead: `npm install --prefix ~/npm-local @neonwatty/food-tracker-mcp`
+  #      Then invoke via the absolute path to dist/index.js.
+  #
+  #   2. The package's dotenvx dependency prints an `◇ injected env (0) from .env` banner
+  #      to STDOUT on startup, which breaks MCP's stdio JSON-RPC protocol.
+  #      → Set DOTENV_CONFIG_QUIET=true in the env block below.
+  #
+  #   3. Hermes does NOT inherit parent process env into MCP children, and does NOT
+  #      substitute ${VAR} in YAML config. The `env:` block here must have LITERAL values.
+  food-tracker:
+    enabled: true
+    command: node
+    args:
+    - "/home/hermes/npm-local/node_modules/@neonwatty/food-tracker-mcp/dist/index.js"
+    env:
+      USDA_API_KEY: "<REPLACE_ON_VPS_WITH_REAL_USDA_KEY>"
+      DOTENV_CONFIG_QUIET: "true"
+    timeout: 60
+    connect_timeout: 20
+    supports_parallel_tool_calls: true
+    # Structural enforcement of "vault is canonical, MCP is lookup-only".
+    # Without this, the LLM cheerfully calls log_food / get_summary / etc.
+    # and bypasses the vault write entirely (observed during 2026-05-26
+    # smoke test). The `tools.include` filter happens at Hermes' agent-
+    # exposure layer — the MCP server still has all 6 tools, but only
+    # the listed ones are forwarded to the LLM as callable. The forbidden
+    # tools physically don't exist in the LLM's tool list.
+    tools:
+      include:
+      - search_food
+      # Deliberately excluded (storage-side tools — vault owns persistence):
+      #   log_food, get_daily_log, get_summary, set_goals, delete_entry
+
+  # opennutrition — DEFERRED to Phase 2.
+  # Container running on 127.0.0.1:9113 but Hermes' streamable-http client can't
+  # establish a stable connection. Needs further investigation: maybe a different
+  # `type:` value, or maybe the deadletterq/mcp-opennutrition image uses a
+  # different transport flavor than Hermes expects. Not blocking Phase 1 since
+  # food-tracker (USDA) is sufficient.
+  #
+  # opennutrition:
+  #   enabled: true
+  #   type: streamable-http
+  #   url: "http://localhost:9113"
+  #   timeout: 30
+  #   connect_timeout: 10

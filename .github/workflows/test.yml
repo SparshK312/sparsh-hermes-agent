@@ -1,0 +1,55 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # manual trigger
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test deps
+        run: pip install pytest pyyaml
+
+      - name: Run test suite
+        run: pytest -v --tb=short
+
+      - name: Verify deploy.sh syntax
+        run: bash -n scripts/deploy.sh
+
+      - name: Verify voice-wrapper patcher --check on a synthesized fixture
+        run: |
+          # Create a fake gateway/run.py containing the exact upstream wrapper
+          # block at the indentation the patcher expects (20 spaces). The
+          # patcher does pure text matching, so the fixture doesn't need to be
+          # valid Python — only byte-identical to the upstream snippet.
+          mkdir -p /tmp/fake-hermes/gateway
+          cat > /tmp/fake-hermes/gateway/run.py <<'EOF'
+          # Synthetic minimal gateway/run.py for patcher unit-test
+          # Block below is at 20-space indent (matches Hermes upstream nesting).
+                              enriched_parts.append(
+                                  f'[The user sent a voice message~ '
+                                  f'Here\'s what they said: "{transcript}"]'
+                              )
+          EOF
+          HERMES_GATEWAY_RUN=/tmp/fake-hermes/gateway/run.py \
+            python3 scripts/patch/voice_wrapper_patch.py --check | grep -q "unpatched"
+          # Now actually apply, verify, then revert and verify again.
+          HERMES_GATEWAY_RUN=/tmp/fake-hermes/gateway/run.py \
+            python3 scripts/patch/voice_wrapper_patch.py
+          HERMES_GATEWAY_RUN=/tmp/fake-hermes/gateway/run.py \
+            python3 scripts/patch/voice_wrapper_patch.py --check | grep -q "patched"
+          HERMES_GATEWAY_RUN=/tmp/fake-hermes/gateway/run.py \
+            python3 scripts/patch/voice_wrapper_patch.py --revert
+          HERMES_GATEWAY_RUN=/tmp/fake-hermes/gateway/run.py \
+            python3 scripts/patch/voice_wrapper_patch.py --check | grep -q "unpatched"
