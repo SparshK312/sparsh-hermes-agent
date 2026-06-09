@@ -21,6 +21,12 @@ When the user reports a bodyweight measurement. Examples:
 
 Do **not** use for weights of food, equipment, or anything that's not the user's bodyweight.
 
+## Notes
+
+- The user may send a terse morning weigh-in like `Morning weigh in 117.1` or `Morning weight 114 lb`. Treat that as sufficient input when the meaning is clear.
+- Keep the response terse and action-first.
+- See `references/user-weight-logging-patterns.md` for the user-specific shorthand examples.
+
 ## Step-by-step
 
 1. **Parse the value.** Required: a positive number. Optional: unit (`lb`, `kg`, `pounds`, `kilos`).

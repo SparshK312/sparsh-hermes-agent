@@ -74,6 +74,7 @@ Parse the user's input (text OR vision-synthesized list from step 0) into a stru
 - `items[]` — a list of strings, each one food item with quantity if specified
   - "2 eggs and toast" → `["2 eggs", "1 slice toast"]`
   - "chicken bowl at cafeteria" → `["chicken bowl"]` (single unknown item — template-match candidate)
+  - Brand shorthand should resolve to the user's default unless they specify otherwise. Example: **"fairlife" = Core Power 26g** in this vault unless the user says 42g / Elite / another flavor.
 - `meal_type` — one of `breakfast`, `lunch`, `dinner`, `snack`, `shake`. Infer from:
   - Time of day (5–10 AM = breakfast; 11 AM–2 PM = lunch; 5–9 PM = dinner; otherwise snack)
   - User's explicit word ("lunch was…" → lunch)
@@ -94,19 +95,46 @@ If multiple plausible matches → ask user which one before proceeding.
 
 If no match → proceed to step 3.
 
+**Branded / packaged items:** if an official product nutrition page exists and the brand/product is identifiable (Vector, Lay's, fairlife, restaurant label, etc.), prefer that exact serving macro over a generic USDA proxy. Scale from the stated serving size. If the user later corrects the portion, recompute from the same exact product page instead of swapping to a different database entry.
+
 ### 3. Look up macros via MCP (no template match)
 
 For each item in `items[]`:
 1. Call `mcp_food_tracker.search_food(query=item)` — returns USDA matches with kcal + macros. **This is the only MCP tool you may call. See the Forbidden tools section above.**
-2. Take the top match by relevance. If the user provided a quantity (e.g., "2 eggs"), multiply.
-3. If `search_food` returns nothing useful or the query is ambiguous (e.g., "chicken" — chicken what?), fall back to LLM-estimate (use gpt-5.4-mini's training knowledge), mark `source: estimated` and flag in the confirmation.
-4. (Phase 2) `opennutrition.search_foods(query=item)` for the 300k DB — disabled in Phase 1.
+2. Use the best matching canonical entry. If the user gave a quantity (e.g. `2 eggs`), scale it.
+3. For composite / restaurant / cafeteria dishes, try the dish name first, then obvious component queries when the dish itself is too fuzzy (e.g. `pad kra prow pork`, `ground pork`, `fried egg`, `thai chicken wing`, `vegetable spring roll`). Prefer partial canonical coverage over pretending the whole plate is one guessed item.
+4. If a packaged snack/photo shows a readable nutrition label, use the label macros directly before doing any generic lookup. If the label is visible but blurry, prefer the brand/official product page next.
+5. If a sub-item still has no clean match or the query is too ambiguous, fall back to LLM-estimate for that sub-item only, mark `source: estimated`, and flag exactly which part was estimated in the confirmation.
+6. (Phase 2) `opennutrition.search_foods(query=item)` for the 300k DB — disabled in Phase 1.
 
 Sum the macros across items.
+
+See `references/mixed-meal-lookup.md` for the lookup pattern and confirmation wording for mixed meals and packaged snacks. See `references/mexican-restaurant-photo-logging.md` for restaurant-photo handling (La Bandera / enchilada plates, chips/salsa exclusions, and photo-first timing). See `references/office-breakfast-photo-pattern.md` for cafeteria/office breakfast trays with waffles, bacon, eggs, and fruit bowls. See `references/retrospective-day-summary.md` for whole-day “yesterday I had…” recaps that should be bucketed once and logged against the implied date. See `references/branded-packaged-foods.md` for branded/packaged or chain products with an official nutrition page — prefer the official page over generic USDA matches and scale to the stated portion.
+
+### 3b. Duplicate / correction handling before confirmation
+
+If the user sends a second meal message within a few minutes that materially matches a meal already logged today, do **not** assume it is a fresh meal. Compare the new description/photo against the latest food-log entry:
+- If it looks like the same meal, ask whether it is a **correction** or an **addition**.
+- If the user included a new photo plus the same caption/food description, treat it as a likely correction check, not a new meal by default.
+- If the user explicitly says "log it again", "add another", or similar, proceed as a new entry.
+- If the user re-sends the meal from a different angle or as a follow-up image, default to *same meal* unless they explicitly frame it as an addition.
+
+This guard prevents duplicate counts when the user re-sends the same breakfast from a different angle or wants the estimate revised.
+
+If the user answers with a terse correction like "Nah only 1 meal" / "same meal" / "just one", treat that as a correction signal and do not create a second log.
+
+If the user gives a partial portion correction instead of a full rewrite — e.g. "less rice", "only 2 gyozas", "skip the sauce", "remove the salad" — keep the unchanged items and revise only the named components. Re-run the estimate and confirmation with the updated portions rather than asking them to restate the whole meal.
+
+See `references/duplicate-correction-flow.md` and `references/photo-correction-confirmation.md` for the session pattern.
+
 
 ### 4. Confirmation flow (MANDATORY — never skip)
 
 **This step is non-negotiable.** Even if the meal seems unambiguous, you MUST surface the macros for confirmation before any vault write. The user wants a chance to catch quantity/item mistakes before they pollute the rolling totals.
+
+If the user responds with a correction (e.g. "exclude turkey bacon", "actually it was X", "edit", "too much", "only one"), do **not** write yet. Rebuild the item list, recompute macros, and run the confirmation step again. A correction is *not* implicit approval to save the previous estimate.
+
+See `references/photo-correction-confirmation.md` for the exact session pattern.
 
 Use Hermes' `clarify` tool (inline keyboard) with this exact shape:
 
@@ -224,10 +252,16 @@ Skip Log.md only if the log was cancelled.
 3. **Duplicate-meal-same-time.** If two log-food invocations land within 5 minutes for the same meal_type, ask the user if it's a correction or an addition. Don't double-count silently.
 4. **Quantity ambiguity.** "Had eggs" — 1 egg? 2? 3? Default to 2 (typical breakfast portion) but show it in the confirmation so the user can edit.
 5. **Restaurant / cafeteria items.** No exact macros. Use LLM-estimate, flag clearly. Encourage saving as a template after a couple of logs to lock in a personal-baseline estimate.
-6. **Sum errors.** Always re-sum the food-log file totals after each meal append. Don't trust an incremental counter that could drift.
-7. **AYCE buffet plate.** Treat as a meal with multiple items; ask user to describe roughly ("rice, paneer, salad, 2 rotis") rather than estimating from "cafeteria lunch" alone. Saved templates ("cafeteria-lunch-normal") are the way to make this fast.
-8. **Liquids that are food.** Protein shakes, smoothies, coffee with milk — these are meals. Log them via log-food, not log-water.
+6. **Whole-day retrospective recaps.** If the user gives a past-day meal dump in one message (e.g. breakfast + dinner + snack from yesterday), bucket everything first, confirm once, and log the whole day against the implied date. Do not turn the recap into multiple independent confirmations.
+3. **Sum errors.** Always re-sum the food-log file totals after each meal append. Don't trust an incremental counter that could drift.
+4. **Duplicate / correction ambiguity.** If the user re-sends a meal they already logged today — especially with a new photo of the same plate or the same item list — stop and ask whether it is a correction or an addition. Do not double-count silently.
+5. **AYCE buffet plate.** Treat as a meal with multiple items; ask user to describe roughly ("rice, paneer, salad, 2 rotis") rather than estimating from "cafeteria lunch" alone. Saved templates ("cafeteria-lunch-normal") are the way to make this fast.
+
 9. **Wrong day.** If logging close to midnight Toronto, double-check the date. Past midnight referring to "today" might mean yesterday's date.
 10. **Frontmatter integer vs float.** kcal should be int. protein_g/carbs_g/fat_g should be int (round to nearest gram). water_l is float (1 decimal).
-11. **Photo → notes-only anti-pattern (observed bug 2026-05-27).** When the user sends a photo with a brief caption ("Had this for breakfast"), the agent's lazy path is: call vision_analyze → save the description to the daily note's `## Notes` section → reply "Saved." → done. **THAT IS WRONG.** The macros never get written, week-summary stays empty, the failure-mode detection breaks. The correct path is: vision_analyze → synthesize items → run THIS skill end-to-end (template match → MCP search → clarify → write to BOTH Food Log file AND daily-note frontmatter `kcal`/`protein_g`/`carbs_g`/`fat_g`). The ## Notes section is for qualitative observations ("food felt heavy", "didn't like the dressing"), not the canonical macro record.
-12. **Vision-identified meals get template suggestions.** If a photo-logged meal looks recurring (cafeteria breakfast, regular lunch spot), the template-creation prompt in step 6 should fire more eagerly than for text-logged meals — recurring photographable meals are the strongest template candidates because the user has clear visual context to validate the template once.
+11. **Time-only corrections are edits, not new meals.** If the user later says the logged meal happened at a different time (for example, "Lunch was at 2:30 pm"), update the existing food-log section header and append a correction line to Log.md. Do **not** create a second meal entry or recompute macros unless the food itself changed.
+12. **Photo → notes-only anti-pattern (observed bug 2026-05-27).** When the user sends a photo with a brief caption ("Had this for breakfast"), the agent's lazy path is: call vision_analyze → save the description to the daily note's `## Notes` section → reply "Saved." → done. **THAT IS WRONG.** The macros never get written, week-summary stays empty, the failure-mode detection breaks. The correct path is: vision_analyze → synthesize items → run THIS skill end-to-end (template match → MCP search → clarify → write to BOTH Food Log file AND daily-note frontmatter `kcal`/`protein_g`/`carbs_g`/`fat_g`). The ## Notes section is for qualitative observations ("food felt heavy", "didn't like the dressing"), not the canonical macro record.
+13. **Vision-identified meals get template suggestions.** If a photo-logged meal looks recurring (cafeteria breakfast, regular lunch spot), the template-creation prompt in step 6 should fire more eagerly than for text-logged meals — recurring photographable meals are the strongest template candidates because the user has clear visual context to validate the template once.
+14. **Promised photo / incremental meal detail.** If the user says a photo is coming or keeps adding components to the same meal, keep the session open and consolidate into one estimate. Don't lock a partial text-only estimate unless they explicitly say to log the partial meal now.
+15. **Shared chips/salsa/condiments.** If chips, salsa, or table condiments are visible in a restaurant photo, do not count them unless the user explicitly says they ate them.
+16. **Opaque beverage cans/bottles.** If a can or bottle is visible in a meal photo but the label/flavor is unreadable, do not infer zero-cal vs regular from color alone. Ask the user or omit the drink until clarified.

@@ -183,6 +183,7 @@ Examples:
 - The workout file's body is **auto-regenerated** from frontmatter on each write. Read-modify-write the YAML; rewrite the body section from scratch.
 - `grep -c '^---$'` on both the daily note AND the workout file should return exactly 2 after a write.
 - Preserve all other daily-note frontmatter + body content exactly. Only touch `lifted:` and `**Workout:**`.
+- See `references/superset_and_continuation.md` for the logging pattern for supersets, unilateral work, and continuation updates.
 
 ## Log the change
 
@@ -214,10 +215,12 @@ Subsequent updates within the same session: no Log.md entry needed.
 
 9. **Dual-cable / per-side weight ambiguity** — user says "42.5 lb dual cable, 3 sets". If the machine adds the two sides (total load), log `weight_lb: 85` with `notes: "42.5 lb/side dual cable"`. If the machine is per-side and only one side is the working load, log `weight_lb: 42.5`. Ask the user once when ambiguous; remember the choice for future logs of the same machine.
 
-10. **Reps unknown** — write `reps: null`. Don't fabricate ("probably 10"). The user fills it in later if they care.
+10. **Supersets and paired unilateral work** — keep paired movements as separate `exercises[]` entries and preserve the order performed. Use `notes` to link them as a superset instead of collapsing them into prose. For one-side-at-a-time work, keep `side` on each set so left/right order survives later corrections.
 
-11. **Mid-message corrections** — user says "I didn't eat turkey link, it was chicken sausage" → that's log-food's domain, NOT log-workout. Don't get confused by mixed-topic messages; route the food correction to log-food separately.
+11. **Reps unknown** — write `reps: null`. Don't fabricate ("probably 10"). The user fills it in later if they care.
 
-12. **Heavy day vs light day editorializing** — stay factual. Don't write "great session!" in the reply. Coaching commentary belongs to the `/health-coach` skill (Phase 4), not the logger.
+12. **Mid-message corrections** — user says "I didn't eat turkey link, it was chicken sausage" → that's log-food's domain, NOT log-workout. Don't get confused by mixed-topic messages; route the food correction to log-food separately.
 
-13. **PR false positives** — a "new PR" of 5 lb on an exercise the user only ever did once before isn't really a PR; it's a first-time-with-weight. Only flag if the prior max came from ≥2 prior sessions. Cheap heuristic; avoids spamming the user with bogus PRs.
+13. **Heavy day vs light day editorializing** — stay factual. Don't write "great session!" in the reply. Coaching commentary belongs to the `/health-coach` skill (Phase 4), not the logger.
+
+14. **PR false positives** — a "new PR" of 5 lb on an exercise the user only ever did once before isn't really a PR; it's a first-time-with-weight. Only flag if the prior max came from ≥2 prior sessions. Cheap heuristic; avoids spamming the user with bogus PRs.
