@@ -5,6 +5,11 @@
 *.key
 secrets/
 
+# Personal system prompt — kept OUT of the public repo (names employer/ventures).
+# deploy.sh scp's it to the VPS; the committed config/SOUL.public.md is the
+# generic template that CI + fresh clones use.
+config/SOUL.md
+
 # Python
 __pycache__/
 *.py[cod]

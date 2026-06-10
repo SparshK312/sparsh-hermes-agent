@@ -116,25 +116,13 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   rm -rf ~/.hermes/scripts/fitness && cp -r scripts/fitness ~/.hermes/scripts/fitness
   cp scripts/cron/fitness_report.sh        ~/.hermes/scripts/fitness_report.sh
   chmod +x ~/.hermes/scripts/fitness_report.sh
-  # --- Config first, framework patches last ---------------------------------
-  # SOUL.md + the observations README are deployed BEFORE the fail-fast source
-  # patches below. The patchers exit non-zero (under `set -e`, aborting the rest
-  # of this block) if upstream Hermes source has drifted — so if they ran first,
-  # a drift would also block the load-bearing SOUL.md update. Config is the thing
-  # we most need to ship reliably, so it goes first.
+  # --- Observations README before the fail-fast patches ---------------------
+  # Deployed BEFORE the fail-fast source patches below: the patchers exit
+  # non-zero (under `set -e`, aborting the rest of this block) if upstream Hermes
+  # source has drifted, so anything that must ship reliably goes first.
+  # (SOUL.md ships separately via scp in Step 2b — it's gitignored, so it is NOT
+  # in this pulled repo copy.)
 
-  # Deploy SOUL.md (Hermes system prompt) from repo → ~/.hermes/SOUL.md.
-  # SOUL is loaded fresh every Telegram message — no restart needed, but it
-  # is load-bearing: every routing decision the agent makes runs through it.
-  # Keep one rolling backup at ~/.hermes/SOUL.md.bak so a bad deploy can be
-  # rolled back with: cp ~/.hermes/SOUL.md.bak ~/.hermes/SOUL.md
-  echo
-  echo '  deploying SOUL.md to ~/.hermes/...'
-  if [ -f ~/.hermes/SOUL.md ]; then
-    cp ~/.hermes/SOUL.md ~/.hermes/SOUL.md.bak
-  fi
-  cp config/SOUL.md ~/.hermes/SOUL.md
-  echo \"  → SOUL.md \$(wc -c < ~/.hermes/SOUL.md) bytes\"
   # Ensure the agent's self-observation directory exists with its README.
   # This is the safe write-target for agent-captured learnings (per SOUL's
   # 'Write scope' rule). The README explains the contract to the agent on
@@ -163,6 +151,20 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   echo '  applying image-routing patch to Hermes...'
   /home/hermes/.hermes/hermes-agent/venv/bin/python3 scripts/patch/image_routing_patch.py
 "
+echo
+
+# ===== Step 2b: Deploy SOUL.md (gitignored → ships via scp, not git) =====
+# The personalized SOUL.md is kept out of the public repo, so it cannot ride the
+# git pull. scp the local copy straight to the VPS, backing up the current one
+# first. Falls back to the committed generic config/SOUL.public.md if the
+# personal SOUL.md isn't present on this machine (so a fresh clone still deploys
+# *something* valid rather than nothing).
+SOUL_SRC="config/SOUL.md"
+[ -f "$SOUL_SRC" ] || SOUL_SRC="config/SOUL.public.md"
+echo "[2b/3] Deploying SOUL ($SOUL_SRC) to VPS..."
+ssh -i "$VPS_SSH_KEY" "$VPS_HOST" '[ -f ~/.hermes/SOUL.md ] && cp ~/.hermes/SOUL.md ~/.hermes/SOUL.md.bak || true'
+scp -i "$VPS_SSH_KEY" "$SOUL_SRC" "$VPS_HOST:.hermes/SOUL.md"
+echo "  ✓ SOUL deployed (rollback: cp ~/.hermes/SOUL.md.bak ~/.hermes/SOUL.md)"
 echo
 
 # ===== Step 3: Restart Hermes =====

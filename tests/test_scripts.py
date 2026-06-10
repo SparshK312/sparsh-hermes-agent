@@ -72,14 +72,20 @@ def test_cron_scripts_have_shebang():
 
 
 def test_deploy_sh_ships_soul_md():
-    """deploy.sh must copy config/SOUL.md → ~/.hermes/SOUL.md on every push.
-    Without this step, edits to the repo SOUL never reach the live agent and
-    the SOUL would drift between repo + VPS silently."""
+    """deploy.sh must ship SOUL → ~/.hermes/SOUL.md on every push. The personal
+    SOUL.md is gitignored (kept out of the public repo), so it ships via scp from
+    the dev machine rather than a VPS-side `cp` of the pulled repo copy. Without
+    this step, SOUL edits never reach the live agent."""
     deploy = (SCRIPTS_DIR / "deploy.sh").read_text(encoding="utf-8")
-    # The cp invocation must be present
-    assert "cp config/SOUL.md ~/.hermes/SOUL.md" in deploy, (
-        "deploy.sh missing the SOUL.md deploy step. SOUL edits to the repo "
+    # The scp invocation must target the VPS ~/.hermes/SOUL.md
+    assert "scp" in deploy and ".hermes/SOUL.md" in deploy, (
+        "deploy.sh missing the SOUL scp step. SOUL edits to the repo "
         "won't reach the live Hermes agent."
+    )
+    # It must fall back to the committed generic template if the personal one is absent
+    assert "SOUL.public.md" in deploy, (
+        "deploy.sh should fall back to config/SOUL.public.md when the personal "
+        "SOUL.md isn't present (e.g. a fresh clone)."
     )
     # And the rolling backup before overwrite
     assert "SOUL.md.bak" in deploy, (

@@ -104,6 +104,11 @@ def test_no_secret_keys_in_repo_config():
 # bug class that sent meal logs to ## Notes instead of log-food. These tests
 # protect against silent SOUL regressions before deploy.sh ships them to the
 # VPS.
+#
+# We test config/SOUL.public.md — the committed, genericized template that shares
+# the real SOUL's structure. The personalized config/SOUL.md is gitignored (kept
+# out of the public repo) and scp'd to the VPS by deploy.sh, so it isn't present
+# in a clean checkout / CI; the public template is what guards the structure here.
 
 SOUL_REQUIRED_SECTIONS = [
     "## Tone",
@@ -126,7 +131,7 @@ def test_soul_md_exists():
     """config/SOUL.md must exist and be non-empty. deploy.sh copies it to
     ~/.hermes/SOUL.md on every push; if the file is missing or empty, the
     Hermes agent loses its system prompt entirely."""
-    path = CONFIG_DIR / "SOUL.md"
+    path = CONFIG_DIR / "SOUL.public.md"
     assert path.exists(), f"Missing {path}"
     assert path.stat().st_size > 500, (
         f"{path} is suspiciously small ({path.stat().st_size} bytes). "
@@ -137,7 +142,7 @@ def test_soul_md_exists():
 def test_soul_md_has_required_sections():
     """SOUL must have all the structural sections we depend on. Missing
     sections = silently weaker routing on every Telegram message."""
-    text = (CONFIG_DIR / "SOUL.md").read_text(encoding="utf-8")
+    text = (CONFIG_DIR / "SOUL.public.md").read_text(encoding="utf-8")
     missing = [s for s in SOUL_REQUIRED_SECTIONS if s not in text]
     assert not missing, (
         f"SOUL.md missing required sections: {missing}. "
@@ -149,7 +154,7 @@ def test_soul_md_names_specialized_skills_in_routing():
     """The hard routing rules MUST name the specialized skills by their
     actual skill names. Without this, the LLM falls back to obsidian-vault-
     write for everything (the exact bug we built v2 SOUL to fix)."""
-    text = (CONFIG_DIR / "SOUL.md").read_text(encoding="utf-8")
+    text = (CONFIG_DIR / "SOUL.public.md").read_text(encoding="utf-8")
     missing = [s for s in SOUL_REQUIRED_ROUTING_TARGETS if s not in text]
     assert not missing, (
         f"SOUL.md routing rules missing references to: {missing}. "
@@ -162,7 +167,7 @@ def test_soul_md_warns_against_notes_section_for_food():
     text getting saved to the daily note's ## Notes section instead of
     going through log-food's MCP + frontmatter pipeline. SOUL must
     explicitly forbid this."""
-    text = (CONFIG_DIR / "SOUL.md").read_text(encoding="utf-8")
+    text = (CONFIG_DIR / "SOUL.public.md").read_text(encoding="utf-8")
     # Look for both an explicit prohibition AND a mention of ## Notes
     assert "## Notes" in text, "SOUL must reference the ## Notes anti-pattern explicitly"
     assert "NEVER" in text or "Never" in text, (
@@ -176,7 +181,7 @@ def test_soul_md_forbids_repo_writes():
     editing skills/log-{food,workout}/SKILL.md in the VPS git repo via
     obsidian-vault-write. That drift between repo + VPS broke deploy.sh.
     SOUL must explicitly forbid writes to the repo path."""
-    text = (CONFIG_DIR / "SOUL.md").read_text(encoding="utf-8")
+    text = (CONFIG_DIR / "SOUL.public.md").read_text(encoding="utf-8")
     assert "sparsh-hermes-agent" in text, (
         "SOUL must name the operational repo path explicitly so the agent "
         "knows what NOT to mutate."

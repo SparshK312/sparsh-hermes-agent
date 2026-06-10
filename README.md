@@ -61,7 +61,7 @@ Full architecture lives in the vault at `07 - Health/Architecture.md`.
 │   └── setup/
 │       └── setup_reply_keyboard.py           (one-shot — installs 3x3 keyboard + Bot Menu Button)
 ├── config/
-│   ├── SOUL.md                               (Hermes system prompt — deployed to ~/.hermes/SOUL.md on every push)
+│   ├── SOUL.public.md                        (generic system-prompt template; the personal SOUL.md is gitignored + scp'd to the VPS by deploy.sh)
 │   ├── mcp_servers.yaml                      (food-tracker with tools.include allowlist = search_food only)
 │   └── cron_additions.json                   (3 health-nudge crons w/ paths to mirrored scripts)
 ├── tests/                                    (83 pytest tests — run pre-push)
