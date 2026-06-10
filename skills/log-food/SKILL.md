@@ -109,7 +109,7 @@ For each item in `items[]`:
 
 Sum the macros across items.
 
-See `references/mixed-meal-lookup.md` for the lookup pattern and confirmation wording for mixed meals and packaged snacks. See `references/mexican-restaurant-photo-logging.md` for restaurant-photo handling (La Bandera / enchilada plates, chips/salsa exclusions, and photo-first timing). See `references/office-breakfast-photo-pattern.md` for cafeteria/office breakfast trays with waffles, bacon, eggs, and fruit bowls. See `references/retrospective-day-summary.md` for whole-day “yesterday I had…” recaps that should be bucketed once and logged against the implied date. See `references/branded-packaged-foods.md` for branded/packaged or chain products with an official nutrition page — prefer the official page over generic USDA matches and scale to the stated portion.
+See `references/mixed-meal-lookup.md` for the lookup pattern and confirmation wording for mixed meals and packaged snacks. See `references/mexican-restaurant-photo-logging.md` for restaurant-photo handling (enchilada-plate restaurants, chips/salsa exclusions, and photo-first timing). See `references/office-breakfast-photo-pattern.md` for cafeteria/office breakfast trays with waffles, bacon, eggs, and fruit bowls. See `references/retrospective-day-summary.md` for whole-day “yesterday I had…” recaps that should be bucketed once and logged against the implied date. See `references/branded-packaged-foods.md` for branded/packaged or chain products with an official nutrition page — prefer the official page over generic USDA matches and scale to the stated portion.
 
 ### 3b. Duplicate / correction handling before confirmation
 
