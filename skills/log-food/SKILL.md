@@ -123,9 +123,11 @@ This guard prevents duplicate counts when the user re-sends the same breakfast f
 
 If the user answers with a terse correction like "Nah only 1 meal" / "same meal" / "just one", treat that as a correction signal and do not create a second log.
 
+If the user corrects the *food itself* after a meal was already logged — e.g. "actually it was a grilled chicken sandwich, not a burger" — rewrite the existing meal entry in place, recompute the meal macros, and update daily totals from the delta. Do **not** append a second meal unless the user explicitly says it was an addition.
+
 If the user gives a partial portion correction instead of a full rewrite — e.g. "less rice", "only 2 gyozas", "skip the sauce", "remove the salad" — keep the unchanged items and revise only the named components. Re-run the estimate and confirmation with the updated portions rather than asking them to restate the whole meal.
 
-See `references/duplicate-correction-flow.md` and `references/photo-correction-confirmation.md` for the session pattern.
+See `references/duplicate-correction-flow.md`, `references/photo-correction-confirmation.md`, and `references/post-confirmation-correction.md` for the session pattern.
 
 
 ### 4. Confirmation flow (MANDATORY — never skip)

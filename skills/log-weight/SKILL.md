@@ -24,6 +24,7 @@ Do **not** use for weights of food, equipment, or anything that's not the user's
 ## Notes
 
 - The user may send a terse morning weigh-in like `Morning weigh in 150.5` or `Morning weight 150 lb`. Treat that as sufficient input when the meaning is clear.
+- A bare message like `Weight 150` is also sufficient when the context is bodyweight; assume lb unless a unit says otherwise.
 - Keep the response terse and action-first.
 - See `references/user-weight-logging-patterns.md` for the user-specific shorthand examples.
 
