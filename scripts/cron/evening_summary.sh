@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Hermes cron job: health-evening-summary-nudge
-# Fires at 21:00 America/Toronto, every day.
-# Script-mode (no LLM) — stdout delivered verbatim to Telegram.
+# Hermes cron job: health-evening-summary-nudge — fires in the evening (schedule in
+# jobs.json, evaluated in the Hermes-configured timezone — see config/cron_additions.json).
+# AGENT job: Hermes wakes the LLM with this stdout as context and composes the message
+# (NOT verbatim). See hae-sync for the $0/no-LLM {"wakeAgent": false} pattern.
 
 set -euo pipefail
 

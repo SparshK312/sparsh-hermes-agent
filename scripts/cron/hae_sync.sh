@@ -6,8 +6,11 @@
 #   2. refresh 07 - Health/Metrics/metrics.csv from all raw payloads (hae_process.py)
 #   3. write today's HAE metrics into the daily-note frontmatter (hae_daily_ingest.py)
 #
-# Output is suppressed via the [SILENT] marker so Hermes does NOT post to Telegram —
-# this is a background data sync, not a user-facing nudge. Diagnostics go to sync.log.
+# The final stdout line is the Hermes cron wake-gate {"wakeAgent": false}: it makes
+# run_job skip the agent entirely (no LLM turn, nothing posted to Telegram) — the real
+# "silent + $0" mechanism. ([SILENT] is an AGENT response marker, not a script-stdout
+# one, so it would NOT reliably suppress here.) This is a background data sync, not a
+# user-facing nudge. Diagnostics go to sync.log.
 set -uo pipefail
 
 PY=/usr/bin/python3
@@ -25,4 +28,4 @@ LOG="$HOME/.hermes/health/hae/sync.log"
 # keep the log bounded
 tail -n 500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG" 2>/dev/null || true
 
-echo "[SILENT]"
+echo '{"wakeAgent": false}'   # skip the agent: silent, no LLM turn

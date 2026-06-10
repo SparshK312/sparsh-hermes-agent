@@ -17,15 +17,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from muscle_volume import parse_workouts, LANDMARKS, ORDER as ORDER_ALL  # noqa: E402
+from muscle_volume import parse_workouts, LANDMARKS, ORDER as ORDER_ALL, VAULT  # noqa: E402
 
 ASSETS = Path(__file__).resolve().parent / "assets" / "muscle_paths.json"
-VAULT = Path(os.environ.get("HERMES_VAULT", str(Path.home() / "Documents" / "School Vault - UofT")))
 
 # Body-region slug  →  our tracked muscle group(s).  Per view (front vs back),
 # because the library reuses one "deltoids"/"trapezius" slug for both sides.
@@ -55,7 +53,7 @@ STROKE = "#161922"
 
 def _heat_color(muscles, vol):
     """Intensity: grey at 0 → warm as volume approaches the productive ceiling."""
-    import matplotlib.cm as cm
+    import matplotlib as mpl
     import matplotlib.colors as mc
     vals = [vol.get(m, 0) / LANDMARKS[m][2] for m in muscles if m in LANDMARKS]  # /MAV_high
     if not vals:
@@ -64,7 +62,12 @@ def _heat_color(muscles, vol):
     if h <= 0.02:
         return BODY
     h = min(h, 1.2) / 1.2
-    return mc.to_hex(cm.get_cmap("YlOrRd")(0.25 + 0.7 * h))
+    try:
+        cmap = mpl.colormaps["YlOrRd"]            # matplotlib >= 3.5
+    except (AttributeError, KeyError):            # very old matplotlib
+        import matplotlib.cm as cm
+        cmap = cm.get_cmap("YlOrRd")
+    return mc.to_hex(cmap(0.25 + 0.7 * h))
 
 
 def _status_color(muscles, vol):

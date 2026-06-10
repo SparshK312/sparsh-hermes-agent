@@ -14,11 +14,15 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime
-import os
+import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-VAULT = Path(os.environ.get("HERMES_VAULT", "/home/hermes/vault"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from muscle_volume import VAULT  # noqa: E402 — single shared vault root
+
 CSV_DEFAULT = VAULT / "07 - Health" / "Metrics" / "metrics.csv"
+TZ = ZoneInfo("America/Toronto")
 BG, FG, GRID = "#0f1117", "#e6e6e6", "#272c36"
 
 
@@ -30,11 +34,14 @@ def _f(s):
 
 
 def load(csv_path: Path, days: int):
-    rows = list(csv.DictReader(csv_path.open()))
-    cutoff = (datetime.date.today() - datetime.timedelta(days=days - 1)).isoformat()
+    if not csv_path.exists():
+        return [], []
+    with csv_path.open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    cutoff = (datetime.datetime.now(TZ).date() - datetime.timedelta(days=days - 1)).isoformat()
     rows = [r for r in rows if r.get("date", "") >= cutoff]
-    rows.sort(key=lambda r: r["date"])
-    dates = [datetime.date.fromisoformat(r["date"]) for r in rows]
+    rows.sort(key=lambda r: r.get("date", ""))
+    dates = [datetime.date.fromisoformat(r["date"]) for r in rows if r.get("date")]
     return rows, dates
 
 
@@ -53,12 +60,16 @@ def main():
     ap.add_argument("--out", default=str(VAULT / "07 - Health" / "Charts" / "activity-recovery.png"))
     args = ap.parse_args()
 
+    rows, dates = load(Path(args.csv), args.days)
+    if not rows:
+        print(f"no metrics in the last {args.days} days at {args.csv} — nothing to chart")
+        return
+
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
 
-    rows, dates = load(Path(args.csv), args.days)
     steps = [_f(r.get("steps")) for r in rows]
     akcal = [_f(r.get("active_kcal")) for r in rows]
     rhr = [_f(r.get("resting_hr")) for r in rows]

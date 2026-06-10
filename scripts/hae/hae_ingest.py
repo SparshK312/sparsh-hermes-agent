@@ -104,14 +104,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         if not self._authed():
-            # TEMP DEBUG: dump what the client actually sent so we can see why
-            # auth fails (mangled token, wrong header name, stray whitespace).
+            # Diagnostic for auth failures WITHOUT leaking secrets: never log the
+            # configured token or the received credential — only their presence and
+            # the header names sent (enough to spot a dropped/misnamed header).
             hdr_names = ", ".join(self.headers.keys())
-            recv_auth = self.headers.get("Authorization")
             _log(
                 f"401 unauthorized from {self.client_address[0]} path={self.path} "
-                f"| recv_auth={recv_auth!r} | expected_bare={TOKEN!r} "
-                f"| header_names=[{hdr_names}]"
+                f"| auth_header_present={bool(self.headers.get('Authorization'))} "
+                f"| token_configured={bool(TOKEN)} | header_names=[{hdr_names}]"
             )
             return self._send(401, {"ok": False, "error": "unauthorized"})
         try:

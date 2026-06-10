@@ -24,12 +24,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from muscle_volume import parse_workouts, LANDMARKS, ORDER  # noqa: E402
+from muscle_volume import parse_workouts, LANDMARKS, ORDER, VAULT  # noqa: E402
 from muscle_heatmap import build_card, _bucket  # noqa: E402
 
 HOME = Path.home()
 ENV_FILE = HOME / ".hermes" / ".env"
-VAULT = Path(os.environ.get("HERMES_VAULT", "/home/hermes/vault"))
 CHARTS = VAULT / "07 - Health" / "Charts"
 TZ = ZoneInfo("America/Toronto")
 CHAT_ID = "696500863"
@@ -74,11 +73,13 @@ COACH_SYSTEM = (
 
 def _templated_note(f: dict) -> str:
     bits = []
-    if f["grow"] or f["gap"]:
-        lacking = f["grow"] + (["legs"] if any(m in f["gap"] for m in ("Quads", "Hamstrings", "Glutes")) else [])
+    lacking = f["grow"] + (["legs"] if any(m in f["gap"] for m in ("Quads", "Hamstrings", "Glutes")) else [])
+    if lacking:
         bits.append("⚠️ Lagging: *" + "*, *".join(lacking) + "*")
     if f["solid"]:
         bits.append("✅ On track: " + ", ".join(f["solid"]))
+    if f["high"]:
+        bits.append("🔵 High volume: " + ", ".join(f["high"]))
     rec = []
     if f["grow"]:
         rec.append("add sets to " + " + ".join(f["grow"][:2]).lower())
@@ -86,6 +87,8 @@ def _templated_note(f: dict) -> str:
         rec.append("train legs")
     if rec:
         bits.append("→ Next week: " + "; ".join(rec) + ".")
+    if not bits:
+        bits.append("Solid week — volume in range across the board.")
     return "\n".join(bits)
 
 
@@ -113,30 +116,42 @@ def compose_note(f: dict) -> str:
     return _templated_note(f)
 
 
+def _post_photo(token: str, png_bytes: bytes, caption: str, parse_mode: str | None) -> bool:
+    # multipart/form-data by hand (stdlib only)
+    boundary = "----fitnessreport7be3"
+    fields = [("chat_id", CHAT_ID), ("caption", caption)]
+    if parse_mode:
+        fields.append(("parse_mode", parse_mode))
+    parts = [f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n"
+             for k, v in fields]
+    head = "".join(parts).encode()
+    photo_head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; "
+                  f"filename=\"card.png\"\r\nContent-Type: image/png\r\n\r\n").encode()
+    tail = f"\r\n--{boundary}--\r\n".encode()
+    data = head + photo_head + png_bytes + tail
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendPhoto", data=data,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read()).get("ok", False)
+
+
 def send_photo(png: Path, caption: str) -> bool:
     token = _env("TELEGRAM_BOT_TOKEN")
     if not token:
         print("no TELEGRAM_BOT_TOKEN", file=sys.stderr)
         return False
-    # multipart/form-data by hand (stdlib only)
-    boundary = "----fitnessreport7be3"
-    parts = []
-    for k, v in (("chat_id", CHAT_ID), ("caption", caption), ("parse_mode", "Markdown")):
-        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n")
-    head = "".join(parts).encode()
-    photo_head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; "
-                  f"filename=\"card.png\"\r\nContent-Type: image/png\r\n\r\n").encode()
-    tail = f"\r\n--{boundary}--\r\n".encode()
-    data = head + photo_head + png.read_bytes() + tail
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/sendPhoto", data=data,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read()).get("ok", False)
-    except Exception as e:  # noqa: BLE001
-        print(f"send failed: {e}", file=sys.stderr)
-        return False
+    png_bytes = png.read_bytes()
+    # Try Markdown; on ANY failure (most often a stray '*' tripping entity
+    # parsing) retry once as plain text so the whole week's card never gets
+    # dropped over a caption-formatting glitch.
+    for pm in ("Markdown", None):
+        try:
+            if _post_photo(token, png_bytes, caption, pm):
+                return True
+        except Exception as e:  # noqa: BLE001
+            print(f"send failed (parse_mode={pm}): {e}", file=sys.stderr)
+    return False
 
 
 def main() -> int:
@@ -159,6 +174,10 @@ def main() -> int:
 
     note = compose_note(_analysis_facts(vol, window, n))
     caption = f"💪 *Weekly Muscle Coverage*\n{note}"
+    if unmapped:
+        # Make a mapping gap VISIBLE instead of silently undercounting — these
+        # exercises contributed 0 volume to the card. Add them to muscle_volume.MAP.
+        caption += "\n\n⚠️ Not in the muscle map (volume undercounted): " + ", ".join(unmapped)
 
     if args.no_send:
         print(note)

@@ -33,7 +33,21 @@ from pathlib import Path
 
 KJ_PER_KCAL = 4.184
 HEALTH_DIR = Path(os.environ.get("HAE_HEALTH_DIR", str(Path.home() / ".hermes" / "health" / "hae")))
-VAULT = Path(os.environ.get("HERMES_VAULT", "/home/hermes/vault"))
+
+
+def _default_vault() -> Path:
+    """HERMES_VAULT wins; else the VPS path if it exists (production), else the
+    Mac dev path — same code in both places, no split-brain."""
+    env = os.environ.get("HERMES_VAULT")
+    if env:
+        return Path(env)
+    vps = Path("/home/hermes/vault")
+    if vps.exists():
+        return vps
+    return Path.home() / "Documents" / "School Vault - UofT"
+
+
+VAULT = _default_vault()
 CSV_PATH = VAULT / "07 - Health" / "Metrics" / "metrics.csv"
 
 # Column order for the CSV. date first, then the Tier-1 accountability core,
@@ -165,10 +179,16 @@ def main(argv) -> int:
         return 1
     days = load_existing()
     before = len(days)
+    skipped = 0
     for f in files:
-        process_payload(f, days)
+        try:
+            process_payload(f, days)
+        except Exception as e:  # noqa: BLE001 — one bad payload must not abort the rebuild
+            skipped += 1
+            print(f"skip {Path(f).name}: {e}", file=sys.stderr)
     write_csv(days)
-    print(f"processed {len(files)} payload(s) -> {CSV_PATH}")
+    print(f"processed {len(files) - skipped} payload(s) -> {CSV_PATH}"
+          + (f" ({skipped} skipped)" if skipped else ""))
     print(f"days in archive: {len(days)} (was {before})")
     return 0
 

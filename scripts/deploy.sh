@@ -27,6 +27,10 @@ VPS_HOST="${VPS_HOST:-hermes@your-vps-ip}"
 VPS_SSH_KEY="${VPS_SSH_KEY:-$HOME/.ssh/hetzner_hermes}"
 VPS_REPO_PATH="${VPS_REPO_PATH:-/home/hermes/sparsh-hermes-agent}"
 HERMES_SERVICE="${HERMES_SERVICE:-hermes-gateway.service}"
+# Root SSH target for systemctl (the 'hermes' user has no sudo). Derived from
+# VPS_HOST by swapping the user part to root. Override in .env if VPS_HOST is an
+# ssh-config alias or otherwise can't be parsed as user@host.
+VPS_ROOT_HOST="${VPS_ROOT_HOST:-root@${VPS_HOST#*@}}"
 
 # ===== Args =====
 DO_PUSH=true
@@ -70,7 +74,7 @@ echo "[2/3] Pulling on VPS..."
 ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   set -euo pipefail
   cd '$VPS_REPO_PATH'
-  echo '  cwd: $(pwd)'
+  echo \"  cwd: \$(pwd)\"
   git fetch --all --quiet
   before=\$(git rev-parse --short HEAD)
   git pull --ff-only
@@ -112,23 +116,13 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   rm -rf ~/.hermes/scripts/fitness && cp -r scripts/fitness ~/.hermes/scripts/fitness
   cp scripts/cron/fitness_report.sh        ~/.hermes/scripts/fitness_report.sh
   chmod +x ~/.hermes/scripts/fitness_report.sh
-  # Apply the voice-wrapper patch to Hermes' gateway/run.py. Strips the
-  # [The user sent a voice message~ ...] wrapper that breaks openai-codex
-  # voice handling. Idempotent — safe to call after every deploy. If the
-  # upstream source drifts and the patcher can't find the expected block,
-  # this exits non-zero and the deploy fails fast (so we know to manually
-  # re-verify before voice silently breaks).
-  echo
-  echo '  applying voice-wrapper patch to Hermes...'
-  /home/hermes/.hermes/hermes-agent/venv/bin/python3 scripts/patch/voice_wrapper_patch.py
-  # Apply the image-routing patch to Hermes' agent/image_routing.py. Drops
-  # the 'What do you see in this image?' auto-prompt that fires when a photo
-  # has no caption — that prompt biases the LLM into describe-image mode and
-  # makes our log-food skill get bypassed (meal photos go to ## Notes instead
-  # of updating frontmatter macros). Same idempotent / fail-fast contract.
-  echo
-  echo '  applying image-routing patch to Hermes...'
-  /home/hermes/.hermes/hermes-agent/venv/bin/python3 scripts/patch/image_routing_patch.py
+  # --- Config first, framework patches last ---------------------------------
+  # SOUL.md + the observations README are deployed BEFORE the fail-fast source
+  # patches below. The patchers exit non-zero (under `set -e`, aborting the rest
+  # of this block) if upstream Hermes source has drifted — so if they ran first,
+  # a drift would also block the load-bearing SOUL.md update. Config is the thing
+  # we most need to ship reliably, so it goes first.
+
   # Deploy SOUL.md (Hermes system prompt) from repo → ~/.hermes/SOUL.md.
   # SOUL is loaded fresh every Telegram message — no restart needed, but it
   # is load-bearing: every routing decision the agent makes runs through it.
@@ -150,6 +144,24 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   mkdir -p ~/.hermes/memories/observations
   cp config/observations-README.md ~/.hermes/memories/observations/README.md
   echo \"  → observations dir ready (README.md \$(wc -c < ~/.hermes/memories/observations/README.md) bytes)\"
+
+  # Apply the voice-wrapper patch to Hermes' gateway/run.py. Strips the
+  # [The user sent a voice message~ ...] wrapper that breaks openai-codex
+  # voice handling. Idempotent — safe to call after every deploy. If the
+  # upstream source drifts and the patcher can't find the expected block,
+  # this exits non-zero and the deploy fails fast (so we know to manually
+  # re-verify before voice silently breaks).
+  echo
+  echo '  applying voice-wrapper patch to Hermes...'
+  /home/hermes/.hermes/hermes-agent/venv/bin/python3 scripts/patch/voice_wrapper_patch.py
+  # Apply the image-routing patch to Hermes' agent/image_routing.py. Drops
+  # the 'What do you see in this image?' auto-prompt that fires when a photo
+  # has no caption — that prompt biases the LLM into describe-image mode and
+  # makes our log-food skill get bypassed (meal photos go to ## Notes instead
+  # of updating frontmatter macros). Same idempotent / fail-fast contract.
+  echo
+  echo '  applying image-routing patch to Hermes...'
+  /home/hermes/.hermes/hermes-agent/venv/bin/python3 scripts/patch/image_routing_patch.py
 "
 echo
 
@@ -157,7 +169,7 @@ echo
 if [ "$DO_RESTART" = "true" ]; then
   echo "[3/3] Restarting $HERMES_SERVICE..."
   # The 'hermes' user does NOT have sudo per the runbook. Use root SSH for systemctl.
-  ssh -i "$VPS_SSH_KEY" "root@${VPS_HOST#*@}" "
+  ssh -i "$VPS_SSH_KEY" "$VPS_ROOT_HOST" "
     set -euo pipefail
     systemctl restart $HERMES_SERVICE
     sleep 2

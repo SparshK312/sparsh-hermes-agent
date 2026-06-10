@@ -75,7 +75,8 @@ def test_daily_ingest_frontmatter_is_line_targeted(tmp_path):
         '---\n'
         '\n# Body\n\nsome text with --- a dash inside\n'
     )
-    changed = ing.update_frontmatter(note, {"sleep_hours": "6.46", "steps": "8420"})
+    changed, _ = ing.update_frontmatter(
+        note, {"sleep_hours": "6.46", "steps": "8420"}, {}, ing.SLEEP_FIELDS)
     assert changed == 2
     out = note.read_text()
     # existing values preserved
@@ -93,4 +94,29 @@ def test_daily_ingest_frontmatter_is_line_targeted(tmp_path):
     assert out.count("\n---\n") == 1 and out.startswith("---\n")
 
     # idempotent: re-running with the same values changes nothing
-    assert ing.update_frontmatter(note, {"sleep_hours": "6.46", "steps": "8420"}) == 0
+    changed2, _ = ing.update_frontmatter(
+        note, {"sleep_hours": "6.46", "steps": "8420"}, {}, ing.SLEEP_FIELDS)
+    assert changed2 == 0
+
+
+def test_daily_ingest_never_clobbers_manual_sleep_edit(tmp_path):
+    """A hand-corrected sleep value must survive the next sync; accumulating
+    activity must still update."""
+    ing = _load("hae_daily_ingest")
+    note = tmp_path / "2026-04-02.md"
+    note.write_text("---\ntype: daily\nsleep_hours: 7.5\nsteps: 5000\n---\n\n# Body\n")
+
+    # HAE last wrote sleep 6.5 but the note now says 7.5 (user corrected it);
+    # archive still says 6.5 and steps climbed to 8000.
+    prev = {"sleep_hours": "6.5"}
+    changed, written = ing.update_frontmatter(
+        note, {"sleep_hours": "6.5", "steps": "8000"}, prev, ing.SLEEP_FIELDS)
+    out = note.read_text()
+    assert "sleep_hours: 7.5" in out          # manual correction protected
+    assert "steps: 8000" in out               # activity still accumulates
+    assert "sleep_hours" not in written       # HAE no longer owns the edited field
+
+    # HAE refreshes its OWN unchanged sleep value (no manual edit since last write)
+    note.write_text("---\ntype: daily\nsleep_hours: 6.5\n---\n\n# Body\n")
+    ing.update_frontmatter(note, {"sleep_hours": "6.7"}, {"sleep_hours": "6.5"}, ing.SLEEP_FIELDS)
+    assert "sleep_hours: 6.7" in note.read_text()

@@ -1,5 +1,6 @@
 {
-  "_comment": "Cron entries to APPEND into ~/.hermes/cron/jobs.json on the VPS. Do NOT replace the existing file — the daily-note-prefill and internship-watcher jobs must be preserved. Append these entries inside the `jobs` array and update `updated_at`. All three use script mode (no LLM turn = $0 marginal cost) and deliver stdout verbatim to Telegram.",
+  "_comment": "Cron entries to APPEND into ~/.hermes/cron/jobs.json on the VPS. Do NOT replace the existing file — the daily-note-prefill and internship-watcher jobs must be preserved. Append these entries inside the `jobs` array and update `updated_at`. NOTE: these are AGENT jobs — Hermes runs the `script`, injects its stdout as CONTEXT, then wakes the LLM to compose the Telegram message (it is NOT delivered verbatim and DOES cost one LLM turn). A job that wants to skip the LLM entirely ($0, silent or self-delivered) must print {\"wakeAgent\": false} as its final stdout line — see scripts/cron/hae_sync.sh and fitness_report.sh.",
+  "_timezone_comment": "cron `expr` is evaluated in the Hermes-configured timezone: HERMES_TIMEZONE env → config.yaml `timezone:` → else SERVER-LOCAL (UTC on the VPS). The `created_at` -04:00 offsets below are cosmetic and do NOT set the schedule tz. REQUIRED on the VPS: set `timezone: America/Toronto` in ~/.hermes/config.yaml, or these fire at the wrong wall-clock time (a `0 13` 'lunch' job would hit at 09:00 Toronto under UTC).",
   "_script_path_note": "Hermes' cron dispatcher refuses scripts outside ~/.hermes/scripts/ (sandbox: 'resolved script path is outside the allowed scripts directory'). The repo scripts are mirrored into that root by scripts/deploy.sh on every deploy, with a 'health_' prefix to avoid collision with bundled Hermes scripts. The script paths here reference the mirrored copies, NOT the repo paths.",
   "_apply_procedure": "See docs/DEPLOY.md → 'Adding cron entries'. Use the deploy script's merge helper rather than hand-editing.",
 
@@ -7,7 +8,6 @@
     {
       "id": "a1f5d3c9b2e0",
       "name": "health-morning-nudge",
-      "prompt": null,
       "skills": [],
       "skill": null,
       "model": null,
@@ -43,7 +43,6 @@
     {
       "id": "b3c7e9f1a4d2",
       "name": "health-lunch-check",
-      "prompt": null,
       "skills": [],
       "skill": null,
       "model": null,
@@ -79,7 +78,6 @@
     {
       "id": "c8d4a2b1e5f9",
       "name": "health-evening-summary-nudge",
-      "prompt": null,
       "skills": [],
       "skill": null,
       "model": null,

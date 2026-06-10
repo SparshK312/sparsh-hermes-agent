@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Hermes cron job: health-morning-nudge
-# Fires at 07:45 America/Toronto (after the 07:40 hae-sync lands last night's sleep).
-# Script-mode (no LLM) — stdout is delivered verbatim to Telegram by Hermes.
+# Hermes cron job: health-morning-nudge — fires in the morning, AFTER the hae-sync that
+# lands last night's sleep (confirm the ordering + timezone in jobs.json; cron exprs run
+# in the Hermes-configured tz — see config/cron_additions.json).
+# NOTE: this is an AGENT job — Hermes wakes the LLM with this script's stdout as context
+# and composes the Telegram message (it is NOT delivered verbatim). To make it a true
+# $0/no-LLM verbatim job it would self-send via the Bot API + print {"wakeAgent": false}
+# (the hae-sync / fitness pattern).
 #
 # Phase 3: reports last night's Apple Watch sleep (+ stages, RHR, HRV, 7-day avg)
 # pulled from 07 - Health/Metrics/metrics.csv, then the quick-log reminders.

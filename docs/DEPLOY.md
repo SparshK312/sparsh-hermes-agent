@@ -25,8 +25,10 @@ git init
 git add .
 git commit -m "Initial commit: Phase 1 scaffold"
 
-# Create private GitHub repo and push (via gh CLI)
-gh repo create sparsh-hermes-agent --private --source=. --remote=origin --push
+# Create the GitHub repo and push (via gh CLI). Use --private if you want it
+# closed; this repo is currently PUBLIC, so NEVER commit secrets — .env is
+# gitignored and all tokens are read from runtime env / ~/.hermes/.env.
+gh repo create sparsh-hermes-agent --public --source=. --remote=origin --push
 ```
 
 ### Step 2 — Clone on the VPS
@@ -249,7 +251,7 @@ If any of those need to change, that's a separate procedure.
 | `/water` reply is wrong format | The skill's description didn't match the trigger phrase precisely. Check `agent.log` for which skill was loaded. |
 | Daily note has no `water_l` field | Daily note template needs the field. Verify `Templates/Daily Note.md` in vault. |
 | mcp-opennutrition not responding | `docker ps`; `docker logs mcp-opennutrition`; check port 9113 is free. |
-| `git pull` on VPS fails with auth | The GitHub repo is private. Set up an SSH deploy key or use HTTPS with a personal access token. |
+| `git pull` on VPS fails with auth | The repo is public, so HTTPS pulls need no auth — an auth prompt means the VPS clone uses an SSH remote (`git@github.com:...`). Either switch it to the HTTPS URL (`git remote set-url origin https://github.com/<you>/sparsh-hermes-agent.git`) or add an SSH deploy key. |
 
 ---
 

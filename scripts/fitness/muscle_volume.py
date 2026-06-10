@@ -25,7 +25,21 @@ from collections import defaultdict
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VAULT = Path(os.environ.get("HERMES_VAULT", str(Path.home() / "Documents" / "School Vault - UofT")))
+def _default_vault() -> Path:
+    """Single source of truth for the vault root across the fitness package
+    (heatmap/report/trends import this). HERMES_VAULT wins; else the VPS path if
+    it exists (production), else the Mac dev path — so read and write paths can
+    never split-brain."""
+    env = os.environ.get("HERMES_VAULT")
+    if env:
+        return Path(env)
+    vps = Path("/home/hermes/vault")
+    if vps.exists():
+        return vps
+    return Path.home() / "Documents" / "School Vault - UofT"
+
+
+VAULT = _default_vault()
 WORKOUTS = VAULT / "07 - Health" / "Workouts"
 TZ = ZoneInfo("America/Toronto")
 
@@ -43,6 +57,10 @@ MAP: dict[str, tuple[list[str], list[str]]] = {
     "incline chest press machine": (["Chest"], ["Front Delts", "Triceps"]),
     "incline dumbbell bench press": (["Chest"], ["Front Delts", "Triceps"]),
     "incline dumbbell curl": (["Biceps"], []),
+    "incline smith machine press": (["Chest"], ["Front Delts", "Triceps"]),
+    "smith machine incline press": (["Chest"], ["Front Delts", "Triceps"]),
+    "smith machine bench press": (["Chest"], ["Front Delts", "Triceps"]),
+    "barbell bench press": (["Chest"], ["Front Delts", "Triceps"]),
     "kelso shrug": (["Mid-Back"], ["Rear Delts"]),
     "lat pulldown": (["Lats"], ["Biceps"]),
     "lateral raise": (["Side Delts"], []),
@@ -101,10 +119,10 @@ def parse_workouts(days: int):
             continue
         if not (start <= d <= today):
             continue
-        txt = open(f, encoding="utf-8").read()
+        with open(f, encoding="utf-8") as fh:
+            txt = fh.read()
         fm = txt.split("---")[1] if txt.count("---") >= 2 else txt
-        n_workouts += 1
-        used_dates.append(date_s)
+        file_sets = 0  # raw sets logged in this file (mapped or not)
         cur, cur_sets = None, 0
         def flush(name, sets):
             if not name or sets == 0:
@@ -123,9 +141,16 @@ def parse_workouts(days: int):
             if m:
                 flush(cur, cur_sets)
                 cur, cur_sets = m.group(1).strip(), 0
-            elif cur and "weight_lb:" in ln:
+            elif cur and re.match(r"^\s*-\s*\{?\s*weight_lb:", ln):
                 cur_sets += 1
+                file_sets += 1
         flush(cur, cur_sets)
+        # Only count a file as a workout if it actually logged sets — a
+        # retrospective "exercises only, total_sets: 0" stub must not inflate
+        # the headline workout count or skew the coach's framing.
+        if file_sets > 0:
+            n_workouts += 1
+            used_dates.append(date_s)
     return vol, n_workouts, sorted(unmapped), (start, today), used_dates
 
 

@@ -19,11 +19,13 @@ problem and nothing can silently vanish:
          agent-mode cron runs).
        - on any failure -> compose_templated(): a pure-Python brief from the same
          facts. ALWAYS works, so the morning message ALWAYS lands.
-  4. print the brief to stdout -> Hermes delivers it to Telegram (deliver: telegram).
-     When NOT firing it prints [SILENT] and Hermes sends nothing.
+  4. SEND the brief itself via the Telegram Bot API, then print {"wakeAgent": false}
+     so Hermes' cron skips the agent entirely (no LLM turn, nothing it could hijack
+     or drop). If the direct send fails, it prints the brief instead so Hermes' agent
+     delivers it as a fallback. When NOT firing it prints the wake-gate and is silent.
 
 Fire-once is tracked in brief_state.json (last_brief_date), marked only AFTER a
-brief is composed, so a mid-run crash retries on the next tick.
+CONFIRMED send, so a delivery failure (or mid-run crash) retries on the next tick.
 
   --dry-run         force-fire, compose + PRINT, do NOT mark state or refresh-gate
   --no-llm          skip compose_rich (test the templated path only)
@@ -48,7 +50,28 @@ HEALTH = HOME / ".hermes" / "health" / "hae"
 STATE = HEALTH / "brief_state.json"
 LOG = HEALTH / "sync.log"
 ENV_FILE = HOME / ".hermes" / ".env"
-VAULT = Path(os.environ.get("HERMES_VAULT", "/home/hermes/vault"))
+
+
+def _default_vault() -> Path:
+    """HERMES_VAULT wins; else the VPS path if it exists (production), else the
+    Mac dev path — same code in both places, no split-brain."""
+    env = os.environ.get("HERMES_VAULT")
+    if env:
+        return Path(env)
+    vps = Path("/home/hermes/vault")
+    if vps.exists():
+        return vps
+    return Path.home() / "Documents" / "School Vault - UofT"
+
+
+VAULT = _default_vault()
+
+# Printed as the final stdout line to skip the Hermes cron agent entirely
+# (run_job honors {"wakeAgent": false} → no LLM turn, nothing delivered). The
+# brief sends itself via the Bot API, so the agent layer is pure waste + a
+# hijack risk; this is the real "silent, $0" gate ([SILENT] is an agent marker,
+# not a script-stdout one).
+WAKE_GATE_SKIP = '{"wakeAgent": false}'
 CSVP = VAULT / "07 - Health" / "Metrics" / "metrics.csv"
 DAILY_DIR = VAULT / "04 - Daily Notes"
 ACTION_ITEMS = VAULT / "00 - Dashboard" / "Action Items.md"
@@ -101,9 +124,10 @@ def _load_state() -> dict:
 def _row_for(date: str) -> dict:
     if not CSVP.exists():
         return {}
-    for r in csv.DictReader(CSVP.open()):
-        if r.get("date") == date:
-            return r
+    with CSVP.open(newline="") as fh:
+        for r in csv.DictReader(fh):
+            if r.get("date") == date:
+                return r
     return {}
 
 
@@ -126,13 +150,18 @@ def _section(text: str, header: str) -> str:
     """Return the lines under a '## header' up to the next '## ' (or '# ') header."""
     lines = text.split("\n")
     out, capturing = [], False
+    hl = header.lower()
     for ln in lines:
         if capturing:
             if re.match(r"^#{1,2} ", ln):
                 break
             out.append(ln)
-        elif ln.strip().lower().startswith(header.lower()):
-            capturing = True
+        else:
+            # Exact header match (allowing trailing text after a space), so
+            # "## Schedule" does NOT also capture "## Scheduled Maintenance".
+            hs = ln.strip().lower()
+            if hs == hl or hs.startswith(hl + " "):
+                capturing = True
     return "\n".join(out).strip()
 
 
@@ -203,8 +232,9 @@ def gather_facts(today: str, yesterday: str) -> dict:
             v = _fnum(trow, k)
             if v is not None:
                 sleep[k] = v
-        recent = [v for r in csv.DictReader(CSVP.open())
-                  if r.get("date", "") < today and (v := _fnum(r, "sleep_total_h")) is not None]
+        with CSVP.open(newline="") as fh:
+            recent = [v for r in csv.DictReader(fh)
+                      if r.get("date", "") < today and (v := _fnum(r, "sleep_total_h")) is not None]
         if recent[-7:]:
             sleep["avg7_h"] = round(sum(recent[-7:]) / len(recent[-7:]), 1)
 
@@ -400,13 +430,13 @@ def main() -> int:
     if not DRY_RUN and not FORCE:
         state = _load_state()
         if state.get("last_brief_date") == today:
-            print("[SILENT]")
+            print(WAKE_GATE_SKIP)
             return 0
 
         trow = _row_for(today)
         sleep_present = bool(trow.get("sleep_total_h"))
         if not (sleep_present or now.time() >= cutoff):
-            print("[SILENT]")  # waiting for sleep to land / cutoff
+            print(WAKE_GATE_SKIP)  # waiting for sleep to land / cutoff
             return 0
 
     # ---- FIRE ----
@@ -426,7 +456,7 @@ def main() -> int:
             STATE.write_text(json.dumps(state))
         except Exception:  # noqa: BLE001
             _log("WARN: could not write brief_state.json")
-        print("[SILENT]")          # already sent; suppress Hermes' agent-delivery
+        print(WAKE_GATE_SKIP)      # already sent → skip the agent (no LLM, no hijack)
     else:
         print(brief)               # direct send failed → let Hermes deliver as fallback
     return 0
