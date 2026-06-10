@@ -11,12 +11,17 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    strategy:
+      matrix:
+        # 3.11 (floor) + 3.13 (matches the dev venv and a modern VPS) so a
+        # green CI actually reflects the runtime the scripts execute under.
+        python-version: ['3.11', '3.13']
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install test deps
         run: pip install pytest pyyaml
