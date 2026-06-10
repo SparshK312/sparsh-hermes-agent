@@ -1,5 +1,5 @@
 {
-  "_comment": "Cron entries to APPEND into ~/.hermes/cron/jobs.json on the VPS. Do NOT replace the existing file — the daily-note-prefill and internship-watcher jobs must be preserved. Append these entries inside the `jobs` array and update `updated_at`. NOTE: these are AGENT jobs — Hermes runs the `script`, injects its stdout as CONTEXT, then wakes the LLM to compose the Telegram message (it is NOT delivered verbatim and DOES cost one LLM turn). A job that wants to skip the LLM entirely ($0, silent or self-delivered) must print {\"wakeAgent\": false} as its final stdout line — see scripts/cron/hae_sync.sh and fitness_report.sh.",
+  "_comment": "Cron entries to APPEND into ~/.hermes/cron/jobs.json on the VPS. Do NOT replace the existing file — the daily-note-prefill and internship-watcher jobs must be preserved. Append these entries inside the `jobs` array and update `updated_at`. DESIGN: these are CONTEXT-AWARE AGENT jobs — each `script` reads today's logged state from the vault and prints a compact STATE block to stdout; Hermes injects that as context and the LLM composes the Telegram message per the job's `prompt` (so it adapts — e.g. drops the weigh-in line if weight is logged, nags only about missing items). When a nudge is moot (e.g. lunch already logged) the script prints {\"wakeAgent\": false} as its final line, which makes run_job skip the LLM entirely (no turn, nothing sent). If you change a job's `prompt` here you must also update it in the live jobs.json. For a truly $0 self-delivered job see scripts/cron/hae_sync.sh and fitness_report.sh.",
   "_timezone_comment": "cron `expr` is evaluated in the Hermes-configured timezone: HERMES_TIMEZONE env → config.yaml `timezone:` → else SERVER-LOCAL (UTC on the VPS). The `created_at` -04:00 offsets below are cosmetic and do NOT set the schedule tz. REQUIRED on the VPS: set `timezone: America/Toronto` in ~/.hermes/config.yaml, or these fire at the wrong wall-clock time (a `0 13` 'lunch' job would hit at 09:00 Toronto under UTC).",
   "_script_path_note": "Hermes' cron dispatcher refuses scripts outside ~/.hermes/scripts/ (sandbox: 'resolved script path is outside the allowed scripts directory'). The repo scripts are mirrored into that root by scripts/deploy.sh on every deploy, with a 'health_' prefix to avoid collision with bundled Hermes scripts. The script paths here reference the mirrored copies, NOT the repo paths.",
   "_apply_procedure": "See docs/DEPLOY.md → 'Adding cron entries'. Use the deploy script's merge helper rather than hand-editing.",
@@ -8,6 +8,7 @@
     {
       "id": "a1f5d3c9b2e0",
       "name": "health-morning-nudge",
+      "prompt": "Compose Sparsh's terse morning Telegram nudge from the [morning-nudge state] block above. Lead with last night's sleep: hours (add ⚠️ if under sleep_floor_h, else ✅), then deep/REM/RHR/HRV and the 7-day avg on one line. If sleep_synced is no, say it didn't sync and suggest `/sleep <hrs>`. If weight_logged_today is no, add ONE line nudging the weigh-in: `/weight <lb>` (after bathroom, before food); if it is yes, skip the weigh-in line entirely. End with `/today` for the full picture. Markdown, bullets, terse, short header only, no fluff. Use ONLY the facts in the state block.",
       "skills": [],
       "skill": null,
       "model": null,
@@ -43,6 +44,7 @@
     {
       "id": "b3c7e9f1a4d2",
       "name": "health-lunch-check",
+      "prompt": "Compose a short lunch-log nudge from the [lunch-nudge state] block above (you are only invoked when lunch is NOT logged yet). Remind him to log lunch — describe it, send a photo, or `/log-food`. Note where he stands vs target using kcal_so_far / protein_so_far_g vs the targets. The office is AYCE — an easy protein-dense anchor. End with `/today` for running totals. Markdown, terse, no fluff. Use ONLY the facts in the state block.",
       "skills": [],
       "skill": null,
       "model": null,
@@ -78,6 +80,7 @@
     {
       "id": "c8d4a2b1e5f9",
       "name": "health-evening-summary-nudge",
+      "prompt": "Compose Sparsh's terse evening check-in from the [evening-nudge state] block above. Nudge ONLY about items listed in `missing` (dinner / water / vitamins) — never mention things already done. If kcal_so_far or protein_so_far_g is short of target, note the gap in one line. Always close with the non-negotiable: bed by midnight. Markdown, no fluff. If `missing` is nothing and macros are at/near target, send just one line: 'You're set for the day — bed by midnight.' Use ONLY the facts in the state block.",
       "skills": [],
       "skill": null,
       "model": null,
