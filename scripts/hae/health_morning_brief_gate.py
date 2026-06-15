@@ -121,6 +121,13 @@ def _load_state() -> dict:
         return {}
 
 
+def _save_state(state: dict) -> None:
+    try:
+        STATE.write_text(json.dumps(state))
+    except Exception:  # noqa: BLE001
+        _log("WARN: could not write brief_state.json")
+
+
 def _row_for(date: str) -> dict:
     if not CSVP.exists():
         return {}
@@ -257,30 +264,37 @@ def gather_facts(today: str, yesterday: str) -> dict:
     }
 
 
+# ----------------------------------------------------------------------------- compose: shared sleep block
+def _sleep_lines(s: dict, synced: bool) -> list[str]:
+    """The sleep + recovery bullet lines — shared by the morning brief AND the
+    later sleep-follow-up (so both render identically). Returns the lines (or a
+    'didn't sync yet' note when sleep isn't in the archive)."""
+    if not (synced and s):
+        return ["_(Apple Watch sleep hasn't synced yet — `/sleep <hrs>` to log manually.)_"]
+    out = []
+    tot = s.get("sleep_total_h")
+    flag = "✅" if (tot or 0) >= 7 else "⚠️"
+    line = f"{flag} Slept *{tot:.1f}h*" if tot is not None else "Sleep:"
+    if "avg7_h" in s:
+        line += f"  _(7-day avg {s['avg7_h']:.1f}h)_"
+    out.append(line)
+    extras = []
+    for k, lab, fmt in (("sleep_deep_h", "deep", "{:.1f}h"), ("sleep_rem_h", "REM", "{:.1f}h"),
+                        ("resting_hr", "RHR", "{:.0f}"), ("hrv_ms", "HRV", "{:.0f}ms")):
+        if k in s:
+            extras.append(f"{lab} " + fmt.format(s[k]))
+    if extras:
+        out.append("   " + " · ".join(extras))
+    if tot is not None and tot < 7:
+        out.append("   _Under your 7h floor — guard sleep tonight._")
+    return out
+
+
 # ----------------------------------------------------------------------------- compose: templated (always works)
 def compose_templated(facts: dict) -> str:
     now = datetime.datetime.now(TZ)
     parts = [f"🌅 *Morning, Sparsh.* {now.strftime('%a %b %-d')}.", ""]
-
-    s = facts["sleep"]
-    if facts["sleep_synced"] and s:
-        tot = s.get("sleep_total_h")
-        flag = "✅" if (tot or 0) >= 7 else "⚠️"
-        line = f"{flag} Slept *{tot:.1f}h*" if tot is not None else "Sleep:"
-        if "avg7_h" in s:
-            line += f"  _(7-day avg {s['avg7_h']:.1f}h)_"
-        parts.append(line)
-        extras = []
-        for k, lab, fmt in (("sleep_deep_h", "deep", "{:.1f}h"), ("sleep_rem_h", "REM", "{:.1f}h"),
-                            ("resting_hr", "RHR", "{:.0f}"), ("hrv_ms", "HRV", "{:.0f}ms")):
-            if k in s:
-                extras.append(f"{lab} " + fmt.format(s[k]))
-        if extras:
-            parts.append("   " + " · ".join(extras))
-        if tot is not None and tot < 7:
-            parts.append("   _Under your 7h floor — guard sleep tonight._")
-    else:
-        parts.append("_(Apple Watch sleep didn't sync — `/sleep <hrs>` to log manually.)_")
+    parts += _sleep_lines(facts["sleep"], facts["sleep_synced"])
 
     a = facts["yesterday_activity"]
     if a:
@@ -416,6 +430,21 @@ def compose_rich(facts: dict) -> str | None:
     return None
 
 
+# ----------------------------------------------------------------------------- compose: sleep follow-up
+def compose_followup(facts: dict, brief_steps) -> str:
+    """The short 'sleep just landed' follow-up — sent later in the morning when the
+    brief had to go out before the watch's sleep session synced (it ends when you
+    wake ~9am, so HAE often pushes it AFTER the 9am brief). Also corrects yesterday's
+    step total if the morning re-sync filled it in materially higher than the brief had."""
+    parts = ["😴 *Sleep synced.*", ""]
+    parts += _sleep_lines(facts["sleep"], facts["sleep_synced"])
+    cur = facts["yesterday_activity"].get("steps")
+    if cur is not None and brief_steps is not None and cur > brief_steps + 500:
+        parts += ["", f"📊 Yesterday's steps updated to *{cur:,}* "
+                      f"_(brief had {brief_steps:,} — data was still syncing)._"]
+    return "\n".join(parts).strip()
+
+
 # ----------------------------------------------------------------------------- main
 def main() -> int:
     if not DRY_RUN:
@@ -423,42 +452,63 @@ def main() -> int:
     now = datetime.datetime.now(TZ)
     today = now.strftime("%Y-%m-%d")
     yesterday = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-    dow = now.strftime("%a")
-    is_weekend = dow in ("Sat", "Sun")
+    is_weekend = now.strftime("%a") in ("Sat", "Sun")
     cutoff = WEEKEND_CUTOFF if is_weekend else WEEKDAY_CUTOFF
 
-    if not DRY_RUN and not FORCE:
-        state = _load_state()
-        if state.get("last_brief_date") == today:
+    # --dry-run / --force always compose+deliver the FULL brief immediately.
+    if DRY_RUN or FORCE:
+        facts = gather_facts(today, yesterday)
+        brief = compose_rich(facts) or compose_templated(facts)
+        if DRY_RUN:
+            print(brief)
+            return 0
+        if send_message(brief):
+            st = _load_state()
+            st.update({"last_brief_date": today, "brief_had_sleep": facts["sleep_synced"],
+                       "brief_steps": facts["yesterday_activity"].get("steps")})
+            _save_state(st)
             print(WAKE_GATE_SKIP)
-            return 0
-
-        trow = _row_for(today)
-        sleep_present = bool(trow.get("sleep_total_h"))
-        if not (sleep_present or now.time() >= cutoff):
-            print(WAKE_GATE_SKIP)  # waiting for sleep to land / cutoff
-            return 0
-
-    # ---- FIRE ----
-    facts = gather_facts(today, yesterday)
-    brief = compose_rich(facts) or compose_templated(facts)
-
-    if DRY_RUN:
-        print(brief)
+        else:
+            print(brief)
         return 0
 
-    # Deliver DIRECTLY via Bot API (no agent layer can hijack/drop it). Only mark the
-    # day done on a confirmed send, so a delivery failure re-fires on the next tick.
-    if send_message(brief):
-        state = _load_state()
-        state["last_brief_date"] = today
-        try:
-            STATE.write_text(json.dumps(state))
-        except Exception:  # noqa: BLE001
-            _log("WARN: could not write brief_state.json")
-        print(WAKE_GATE_SKIP)      # already sent → skip the agent (no LLM, no hijack)
-    else:
-        print(brief)               # direct send failed → let Hermes deliver as fallback
+    state = _load_state()
+    trow = _row_for(today)
+    sleep_present = bool(trow.get("sleep_total_h"))
+
+    # ---- Case A: the brief hasn't gone out today yet ----
+    if state.get("last_brief_date") != today:
+        if not (sleep_present or now.time() >= cutoff):
+            print(WAKE_GATE_SKIP)   # still waiting for sleep to land / the cutoff
+            return 0
+        facts = gather_facts(today, yesterday)
+        brief = compose_rich(facts) or compose_templated(facts)
+        # Deliver DIRECTLY via Bot API (no agent layer can hijack/drop it). Only mark
+        # the day done on a confirmed send, so a failure re-fires on the next tick.
+        if send_message(brief):
+            state.update({"last_brief_date": today, "brief_had_sleep": sleep_present,
+                          "brief_steps": facts["yesterday_activity"].get("steps")})
+            _save_state(state)
+            print(WAKE_GATE_SKIP)
+        else:
+            print(brief)
+        return 0
+
+    # ---- Case B: brief already went out WITHOUT sleep, and sleep has since landed ----
+    # Fire ONE short follow-up so last night's sleep (+ any corrected step total) still
+    # reaches him — fixes the race where the brief fires at the 9am cutoff but the watch
+    # only pushes its sleep session ~9:40 (it ends when he wakes).
+    if (not state.get("brief_had_sleep")
+            and sleep_present
+            and state.get("sleep_followup_date") != today):
+        facts = gather_facts(today, yesterday)
+        if send_message(compose_followup(facts, state.get("brief_steps"))):
+            state["sleep_followup_date"] = today
+            _save_state(state)
+        print(WAKE_GATE_SKIP)
+        return 0
+
+    print(WAKE_GATE_SKIP)   # nothing to do this tick
     return 0
 
 

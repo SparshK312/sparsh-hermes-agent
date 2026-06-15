@@ -70,7 +70,7 @@ def test_templated_never_empty_even_with_no_facts():
     g = _load()
     out = g.compose_templated(_facts(synced=False))
     assert out.strip()
-    assert "didn't sync" in out
+    assert "hasn't synced" in out
 
 
 # ---- section parser: exact header match ----
@@ -101,7 +101,8 @@ def test_main_fire_once_is_silent(tmp_path, capsys, monkeypatch):
     g = _load()
     _arm(g, tmp_path, monkeypatch)
     today = datetime.datetime.now(g.TZ).strftime("%Y-%m-%d")
-    g.STATE.write_text(json.dumps({"last_brief_date": today}))
+    # a complete brief (had sleep) already went out today
+    g.STATE.write_text(json.dumps({"last_brief_date": today, "brief_had_sleep": True}))
     sent = []
     monkeypatch.setattr(g, "send_message", lambda t: sent.append(t) or True)
 
@@ -154,3 +155,59 @@ def test_main_silent_when_waiting_for_sleep(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out.strip()
     assert out == g.WAKE_GATE_SKIP
     assert sent == []
+
+
+# ---- sleep follow-up: brief fired at the cutoff WITHOUT sleep; sleep lands later ----
+
+def _facts_steps(sleep_h=6.4, synced=True, steps=8200):
+    f = _facts(sleep_h=sleep_h, synced=synced)
+    f["yesterday_activity"] = {"steps": steps} if steps is not None else {}
+    return f
+
+
+def test_followup_fires_once_when_sleep_lands_after_brief(tmp_path, capsys, monkeypatch):
+    g = _load()
+    _arm(g, tmp_path, monkeypatch, sleep_present=True)        # sleep is now in the archive
+    monkeypatch.setattr(g, "gather_facts", lambda t, y: _facts_steps())
+    today = datetime.datetime.now(g.TZ).strftime("%Y-%m-%d")
+    # brief already went out today WITHOUT sleep
+    g.STATE.write_text(json.dumps(
+        {"last_brief_date": today, "brief_had_sleep": False, "brief_steps": 5000}))
+    sent = []
+    monkeypatch.setattr(g, "send_message", lambda t: sent.append(t) or True)
+
+    rc = g.main()
+    out = capsys.readouterr().out.strip()
+    assert rc == 0 and out == g.WAKE_GATE_SKIP
+    assert len(sent) == 1 and "Sleep synced" in sent[0] and "6.4h" in sent[0]
+    assert "8,200" in sent[0]   # corrected step total (brief had 5,000)
+    assert json.loads(g.STATE.read_text())["sleep_followup_date"] == today
+
+
+def test_followup_not_repeated(tmp_path, capsys, monkeypatch):
+    g = _load()
+    _arm(g, tmp_path, monkeypatch, sleep_present=True)
+    monkeypatch.setattr(g, "gather_facts", lambda t, y: _facts_steps())
+    today = datetime.datetime.now(g.TZ).strftime("%Y-%m-%d")
+    g.STATE.write_text(json.dumps({"last_brief_date": today, "brief_had_sleep": False,
+                                   "brief_steps": 5000, "sleep_followup_date": today}))
+    sent = []
+    monkeypatch.setattr(g, "send_message", lambda t: sent.append(t) or True)
+
+    g.main()
+    assert capsys.readouterr().out.strip() == g.WAKE_GATE_SKIP
+    assert sent == []   # already followed up today
+
+
+def test_no_followup_when_brief_already_had_sleep(tmp_path, capsys, monkeypatch):
+    g = _load()
+    _arm(g, tmp_path, monkeypatch, sleep_present=True)
+    monkeypatch.setattr(g, "gather_facts", lambda t, y: _facts_steps())
+    today = datetime.datetime.now(g.TZ).strftime("%Y-%m-%d")
+    g.STATE.write_text(json.dumps({"last_brief_date": today, "brief_had_sleep": True}))
+    sent = []
+    monkeypatch.setattr(g, "send_message", lambda t: sent.append(t) or True)
+
+    g.main()
+    assert capsys.readouterr().out.strip() == g.WAKE_GATE_SKIP
+    assert sent == []   # brief already had sleep → nothing to follow up
