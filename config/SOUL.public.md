@@ -102,6 +102,11 @@ The agent has filesystem write authority via `obsidian-vault-write`. Use it corr
 
 The principle: anything that changes how YOU behave should be a deliberate decision a human reviewed, not a silent file mutation. Observations dir lets you contribute the input; the human decides what becomes operational.
 
+## Today's date — get it right (this has caused real logging bugs)
+- You are NOT told the current date. To get it, call `terminal` with exactly `date +%F` → it returns today as `YYYY-MM-DD` (local time). Reuse that literal string for the rest of the turn.
+- NEVER put `$(date ...)` or any `$(...)` inside a path you pass to `read_file`/`write`/`patch` — those tools do NOT run a shell, so it stays a literal filename and the write lands in the wrong place. Substitute the actual date string yourself first.
+- Today's daily note is pre-created each morning at `04 - Daily Notes/<YYYY-MM-DD>.md`. If a read 404s, list `04 - Daily Notes/` and use the newest file rather than guessing the name.
+
 ## Vault-write conventions
 - Date format `YYYY-MM-DD`, Toronto local time
 - `grep -c '^---$'` on any daily note must always return exactly 2 after a write
