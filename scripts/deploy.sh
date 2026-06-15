@@ -116,7 +116,9 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   rm -rf ~/.hermes/scripts/fitness && cp -r scripts/fitness ~/.hermes/scripts/fitness
   cp scripts/cron/fitness_report.sh        ~/.hermes/scripts/fitness_report.sh
   cp scripts/cron/coach.sh                 ~/.hermes/scripts/coach.sh
-  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/coach.sh
+  cp scripts/cron/coach_meal.sh            ~/.hermes/scripts/coach_meal.sh
+  cp scripts/cron/coach_workout.sh         ~/.hermes/scripts/coach_workout.sh
+  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh
   # --- Observations README before the fail-fast patches ---------------------
   # Deployed BEFORE the fail-fast source patches below: the patchers exit
   # non-zero (under `set -e`, aborting the rest of this block) if upstream Hermes

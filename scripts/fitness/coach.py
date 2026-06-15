@@ -1,54 +1,37 @@
 #!/usr/bin/env python3
 """
-coach.py — proactive strength & nutrition coach (Phase 4b).
+coach.py — the Phase 4b AI coach (multi-mode entry point on coach_engine).
 
-The "real assistant" layer: instead of just logging, it READS the week's actual
-data (training volume, nutrition adherence, sleep/recovery, bodyweight trend),
-reads the coaching context (Profile + Training Plan + Coach Memory), and composes
-a blunt, execution-first coaching narrative via a frontier model — then sends it
-to Telegram. Templated fallback so it always lands.
+Modes (--mode):
+  weekly         full review: structured analysis (JSON -> validated -> rendered),
+                 sent to Telegram + a one-line priority written back to Coach Memory.
+  meal-rescue    midday under-eating rescue — fires ONLY if behind pace + budget allows.
+  workout-rescue missed-workout rescue — fires ONLY if idle 2+ days & behind this week.
+  preview        pre-workout preview ("beat last time") — on demand.
 
-Runs as a SCRIPT-MODE cron (sends itself via the Bot API, then prints the
-{"wakeAgent": false} gate so Hermes skips the agent — same pattern as the brief).
+All compute is done deterministically in coach_engine (no hallucinated numbers).
+Self-sends via the Bot API, then prints {"wakeAgent": false} so Hermes skips the
+agent. Rescues stay SILENT (just the gate) when not warranted — no over-nudging.
 
-  coach.py [--days N] [--dry-run] [--no-llm]
-    --dry-run   compose + PRINT, do not send
-    --no-llm    force the templated fallback (test offline)
-
-Reads OPENAI_API_KEY + TELEGRAM_BOT_TOKEN from ~/.hermes/.env (like the brief).
-Frontier model is configurable below; default GPT-5.5 (reuses the existing key).
+  coach.py [--mode weekly|meal-rescue|workout-rescue|preview] [--days N] [--dry-run] [--no-llm]
 """
 from __future__ import annotations
 
-import datetime
 import json
-import os
 import sys
-import urllib.request
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from muscle_volume import parse_workouts, LANDMARKS, ORDER, VAULT  # noqa: E402
+import coach_engine as E  # noqa: E402
 
-HOME = Path.home()
-ENV_FILE = HOME / ".hermes" / ".env"
-DAILY_DIR = VAULT / "04 - Daily Notes"
-HEALTH = VAULT / "07 - Health"
-TZ = ZoneInfo("America/Toronto")
-CHAT_ID = "696500863"
-
-# Frontier model for coaching judgment. GPT-5.5 via the OpenAI key the brief
-# already uses; swap to a Claude model + base_url later if desired.
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-COACH_MODEL = "gpt-5.5"
-
-# Targets (from Profile.md — the locked baseline)
-T_KCAL, T_PROTEIN, T_WATER, T_SLEEP, T_TRAIN_WK = 2400, 140, 2.5, 7.0, 4
-UNDEREAT_KCAL = 1500   # a logged day below this trips the under-eating failure mode
-
-DRY_RUN = "--dry-run" in sys.argv
+DRY = "--dry-run" in sys.argv
 NO_LLM = "--no-llm" in sys.argv
+MODE = "weekly"
+if "--mode" in sys.argv:
+    try:
+        MODE = sys.argv[sys.argv.index("--mode") + 1]
+    except IndexError:
+        pass
 DAYS = 7
 if "--days" in sys.argv:
     try:
@@ -57,239 +40,195 @@ if "--days" in sys.argv:
         pass
 
 
-def _env(key: str) -> str | None:
-    v = os.environ.get(key)
-    if v:
-        return v
-    try:
-        for ln in ENV_FILE.read_text().splitlines():
-            if ln.startswith(f"{key}="):
-                return ln.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception:  # noqa: BLE001
-        pass
-    return None
+def _emit(msg: str, category: str, *, gate_when_silent=True) -> int:
+    """Deliver a coaching message: dry-run prints; else send + gate, fallback to agent."""
+    if DRY:
+        print(msg)
+        return 0
+    if E.send_message(msg):
+        E.record_send(category)
+        print(E.WAKE_GATE)
+        return 0
+    print(msg)   # send failed → let Hermes deliver
+    return 1
 
 
-def _read(path: Path, limit: int = 4000) -> str:
-    try:
-        return path.read_text(encoding="utf-8")[:limit]
-    except Exception:  # noqa: BLE001
-        return ""
+def _silent() -> int:
+    print(E.WAKE_GATE if not DRY else "[silent — trigger not warranted]")
+    return 0
 
 
-def _daily_fm(date: str) -> dict:
-    try:
-        txt = (DAILY_DIR / f"{date}.md").read_text(encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        return {}
-    parts = txt.split("---")
-    if len(parts) < 3:
-        return {}
-    fm = {}
-    for ln in parts[1].splitlines():
-        if ":" in ln and not ln.startswith((" ", "\t", "#")):
-            k, v = ln.split(":", 1)
-            fm[k.strip()] = v.strip()
-    return fm
-
-
-def _fnum(d: dict, k: str):
-    try:
-        return float(d.get(k))
-    except (TypeError, ValueError):
-        return None
-
-
-def _avg(xs):
-    xs = [x for x in xs if x is not None]
-    return round(sum(xs) / len(xs), 1) if xs else None
-
-
-def gather(days: int) -> dict:
-    now = datetime.datetime.now(TZ)
-    today = now.date()
-    dates = [(today - datetime.timedelta(days=i)).isoformat() for i in range(days)]
-
-    kcals, proteins, waters, sleeps, weights = [], [], [], [], []
-    undereat, logged_food_days, no_food_days = 0, 0, 0
-    for d in dates:
-        fm = _daily_fm(d)
-        is_today = d == today.isoformat()
-        k = _fnum(fm, "kcal")
-        if k is not None and not is_today:        # today is partial — don't judge it
-            kcals.append(k)
-            logged_food_days += 1
-            if k < UNDEREAT_KCAL:
-                undereat += 1
-        elif k is None and not is_today:
-            no_food_days += 1
-        p = _fnum(fm, "protein_g")
-        if p is not None and not is_today:
-            proteins.append(p)
-        w = _fnum(fm, "water_l")
-        if w is not None and not is_today:
-            waters.append(w)
-        s = _fnum(fm, "sleep_hours")
-        if s is not None:
-            sleeps.append(s)
-        bw = _fnum(fm, "weight")
-        if bw is not None:
-            weights.append((d, bw))
-
-    # training volume
-    vol, n_workouts, unmapped, window, used_dates = parse_workouts(days)
-    under = [m for m in ORDER if 0 < vol.get(m, 0) < LANDMARKS[m][0]]   # below MEV
-    gaps = [m for m in ORDER if vol.get(m, 0) == 0]
-    strong = {m: round(vol[m], 1) for m in ORDER if vol.get(m, 0) > 0}
-
-    weight_trend = None
-    if len(weights) >= 2:
-        weights.sort()
-        weight_trend = round(weights[-1][1] - weights[0][1], 1)  # last - first over window
-
-    return {
-        "window_days": days,
-        "training": {
-            "sessions": n_workouts,
-            "target_per_week": T_TRAIN_WK,
-            "sets_by_muscle": strong,
-            "below_MEV": under,
-            "untrained": gaps,
-        },
-        "nutrition": {
-            "avg_kcal": _avg(kcals), "target_kcal": T_KCAL,
-            "avg_protein_g": _avg(proteins), "target_protein_g": T_PROTEIN,
-            "days_logged": logged_food_days,
-            "days_no_food_logged": no_food_days,
-            "undereating_days": undereat, "undereating_threshold_kcal": UNDEREAT_KCAL,
-            "avg_water_l": _avg(waters), "target_water_l": T_WATER,
-        },
-        "recovery": {
-            "avg_sleep_h": _avg(sleeps), "target_sleep_h": T_SLEEP,
-            "nights_logged": len([s for s in sleeps if s is not None]),
-        },
-        "bodyweight": {
-            "trend_lb_over_window": weight_trend,
-            "latest_lb": weights[-1][1] if weights else None,
-            "target_gain_per_week_lb": "0.25-0.5",
-        },
-    }
-
-
-COACH_SYSTEM = (
-    "You are Sparsh's strength & nutrition coach. He's a high-execution operator and a "
-    "near-beginner lifter on a LEAN BULK — underweight (~BMI 18.4), building 15-25 lb of "
-    "mostly muscle over 6-12 months. The WHOLE system exists to defeat his two lifelong "
-    "failure modes: (1) training consistency collapsing under load (school/work crunch), and "
-    "(2) under-eating in busy seasons (drops to ~1 meal/day, loses muscle). COACH THE "
-    "ADHERENCE, NOT THE PROGRAM — a decent plan he runs beats a perfect plan he quits.\n\n"
-    "STYLE (non-negotiable): execution-first, blunt, numbers + plain English. NO lecturing, "
-    "NO padding, NO therapy-mode, no 'great job!' filler — he already knows the theory. "
-    "Surface the data, name the trend, give the single next concrete action. Flag drop-off "
-    "(missed training, under-eating, short sleep, stalled weight) EARLY and hard. ~120-200 words, "
-    "plain markdown. Use ONLY the data + context provided; never invent numbers.\n\n"
-    "Structure: 1) one-line verdict on the week, 2) what's working (brief), 3) the clearest "
-    "problem tied to a failure mode, 4) the ONE priority + concrete action for next week."
+# ----------------------------------------------------------------- weekly review
+WEEKLY_SYS = (
+    "You are Sparsh's strength & nutrition coach. He's a high-execution operator and "
+    "near-beginner lifter on a LEAN BULK (underweight, +15-25 lb muscle goal). The whole "
+    "system exists to defeat two lifelong failure modes: (1) training consistency collapsing "
+    "under work/school load, (2) under-eating in busy seasons (~1 meal/day). COACH ADHERENCE, "
+    "NOT THE PROGRAM. Blunt, numbers-first, plain English, NO lecturing, no fake hype, no "
+    "therapy voice. Praise only specific actions/real progress; never flatter missed targets. "
+    "Use ONLY the numbers in the evidence packet — never invent metrics.\n\n"
+    "Return a JSON object EXACTLY in this shape:\n"
+    "{\n"
+    '  "analysis": {"primary_bottleneck": str, "secondary_bottleneck": str,\n'
+    '               "evidence": [str, ...],  // each cites a real number from the packet\n'
+    '               "risk_level": "green"|"yellow"|"red", "confidence": "high"|"medium"|"low"},\n'
+    '  "actions": {"today": [str] (1-2 max), "fallback_if_busy": str, "do_not_change_yet": [str]},\n'
+    '  "conversation": {"question_for_user": str, "tone": "firm"|"normal"|"encouraging"}\n'
+    "}\n"
+    "The question must be behaviorally useful (earns a reply that changes next week)."
 )
 
 
-def compose_llm(facts: dict, profile: str, plan: str, memory: str) -> str | None:
-    if NO_LLM:
-        return None
-    key = _env("OPENAI_API_KEY")
-    if not key:
-        return None
-    user = (
-        "COACHING CONTEXT (Profile / Training Plan / Coach Memory):\n"
-        f"## Profile\n{profile}\n\n## Training Plan\n{plan}\n\n## Coach Memory\n{memory}\n\n"
-        f"THIS WEEK'S DATA (last {facts['window_days']} days):\n{json.dumps(facts, indent=2)}\n\n"
-        "Write this week's coaching message."
-    )
-    body = json.dumps({
-        "model": COACH_MODEL,
-        "messages": [{"role": "system", "content": COACH_SYSTEM},
-                     {"role": "user", "content": user}],
-        "max_completion_tokens": 2000,
-    }).encode("utf-8")
-    for _ in range(3):
-        try:
-            req = urllib.request.Request(
-                OPENAI_URL, data=body,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=60) as r:
-                out = json.loads(r.read())["choices"][0]["message"]["content"].strip()
-            if out:
-                return out
-        except Exception:  # noqa: BLE001
-            continue
-    return None
-
-
-def compose_templated(f: dict) -> str:
-    t, n, r, bw = f["training"], f["nutrition"], f["recovery"], f["bodyweight"]
-    L = ["💪 *Weekly coach check-in*", ""]
-    # training adherence (failure mode #1)
-    flag = "⚠️" if t["sessions"] < t["target_per_week"] else "✅"
-    L.append(f"{flag} Trained *{t['sessions']}/{t['target_per_week']}* sessions.")
-    if t["below_MEV"]:
-        L.append(f"   Under target: {', '.join(t['below_MEV'])}.")
-    # nutrition (failure mode #2)
-    if n["avg_kcal"] is not None:
-        flag = "⚠️" if n["avg_kcal"] < T_KCAL - 200 else "✅"
-        L.append(f"{flag} Avg *{int(n['avg_kcal'])} kcal* / {n['target_kcal']} · "
-                 f"*{int(n['avg_protein_g'] or 0)}g* / {n['target_protein_g']} protein.")
-    if n["undereating_days"]:
-        L.append(f"   🚨 *{n['undereating_days']} under-eating day(s)* (<{UNDEREAT_KCAL} kcal) — the failure mode. Fix dinner.")
-    if n["days_no_food_logged"]:
-        L.append(f"   {n['days_no_food_logged']} day(s) with no food logged.")
-    # recovery + weight
-    if r["avg_sleep_h"] is not None:
-        flag = "⚠️" if r["avg_sleep_h"] < T_SLEEP else "✅"
-        L.append(f"{flag} Avg sleep *{r['avg_sleep_h']}h* / {T_SLEEP}.")
-    if bw["trend_lb_over_window"] is not None:
-        L.append(f"⚖️ Weight {'+' if bw['trend_lb_over_window'] >= 0 else ''}{bw['trend_lb_over_window']} lb "
-                 f"over {f['window_days']}d (target +0.25-0.5/wk).")
-    L += ["", "_(plain coach summary — rich compose was unavailable)_"]
+def _render_weekly(p: dict) -> str:
+    a, ac, c = p.get("analysis", {}), p.get("actions", {}), p.get("conversation", {})
+    risk = {"red": "🔴", "yellow": "🟡", "green": "🟢"}.get(a.get("risk_level", ""), "")
+    L = [f"💪 *Weekly coach check-in* {risk}".strip(), ""]
+    if a.get("primary_bottleneck"):
+        L.append(f"*Bottleneck:* {a['primary_bottleneck']}")
+    for e in (a.get("evidence") or [])[:4]:
+        L.append(f"• {e}")
+    today = ac.get("today") or []
+    if today:
+        L += ["", "*Do this week:*"] + [f"→ {t}" for t in today[:2]]
+    if ac.get("fallback_if_busy"):
+        L.append(f"_Busy-day fallback:_ {ac['fallback_if_busy']}")
+    if c.get("question_for_user"):
+        L += ["", c["question_for_user"]]
     return "\n".join(L)
 
 
-def send_message(text: str) -> bool:
-    import urllib.parse
-    token = _env("TELEGRAM_BOT_TOKEN")
-    if not token:
-        print("no TELEGRAM_BOT_TOKEN", file=sys.stderr)
-        return False
-    for pm in ("Markdown", None):
-        payload = {"chat_id": CHAT_ID, "text": text}
-        if pm:
-            payload["parse_mode"] = pm
-        try:
-            req = urllib.request.Request(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                data=urllib.parse.urlencode(payload).encode())
-            with urllib.request.urlopen(req, timeout=20) as r:
-                if json.loads(r.read()).get("ok"):
-                    return True
-        except Exception:  # noqa: BLE001
-            continue
-    return False
+def _templated_weekly(ev: dict) -> str:
+    t, n, r, bw = ev["training"], ev["nutrition"], ev["recovery"], ev["bodyweight"]
+    L = ["💪 *Weekly coach check-in*", ""]
+    flag = "⚠️" if t["sessions_done"] < t["planned_per_week"] else "✅"
+    L.append(f"{flag} Trained *{t['sessions_done']}/{t['planned_per_week']}*.")
+    if n["avg_kcal"] is not None:
+        flag = "⚠️" if n["avg_kcal"] < E.TARGETS["kcal"] - 200 else "✅"
+        L.append(f"{flag} Avg *{int(n['avg_kcal'])} kcal* / {E.TARGETS['kcal']} · *{int(n['avg_protein_g'] or 0)}g* / {E.TARGETS['protein_g']} protein.")
+    if n["undereating_days"]:
+        L.append(f"🚨 *{n['undereating_days']} under-eating day(s)* — the failure mode. Fix dinner.")
+    if r["avg_sleep_h"] is not None:
+        L.append(f"{'⚠️' if r['avg_sleep_h'] < E.TARGETS['sleep_h'] else '✅'} Sleep avg *{r['avg_sleep_h']}h*.")
+    if bw["trend_lb_over_window"] is not None:
+        L.append(f"⚖️ Weight {'+' if bw['trend_lb_over_window'] >= 0 else ''}{bw['trend_lb_over_window']} lb / {ev['window_days']}d.")
+    L += ["", "_(plain summary — rich compose unavailable)_"]
+    return "\n".join(L)
+
+
+def run_weekly() -> int:
+    ev = E.build_evidence(DAYS)
+    docs = E.context_docs()
+    msg, priority = None, None
+    if not NO_LLM:
+        user = (
+            f"## Profile\n{docs['profile']}\n\n## Training Plan\n{docs['training_plan']}\n\n"
+            f"## Coach Memory\n{docs['coach_memory']}\n\n"
+            f"## This week's evidence packet (last {DAYS} days)\n{json.dumps(ev, indent=2, default=str)}\n\n"
+            "Write this week's coaching JSON."
+        )
+        parsed = E.compose_json(WEEKLY_SYS, user)
+        ok, reason = E.validate(parsed, ev) if parsed else (False, "no response")
+        if ok:
+            msg = _render_weekly(parsed)
+            priority = (parsed.get("actions", {}).get("today") or [None])[0]
+        else:
+            print(f"weekly: structured compose rejected ({reason}); templated", file=sys.stderr)
+    msg = msg or _templated_weekly(ev)
+    rc = _emit(msg, "weekly")
+    if rc == 0 and not DRY and priority:
+        E.memory_append(f"Weekly priority set: {priority}")
+    return rc
+
+
+# ----------------------------------------------------------------- midday under-eating rescue
+MEAL_SYS = (
+    "You are Sparsh's coach sending a MIDDAY UNDER-EATING RESCUE. His #1 failure mode is "
+    "drifting to ~1 meal/day when busy, which kills his lean bulk. He's behind pace on intake "
+    "RIGHT NOW. Send ONE short, blunt message (<60 words, plain markdown): state where he is vs "
+    "where he should be by now (use the exact numbers), give ONE concrete easy fix he can get in "
+    "the next hour (a specific protein-dense anchor — shake, sandwich, the office AYCE, eggs), and "
+    "end with a quick either/or question. No lecture, no hype. Use ONLY the numbers given."
+)
+
+
+def run_meal_rescue() -> int:
+    pace = E.intake_pace()
+    if not (pace["behind_kcal"] or pace["behind_protein"]):
+        return _silent()
+    ok, why = E.budget_ok("meal-rescue")
+    if not ok and not DRY:
+        return _silent()
+    msg = None
+    if not NO_LLM:
+        msg = E.compose_text(MEAL_SYS, f"Intake pace right now:\n{json.dumps(pace, indent=2)}", max_tokens=400)
+    if not msg:
+        gap = pace["kcal_expected_by_now"] - pace["kcal_so_far"]
+        msg = (f"🍽️ *Behind pace.* {pace['kcal_so_far']} kcal / {pace['protein_so_far_g']}g protein by "
+               f"{pace['time']} — ~{gap} kcal short of where you should be. Get a protein anchor in within "
+               f"the hour (shake + sandwich, or hit the AYCE). Café or grocery?")
+    return _emit(msg, "meal-rescue")
+
+
+# ----------------------------------------------------------------- missed-workout rescue
+WORKOUT_SYS = (
+    "You are Sparsh's coach sending a MISSED-WORKOUT RESCUE. His #2 failure mode is training "
+    "consistency collapsing under load. He hasn't lifted in a couple days and is behind this week. "
+    "Do NOT guilt-trip. Offer the 25-minute fallback session (one compound push, one compound pull, "
+    "one leg movement — keep it minimal-viable) so the week stays alive, and ask him to reply 'done' "
+    "when finished. <50 words, blunt and supportive, plain markdown. Use ONLY the numbers given."
+)
+
+
+def run_workout_rescue() -> int:
+    ev = E.build_evidence(DAYS)
+    t = ev["training"]
+    today = E.now().date().isoformat()
+    # A workout file dated today means he lifted today.
+    trained_today = (E.WORKOUTS / f"{today}.md").exists()
+    idle = t.get("days_since_last_lift") or 0
+    warranted = (not trained_today) and idle >= 2 and t["sessions_done"] < t["planned_per_week"]
+    if not warranted:
+        return _silent()
+    ok, why = E.budget_ok("workout-rescue")
+    if not ok and not DRY:
+        return _silent()
+    facts = {"days_since_last_lift": idle, "sessions_this_week": t["sessions_done"],
+             "planned_per_week": t["planned_per_week"], "untrained": t["untrained"]}
+    msg = None
+    if not NO_LLM:
+        msg = E.compose_text(WORKOUT_SYS, f"Training state:\n{json.dumps(facts, indent=2)}", max_tokens=300)
+    if not msg:
+        msg = (f"🏋️ *{idle} days since your last lift* — {t['sessions_done']}/{t['planned_per_week']} this week. "
+               f"Keep the week alive with the 25-min fallback: squat variant + bench/press + a row. "
+               f"Reply *done* when finished.")
+    return _emit(msg, "workout-rescue")
+
+
+# ----------------------------------------------------------------- pre-workout preview
+def run_preview() -> int:
+    ev = E.build_evidence(DAYS)
+    prog = ev["training"]["lift_progression"]
+    if not prog:
+        return _silent()
+    lines = []
+    for p in prog[:6]:
+        if p["status"] == "up":
+            lines.append(f"• {p['lift']}: last {p['last_top_lb']:g} lb (↑ from {p['prev_top_lb']:g}) — push for more.")
+        elif p["status"] in ("flat", "down"):
+            lines.append(f"• {p['lift']}: last {p['last_top_lb']:g} lb ({p['status']}) — beat it today.")
+        else:
+            lines.append(f"• {p['lift']}: last {p['last_top_lb']:g} lb — add reps or +2.5-5 lb if warm-ups feel good.")
+    msg = "🏋️ *Today — beat last time:*\n" + "\n".join(lines)
+    return _emit(msg, "preview")
 
 
 def main() -> int:
-    facts = gather(DAYS)
-    profile = _read(HEALTH / "Profile.md")
-    plan = _read(HEALTH / "Training Plan.md")
-    memory = _read(HEALTH / "Coach Memory.md")
-    msg = compose_llm(facts, profile, plan, memory) or compose_templated(facts)
-
-    if DRY_RUN:
-        print(msg)
-        return 0
-    if send_message(msg):
-        print('{"wakeAgent": false}')   # sent itself → skip the agent
-        return 0
-    print(msg)                          # send failed → let Hermes deliver as fallback
-    return 1
+    return {
+        "weekly": run_weekly,
+        "meal-rescue": run_meal_rescue,
+        "workout-rescue": run_workout_rescue,
+        "preview": run_preview,
+    }.get(MODE, run_weekly)()
 
 
 if __name__ == "__main__":
