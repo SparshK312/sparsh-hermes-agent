@@ -223,12 +223,60 @@ def run_preview() -> int:
     return _emit(msg, "preview")
 
 
+# ----------------------------------------------------------------- two-way chat (on demand)
+CHAT_SYS = (
+    "You are Sparsh's strength & nutrition coach answering his message DIRECTLY and "
+    "conversationally over Telegram. Near-beginner lifter on a lean bulk; the two failure "
+    "modes are training-consistency collapse and under-eating. COACH ADHERENCE, not the program. "
+    "Blunt, numbers-first, plain English, no lecturing, no therapy voice. Answer HIS actual "
+    "question using the evidence packet + context below; quote his real numbers. If he's slipping, "
+    "say so plainly and give the next concrete action. If the data needed isn't present, say so — "
+    "never invent numbers. Keep it tight for chat (a few lines)."
+)
+
+
+def run_chat() -> int:
+    # message via --message or stdin (skill pipes it in to avoid shell-quoting issues)
+    msg = ""
+    if "--message" in sys.argv:
+        try:
+            msg = sys.argv[sys.argv.index("--message") + 1]
+        except IndexError:
+            msg = ""
+    if not msg:
+        try:
+            msg = sys.stdin.read().strip()
+        except Exception:  # noqa: BLE001
+            msg = ""
+    if not msg:
+        print("Ask me something about your training, food, sleep, or weight.")
+        return 0
+    ev = E.build_evidence(DAYS)
+    docs = E.context_docs()
+    user = (
+        f"## Profile\n{docs['profile']}\n\n## Training Plan\n{docs['training_plan']}\n\n"
+        f"## Coach Memory\n{docs['coach_memory']}\n\n"
+        f"## Evidence packet (last {DAYS} days)\n{json.dumps(ev, indent=2, default=str)}\n\n"
+        f"## Sparsh's message\n{msg}\n\nRespond as the coach."
+    )
+    out = None if NO_LLM else E.compose_text(CHAT_SYS, user, max_tokens=1200)
+    if not out:
+        t, n = ev["training"], ev["nutrition"]
+        out = (f"Quick read: {t['sessions_done']}/{t['planned_per_week']} sessions, "
+               f"avg {int(n['avg_kcal'] or 0)} kcal / {int(n['avg_protein_g'] or 0)}g protein"
+               f"{', '+str(n['undereating_days'])+' under-eating days' if n['undereating_days'] else ''}. "
+               f"(Coach model unavailable right now — ask again in a bit.)")
+    print(out)   # the /coach skill relays this verbatim to the user
+    return 0
+
+
 def main() -> int:
     return {
         "weekly": run_weekly,
         "meal-rescue": run_meal_rescue,
         "workout-rescue": run_workout_rescue,
         "preview": run_preview,
+        "chat": run_chat,
     }.get(MODE, run_weekly)()
 
 
