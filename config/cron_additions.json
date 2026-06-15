@@ -126,10 +126,10 @@
       "context_from": null,
       "schedule": {
         "kind": "cron",
-        "expr": "5 18 * * 0",
-        "display": "5 18 * * 0"
+        "expr": "5 18 * * 0,3",
+        "display": "5 18 * * 0,3"
       },
-      "schedule_display": "5 18 * * 0",
+      "schedule_display": "5 18 * * 0,3",
       "repeat": {
         "times": null,
         "completed": 0
