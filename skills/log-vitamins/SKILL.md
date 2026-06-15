@@ -36,8 +36,12 @@ Do **not** use for medications (prescription drugs) — those need a different f
    If the file doesn't exist yet, reply: "No supplements list found at `07 - Health/Supplements.md`. Add one with your daily stack first, then re-run."
 
 3. **Determine what to log:**
+   - If user said `/vitamins` or generic "took my vitamins" with no specifics → mark **all items in the daily stack** as taken today.
+   - If the user names specific items, or attaches supplement photos plus a specific callout (e.g. "also B-12 pill"), match against the stack list and mark only those confirmed items.
    - If user said `/vitamins` or generic "took my vitamins" → mark **all items in the daily stack** as taken today.
    - If user named specific items → match against the stack list, mark only those.
+   - If the user shows a bottle photo, log the **product name** as the item (e.g. a men's multivitamin bottle stays a multivitamin even if the label lists B-12 among ingredients).
+   - Separate pills count separately even when one bottle also contains overlapping ingredients (e.g. multivitamin + separate B-12 pill).
    - Items the user mentions that aren't in the roster: log them too with a note (`supplements_today: ["creatine", "whey", "<unknown: matcha>"]`).
 
 4. **Write it with the deterministic vault writer — `vault_log.py`.** Do NOT hand-edit the YAML (no `patch`, no `python3 -c`, no heredocs, no `execute_code` — those trip the approval gate, are blocked in cron, and corrupt repeated `key:` lines). One command sets `vitamins_taken: true` + optional `supplements_today`, preserves every other field + the body, and creates the note from the template if missing:

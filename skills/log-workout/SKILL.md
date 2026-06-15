@@ -201,6 +201,8 @@ Subsequent updates within the same session: no Log.md entry needed.
 
 2. **Continuation messages** — "20 lb 3 sets" after "now doing X" means `APPEND_SET_TO_LATEST`, NOT a new exercise. Use the LATEST mentioned exercise in the conversation, even if it wasn't the most recent `APPEND_NEW_EXERCISE` action (user might be replying about a still-active exercise).
 
+2b. **Unclear exercise names** — if the user gives a description but not the exact exercise name (e.g. "forearm-targeting barbell raise/curl"), pick the closest canonical label, preserve the user's uncertainty in `notes`, and keep going. Don't block the log just because the exercise name is fuzzy.
+
 3. **Updates vs additions** — "2nd set was 45 lb" means `UPDATE_SET` on the latest matching exercise's set 2. "Did another set at 45 lb" means APPEND a new set.
 
 4. **Plate units** — default lb (matches [[Profile]] baselines). If user says kg, store as lb (convert: kg × 2.20462), note in `notes` field: "user said 20 kg → ~44 lb".
