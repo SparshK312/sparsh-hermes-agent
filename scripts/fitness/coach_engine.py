@@ -344,12 +344,22 @@ def compose_json(system: str, user: str, max_tokens: int = 2000) -> dict | None:
     return None
 
 
-def numbers_in(text: str) -> set:
-    return set(re.findall(r"\d+(?:\.\d+)?", text or ""))
+def _floats(text: str) -> list[float]:
+    out = []
+    for tok in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+        try:
+            out.append(float(tok.replace(",", "")))
+        except ValueError:
+            pass
+    return out
 
 
-def validate(parsed: dict, evidence: dict) -> tuple[bool, str]:
-    """Reject ungrounded/over-stuffed coaching. Returns (ok, reason)."""
+def validate(parsed: dict, grounding) -> tuple[bool, str]:
+    """Reject ungrounded/over-stuffed coaching. `grounding` is everything the model
+    was shown (the evidence packet + context docs) — as a dict or a string. A claimed
+    number is grounded if some grounding number is within rounding tolerance, so the
+    check catches fabricated figures without tripping on float/rounding formatting.
+    Returns (ok, reason)."""
     if not isinstance(parsed, dict):
         return False, "not a dict"
     analysis = parsed.get("analysis") or {}
@@ -362,12 +372,17 @@ def validate(parsed: dict, evidence: dict) -> tuple[bool, str]:
         return False, f"actions count {len(today_actions)}"
     if not conv.get("question_for_user"):
         return False, "no question"
-    # every number the model 'observed' must exist somewhere in the evidence packet
-    ev_nums = numbers_in(json.dumps(evidence))
-    claimed = numbers_in(" ".join(analysis.get("evidence", []) or []))
-    ungrounded = [n for n in claimed if n not in ev_nums and len(n) >= 2]
+    gtext = grounding if isinstance(grounding, str) else json.dumps(grounding, default=str)
+    ev_nums = _floats(gtext)
+    claimed = _floats(" ".join(analysis.get("evidence", []) or []))
+
+    def grounded(c: float) -> bool:
+        return any(abs(c - e) <= max(1.0, 0.02 * abs(c)) for e in ev_nums)
+
+    # only meaningful (>=10) numbers; single digits like sets/days are everywhere
+    ungrounded = [c for c in claimed if c >= 10 and not grounded(c)]
     if ungrounded:
-        return False, f"ungrounded numbers: {ungrounded[:5]}"
+        return False, f"ungrounded numbers: {[round(x, 1) for x in ungrounded[:5]]}"
     return True, "ok"
 
 

@@ -127,7 +127,8 @@ def run_weekly() -> int:
             "Write this week's coaching JSON."
         )
         parsed = E.compose_json(WEEKLY_SYS, user)
-        ok, reason = E.validate(parsed, ev) if parsed else (False, "no response")
+        # ground against the full corpus the model saw (evidence packet + context docs)
+        ok, reason = E.validate(parsed, user) if parsed else (False, "no response")
         if ok:
             msg = _render_weekly(parsed)
             priority = (parsed.get("actions", {}).get("today") or [None])[0]
