@@ -114,6 +114,10 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # asset) as a subdir, and the cron wrapper. fitness_report.py runs under the
   # dedicated ~/.hermes/venvs/fitness venv (cairosvg); the weekly cron calls the .sh.
   rm -rf ~/.hermes/scripts/fitness && cp -r scripts/fitness ~/.hermes/scripts/fitness
+  # The deterministic vault writer the log-* skills call (food/water/weight/sleep/
+  # vitamins). Invoked as 'python3 .../vault/vault_log.py <cmd> <flags>' — matches no
+  # dangerous-command pattern, so it never trips the approval gate and runs in cron.
+  rm -rf ~/.hermes/scripts/vault && cp -r scripts/vault ~/.hermes/scripts/vault
   cp scripts/cron/fitness_report.sh        ~/.hermes/scripts/fitness_report.sh
   cp scripts/cron/coach.sh                 ~/.hermes/scripts/coach.sh
   cp scripts/cron/coach_meal.sh            ~/.hermes/scripts/coach_meal.sh

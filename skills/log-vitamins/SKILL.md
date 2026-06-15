@@ -40,13 +40,15 @@ Do **not** use for medications (prescription drugs) — those need a different f
    - If user named specific items → match against the stack list, mark only those.
    - Items the user mentions that aren't in the roster: log them too with a note (`supplements_today: ["creatine", "whey", "<unknown: matcha>"]`).
 
-4. **Read today's daily note:** `04 - Daily Notes/<date>.md` (create from template if missing).
+4. **Write it with the deterministic vault writer — `vault_log.py`.** Do NOT hand-edit the YAML (no `patch`, no `python3 -c`, no heredocs, no `execute_code` — those trip the approval gate, are blocked in cron, and corrupt repeated `key:` lines). One command sets `vitamins_taken: true` + optional `supplements_today`, preserves every other field + the body, and creates the note from the template if missing:
 
-5. **Update frontmatter:**
-   - Set `vitamins_taken: true` (boolean, true once anything is logged).
-   - Optionally add/append `supplements_today: [item1, item2, ...]` (list of strings, names only).
+   ```
+   /usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py vitamins [--supplements "vitamin-d, creatine, whey"]
+   ```
 
-6. **Reply in Telegram:**
+   Pass the matched stack item names (comma-separated) to `--supplements`; omit it to just mark the stack taken. `--date YYYY-MM-DD` only for a backfill.
+
+5. **Reply in Telegram:**
    - Full stack logged: `💊 Daily stack ✓ (<count> items).`
    - Partial: `💊 Logged: <list>. Missing from your stack: <remaining>.`
    - Unknown items: `💊 Logged. Note: "matcha" isn't in your supplements list — add it to 07 - Health/Supplements.md if it's a regular.`

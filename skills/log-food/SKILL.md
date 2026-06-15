@@ -160,7 +160,25 @@ Options for the `clarify` call:
 
 ### 5. Write to vault (on confirmation)
 
-**This is the ONLY persistence step. The MCP DB does not count as "logged" — only the vault does.** You write to TWO files:
+**This is the ONLY persistence step. The MCP DB does not count as "logged" — only the vault does.**
+
+**Do the write with the deterministic vault writer — `vault_log.py`. Do NOT hand-edit the YAML** (no `patch` on frontmatter, no `python3 -c`, no heredocs, no `execute_code`): those trip Hermes' approval gate (so you'd nag Sparsh to "approve a command" for every meal), are hard-blocked in cron, and corrupt repeated `key:` lines. ONE command does BOTH writes below safely — it appends the Food Log section + re-sums its totals AND increments the daily-note macros:
+
+```
+/usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py food \
+  --meal-type <breakfast|lunch|dinner|snack|shake> \
+  --kcal <total_kcal> --protein <g> --carbs <g> --fat <g> \
+  --item "<item 1>|<kcal>|<protein>|<carbs>|<fat>" \
+  --item "<item 2>|<kcal>|<protein>|<carbs>|<fat>" \
+  --source "<template:name | mcp:food-tracker | estimated>" \
+  [--time "1:30 PM"] [--date YYYY-MM-DD]
+```
+
+- `--kcal/--protein/--carbs/--fat` are the **confirmed meal totals** (they win over the items). The repeated `--item` flags give the per-item breakdown for the Food Log section; macros after the name are optional (`--item "guacamole"` is fine for a name-only line).
+- `--time` defaults to now; `--date` defaults to today (Toronto) — pass it for retrospective / past-midnight logs.
+- It prints `✓ Logged <meal>: <kcal> kcal · <P>g protein. Today: <daily>/2400 kcal · <P>/140g P.` — **use those returned daily totals for your step-7 reply; don't recompute.**
+
+The two file formats below are **reference for what the script produces** — you don't hand-write them.
 
 **A. Append to today's food log:** `07 - Health/Food Log/<date>.md` (create if missing). Create the parent directory `07 - Health/Food Log/` first if it doesn't exist.
 

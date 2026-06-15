@@ -36,18 +36,20 @@ Do **not** use for weights of food, equipment, or anything that's not the user's
 
 2. **Sanity check.** Reasonable range for Sparsh: 50–500 lb. If outside that range, reply asking for confirmation before writing.
 
-3. **Today's date** in America/Toronto: `YYYY-MM-DD`.
+3. **Write it with the deterministic vault writer — `vault_log.py`.** Do NOT hand-edit the YAML (no `patch`, no `python3 -c`, no heredocs, no `execute_code` — those trip the approval gate, are blocked in cron, and corrupt repeated `key:` lines). One command sets `weight` (a snapshot — it replaces, never accumulates), preserves every other field + the body, and creates today's note from the template if missing. It rejects values outside 50–500 lb, so do your kg→lb conversion and sanity check first:
 
-4. **Read today's daily note:** `04 - Daily Notes/<date>.md`. Create from `Templates/Daily Note.md` if missing.
+   ```
+   /usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py weight --lb <value>
+   ```
 
-5. **Update `weight:` in frontmatter** to the new value (replace, do not accumulate — bodyweight is a snapshot).
+   Pass `--date YYYY-MM-DD` only for a backfill.
 
-6. **Compute trend (optional but useful):**
+4. **Compute trend (optional but useful):**
    - Read the prior 7 daily notes (if they exist) and pull their `weight:` values.
    - Compute 7-day avg. Compare to today.
    - Note the delta in the reply.
 
-7. **Reply in Telegram** with a one-liner:
+5. **Reply in Telegram** with a one-liner:
    - `⚖️ <weight> lb logged. 7-day avg: <avg> lb (delta <±X.X>).`
    - If no prior data: `⚖️ <weight> lb logged. Baseline.`
    - If outside the sanity range (and confirmed): same format but flag the unusual value.

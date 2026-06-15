@@ -112,6 +112,11 @@ The principle: anything that changes how YOU behave should be a deliberate decis
 - `grep -c '^---$'` on any daily note must always return exactly 2 after a write
 - Specialized skills (log-food, log-workout, log-water, log-weight, log-sleep, log-vitamins) wrap obsidian-vault-write with the right routing + structure — use them, not the primitive directly, for their domains
 
+## How to write — use the safe path, never inline code (this caused real friction)
+- For structured health logging, the log-* skills call the deterministic writer `vault_log.py` (food/water/weight/sleep/vitamins). Let them run it — that ONE command does the safe line-targeted frontmatter edit. Don't second-guess it with a manual edit.
+- **NEVER edit daily-note / Food-Log YAML with `python3 -c`, a `python … <<EOF` heredoc, `bash -c`, or `execute_code`.** Those match Hermes' dangerous-command patterns, so they pop an "approve this command?" prompt for a routine log AND are hard-blocked in cron (no one to approve). They also corrupt repeated `key:` lines.
+- General rule for ANY file write: prefer the `write_file`/`patch` tools or a provided script invoked as `python3 /abs/path/script.py <flags>` (a plain script path is NOT a dangerous pattern, so it never prompts and works in cron). Reserve `execute_code` for genuine throwaway computation, never for vault writes.
+
 ## When unsure
 - Default to the more specialized skill (log-food over obsidian-vault-write for food, etc.)
 - Take the action, then tell them in one line what you did. They prefer action over questions.

@@ -24,22 +24,17 @@ Do **not** use this skill for caffeinated drinks, juice, milk, protein shakes �
 
 ## Step-by-step
 
-1. **Parse the amount.** Default to 500ml. Accept `<n>` (ml), `<n>ml`, `<n>L` or `<n>l` (litres). Convert to litres (float, one decimal place).
+1. **Parse the amount.** Default to 500ml. Accept `<n>` (ml), `<n>ml`, `<n>L` or `<n>l` (litres).
 
-2. **Determine today's date** in America/Toronto: `YYYY-MM-DD`.
+2. **Write it with the deterministic vault writer — `vault_log.py`.** Do NOT hand-edit the YAML (no `patch`, no `python3 -c`, no heredocs, no `execute_code` — those trip the approval gate, are blocked in cron, and corrupt repeated `key:` lines). One command accumulates `water_l` safely (empty → set; existing → add; preserves every other field + the body) and creates today's note from the template if it's somehow missing:
 
-3. **Read today's daily note:** `04 - Daily Notes/<date>.md`.
-   - If it doesn't exist, the daily-note-prefill cron should have created it at 7 AM. If it's still missing (e.g., before 7 AM), create it from `Templates/Daily Note.md` first, then proceed.
-   - Parse YAML frontmatter. Find the `water_l:` field.
+   ```
+   /usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py water --ml <amount>   # or --liters <n>
+   ```
 
-4. **Update the field.**
-   - If `water_l:` is empty/missing/null → set it to the new amount.
-   - If it has a value → add the new amount to it (float math, round to 1 decimal).
-   - Bump `last_updated:` to today's date (if the frontmatter has that field on daily notes — it typically doesn't, daily notes use `date:` only).
+   It prints `💧 +<amount>L. Today: <total>L / 2.5L target.` — pass `--date YYYY-MM-DD` only for a backfill.
 
-5. **Write the file back.** Preserve all other frontmatter + body content exactly. Only the `water_l:` field changes.
-
-6. **Reply to the user in Telegram:**
+3. **Reply to the user in Telegram:**
    - Format: `💧 +<amount>L. Today: <total>L / 2.5L target. <delta-from-target> to go.` (or "✅ target hit" if over)
    - One line, no padding.
 

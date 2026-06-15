@@ -27,15 +27,15 @@ When the user reports last night's sleep. Examples:
    - Hours: float, required. Range 0–14 (sanity-check; flag if outside).
    - Quality: optional integer 1–10.
 
-2. **Today's date** in America/Toronto: `YYYY-MM-DD`. (Sleep that *ended* today is logged on today's note, even though it started yesterday.)
+2. **Write it with the deterministic vault writer — `vault_log.py`.** Do NOT hand-edit the YAML (no `patch`, no `python3 -c`, no heredocs, no `execute_code` — those trip the approval gate, are blocked in cron, and corrupt repeated `key:` lines). One command sets `sleep_hours` (replaces, never accumulates) + optional `sleep_quality`, preserves every other field + the body, and creates the note from the template if missing. Sleep that *ended* today is logged on today's note (default date is today, Toronto):
 
-3. **Read today's daily note:** `04 - Daily Notes/<date>.md` (create from template if missing).
+   ```
+   /usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py sleep --hours <float> [--quality <1-10>]
+   ```
 
-4. **Update frontmatter:**
-   - `sleep_hours: <float>` (replace, don't accumulate).
-   - `sleep_quality: <int>` if provided.
+   It prints a one-line flag (✓ good ≥7h / ⚠ under target / 🚨 under 6h). Pass `--date YYYY-MM-DD` only for a backfill.
 
-5. **Reply in Telegram (one line):**
+3. **Reply in Telegram (one line):**
    - `😴 <hours>h logged${quality ? ' (q' + quality + '/10)' : ''}. <flag>`
    - Flag = `✓ good` if ≥7h, `⚠ under target` if <7h, `🚨 under 6h` if <6h.
 

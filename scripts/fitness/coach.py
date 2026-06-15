@@ -236,9 +236,16 @@ CHAT_SYS = (
 
 
 def run_chat() -> int:
-    # message via --message or stdin (skill pipes it in to avoid shell-quoting issues)
+    # message via --message-file (preferred — the skill writes his text to a temp
+    # file with write_file, no shell quoting and no heredoc that would trip the
+    # dangerous-command approval gate), then --message, then stdin.
     msg = ""
-    if "--message" in sys.argv:
+    if "--message-file" in sys.argv:
+        try:
+            msg = Path(sys.argv[sys.argv.index("--message-file") + 1]).read_text(encoding="utf-8").strip()
+        except Exception:  # noqa: BLE001
+            msg = ""
+    if not msg and "--message" in sys.argv:
         try:
             msg = sys.argv[sys.argv.index("--message") + 1]
         except IndexError:
