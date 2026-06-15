@@ -119,10 +119,11 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # dangerous-command pattern, so it never trips the approval gate and runs in cron.
   rm -rf ~/.hermes/scripts/vault && cp -r scripts/vault ~/.hermes/scripts/vault
   cp scripts/cron/fitness_report.sh        ~/.hermes/scripts/fitness_report.sh
+  cp scripts/cron/trends_report.sh         ~/.hermes/scripts/trends_report.sh
   cp scripts/cron/coach.sh                 ~/.hermes/scripts/coach.sh
   cp scripts/cron/coach_meal.sh            ~/.hermes/scripts/coach_meal.sh
   cp scripts/cron/coach_workout.sh         ~/.hermes/scripts/coach_workout.sh
-  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh
+  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/trends_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh
   # --- Observations README before the fail-fast patches ---------------------
   # Deployed BEFORE the fail-fast source patches below: the patchers exit
   # non-zero (under `set -e`, aborting the rest of this block) if upstream Hermes
