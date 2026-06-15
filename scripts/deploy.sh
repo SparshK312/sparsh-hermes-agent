@@ -118,6 +118,12 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # vitamins). Invoked as 'python3 .../vault/vault_log.py <cmd> <flags>' — matches no
   # dangerous-command pattern, so it never trips the approval gate and runs in cron.
   rm -rf ~/.hermes/scripts/vault && cp -r scripts/vault ~/.hermes/scripts/vault
+  # The internship watcher (scraper + sources + frontier-triage). Vendored into the
+  # repo (was VPS-only). The cron runs internship_watch.sh -> internship_triage.py
+  # (one GPT-5.5 call, no agent). bs4 + the OpenAI key must be present on the box.
+  rm -rf ~/.hermes/scripts/internship && cp -r scripts/internship ~/.hermes/scripts/internship
+  cp scripts/cron/internship_watch.sh      ~/.hermes/scripts/internship_watch.sh
+  chmod +x ~/.hermes/scripts/internship_watch.sh
   cp scripts/cron/fitness_report.sh        ~/.hermes/scripts/fitness_report.sh
   cp scripts/cron/trends_report.sh         ~/.hermes/scripts/trends_report.sh
   cp scripts/cron/coach.sh                 ~/.hermes/scripts/coach.sh
