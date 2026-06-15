@@ -7,7 +7,7 @@ A personal AI health agent. It lives in Telegram, takes food/water/weight/sleep/
 - **Apple Watch → vault bridge** — Health Auto Export pushes wearable data over a Tailscale private tunnel to a small ingest listener on the VPS, and a morning cron folds it into that day's note. Sleep/HRV/resting-HR with zero manual entry.
 - **Near-zero running cost (~$0.50/mo)** — routes the LLM through Codex OAuth (covered by an existing ChatGPT Pro plan); only Whisper voice transcription costs anything.
 - **Safety-minded** — MCP tools are locked to an allowlist, and the agent's write scope is sandboxed so it can't mutate arbitrary files.
-- **Real engineering hygiene** — a 132-test pytest suite (structural + behavior tests for the load-bearing logic) runs in CI on every push, with idempotent source patches that survive framework upgrades.
+- **Real engineering hygiene** — a pytest suite runs in CI on every push: ~27 behavior tests covering the load-bearing logic (the coach engine, the morning-brief fire-once/confirmed-send, fitness/HAE math) plus structural tripwires (syntax, config + skill well-formedness), with idempotent source patches that survive framework upgrades.
 - **Weekly fitness visuals** — builds an anatomical muscle-coverage heat-map card from logged workouts and sends it to Telegram.
 
 > Note: this is the layer *I* built — the skills, the wearable bridge, the deploy/patch tooling, the crons, the tests. The underlying agent runtime is the Hermes Agent framework (linked above), installed separately.
@@ -94,7 +94,7 @@ First-time VPS setup is in [docs/DEPLOY.md](docs/DEPLOY.md).
 python3 -m venv .venv-tests
 .venv-tests/bin/pip install pytest pyyaml
 .venv-tests/bin/pytest tests/ -v
-# Expect: all tests pass (132 at time of writing)
+# Expect: all tests pass (85 at time of writing)
 ```
 
 ## Architecture (one-line)

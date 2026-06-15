@@ -6,20 +6,29 @@ requiring a Hermes install.
 
 ## What's checked
 
-The suite is a mix of **structural checks** (YAML/shape/syntax — most of the count,
-scales with skill count) and **behavior tests** (the load-bearing logic that would
-silently corrupt data or drop a message if it regressed). The behavior tests are the
-ones that matter most; they're called out below.
+~85 tests, honestly split: **~27 behavior tests** (the load-bearing logic that would
+silently corrupt data or drop a message if it regressed — these are the ones that
+matter) plus **structural tripwires** (syntax / config / skill well-formedness — cheap
+guards that catch a broken commit before it deploys, but only check shape, not behavior).
+We deliberately keep this ratio honest: one consolidated well-formedness check per skill
+(not six), and no no-op placeholder tests.
 
-| File | What it catches | Kind |
-|---|---|---|
-| `test_skills.py` | YAML colon-in-description bug (broke 3 skills day 1), missing required fields, `platforms` not including `linux` (skill silently excluded), description too short for NL routing, version not semver, name/dir mismatch | structural (×12 skills) |
-| `test_config.py` | Malformed `mcp_servers.yaml` / `cron_additions.json`, missing required cron fields, `tools.include` allowlist drift (vault-as-canonical guardrail), cron script paths outside Hermes' allowed root (sandbox block), accidental secret-in-repo, `SOUL.public.md` structure/routing-target presence | structural |
-| `test_scripts.py` | bash syntax errors (`bash -n`), Python syntax errors (`py_compile`), missing shebangs in cron scripts, `deploy.sh` not executable + ships SOUL via scp, source patchers broken | structural |
-| `test_hae.py` | **Behavior:** kJ→kcal, sleep-stage extraction, daily-grouped→per-day rows, frontmatter edit preserves body/fields, and the manual-edit-protection invariant (HAE never clobbers a hand-corrected sleep value) | behavior |
-| `test_brief_gate.py` | **Behavior:** fire-once, mark-**only**-on-confirmed-send (a failed send re-fires, never vanishes), templated fallback always non-empty + flags low sleep + excludes completed deadlines, exact section-header match | behavior |
-| `test_fitness.py` | **Behavior:** volume-landmark bucketing, set counting + fractional secondary credit, empty-stub not counted as a workout, unmapped exercise surfaced (not silently dropped) | behavior |
-| `test_plugin.py` | Custom plugin files (when committed) parse as valid Python | structural |
+**Behavior tests (~27):**
+
+| File | What it catches |
+|---|---|
+| `test_coach.py` | structured-output **validator** (rejects ungrounded numbers / >2 actions / missing question), midday intake-**pace** math (the under-eating trigger), per-lift **progression** parsing, message **budget** (quiet hours / daily cap / dedup) |
+| `test_brief_gate.py` | fire-once, mark-**only**-on-confirmed-send (a failed send re-fires, never vanishes), templated fallback non-empty + low-sleep flag + completed-deadline exclusion, exact section-header match |
+| `test_fitness.py` | volume-landmark bucketing, set counting + fractional secondary credit, empty-stub not counted, unmapped exercise surfaced (not silently dropped) |
+| `test_hae.py` | kJ→kcal, sleep-stage extraction, daily-grouped→per-day rows, and the manual-edit-protection invariant (HAE never clobbers a hand-corrected sleep value) |
+
+**Structural tripwires (shape only):**
+
+| File | What it catches |
+|---|---|
+| `test_skills.py` | one consolidated check per skill: a malformed `SKILL.md` (bad YAML, missing field, no `linux` platform, weak description, bad semver, name≠dir) that would silently drop the skill from Hermes' registry |
+| `test_config.py` | malformed `mcp_servers.yaml` / `cron_additions.json`, missing cron fields, `tools.include` allowlist drift, cron paths outside the sandbox, accidental secret-in-repo, `SOUL.public.md` structure/routing targets |
+| `test_scripts.py` | `bash -n` + `py_compile` (syntax), shebangs, `deploy.sh` ships SOUL via scp, source-patchers intact |
 
 ## What's NOT checked (and why)
 
