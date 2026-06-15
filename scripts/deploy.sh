@@ -115,7 +115,8 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # dedicated ~/.hermes/venvs/fitness venv (cairosvg); the weekly cron calls the .sh.
   rm -rf ~/.hermes/scripts/fitness && cp -r scripts/fitness ~/.hermes/scripts/fitness
   cp scripts/cron/fitness_report.sh        ~/.hermes/scripts/fitness_report.sh
-  chmod +x ~/.hermes/scripts/fitness_report.sh
+  cp scripts/cron/coach.sh                 ~/.hermes/scripts/coach.sh
+  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/coach.sh
   # --- Observations README before the fail-fast patches ---------------------
   # Deployed BEFORE the fail-fast source patches below: the patchers exit
   # non-zero (under `set -e`, aborting the rest of this block) if upstream Hermes
