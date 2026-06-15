@@ -45,10 +45,21 @@ import re
 import sys
 from pathlib import Path
 
-# Reuse the single source of truth for the vault root resolution (HERMES_VAULT
-# wins, else the VPS path, else the Mac dev path) so writes never split-brain.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hae"))
-from hae_daily_ingest import _default_vault  # noqa: E402
+def _default_vault() -> Path:
+    """Resolve the vault root — same contract as hae_daily_ingest (kept INLINE, not
+    imported, because deploy.sh flattens scripts/hae/ into ~/.hermes/scripts/ so a
+    cross-module import breaks on the VPS). HERMES_VAULT wins; else the VPS path if
+    it exists (production); else the Mac dev path — so the same code runs in both
+    places with no env var and read/write paths never split-brain."""
+    import os
+    env = os.environ.get("HERMES_VAULT")
+    if env:
+        return Path(env)
+    vps = Path("/home/hermes/vault")
+    if vps.exists():
+        return vps
+    return Path.home() / "Documents" / "School Vault - UofT"
+
 
 VAULT = _default_vault()
 DAILY_DIR = VAULT / "04 - Daily Notes"
