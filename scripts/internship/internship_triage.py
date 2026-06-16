@@ -33,6 +33,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import internship_scraper as S          # noqa: E402 — reuse the proven parsers + writers
 from internship_sources import SOURCES  # noqa: E402
+from jd_fetch import fetch_jd           # noqa: E402 — read real job descriptions
+from gmail_source import fetch_email_postings  # noqa: E402 — InternInsider etc.
 
 ENV_FILE = Path.home() / ".hermes" / ".env"
 CHAT_ID = "696500863"
@@ -43,7 +45,9 @@ VALID_VERDICTS = {"apply now", "wait", "consider", "skip"}
 
 DRY = "--dry-run" in sys.argv
 NO_LLM = "--no-llm" in sys.argv
+NO_JD = "--no-jd" in sys.argv          # skip description fetch (offline/fast tests)
 MAX_LLM = 40
+MAX_JD = 20                            # cap JD fetches/run (Firecrawl cost control)
 if "--max-llm" in sys.argv:
     try:
         MAX_LLM = int(sys.argv[sys.argv.index("--max-llm") + 1])
@@ -91,6 +95,13 @@ def collect_new() -> tuple[list, list]:
                 fails.append((src["name"], f"unknown format: {src['format']}"))
         except Exception as e:  # noqa: BLE001
             fails.append((src["name"], f"parse: {type(e).__name__}: {e}"))
+    # Gmail newsletters (InternInsider etc.) — graceful no-op if creds absent
+    try:
+        em_posts, em_fails = fetch_email_postings(env)
+        allp.extend(em_posts)
+        fails.extend(em_fails)
+    except Exception as e:  # noqa: BLE001
+        fails.append(("gmail", f"{type(e).__name__}: {e}"))
     new, batch = [], set()
     for p in allp:
         if p.canonical_id in seen or p.canonical_id in batch:
@@ -114,6 +125,29 @@ def rule_entry(p) -> dict:
     }
 
 
+# ----------------------------------------------------------------- JD enrichment
+def fetch_shortlist_jds(new_postings: list, rule: dict) -> dict:
+    """Fetch real job descriptions for the filter-passing shortlist (rule verdict
+    != skip), capped at MAX_JD for Firecrawl cost control. Returns {canonical_id:
+    description}. Skips entirely under --no-jd. Never raises — a fetch failure on
+    one posting just omits its description (triage falls back to the title)."""
+    if NO_JD:
+        return {}
+    fc_key = env("FIRECRAWL_API_KEY")
+    shortlist = [p for p in new_postings[:MAX_LLM] if rule.get(p.canonical_id) != "skip"]
+    jd_by_id = {}
+    for p in shortlist[:MAX_JD]:
+        try:
+            jd = fetch_jd(p.url, fc_key)
+        except Exception as e:  # noqa: BLE001
+            jd = None
+            log(f"jd-fetch failed {p.canonical_id}: {e}")
+        if jd:
+            jd_by_id[p.canonical_id] = jd
+    log(f"jd-fetch: {len(jd_by_id)}/{len(shortlist[:MAX_JD])} shortlist descriptions")
+    return jd_by_id
+
+
 # ----------------------------------------------------------------- frontier triage (one call)
 SYS_PROMPT = (
     "You are Sparsh's internship-pipeline triage analyst. He's a UofT ECE student doing "
@@ -134,7 +168,11 @@ SYS_PROMPT = (
     "- 'consider' = applicable (right role/period/location) but NOT on the watchlist.\n"
     "- 'skip' = fails a filter (wrong period/location/role, citizenship-gated, 12+ month).\n"
     "Each posting comes with a deterministic rule verdict; correct it when the title/terms make "
-    "the real period or role clearer. For every 'apply now', write a ONE-sentence cover opener "
+    "the real period or role clearer. Some postings include a 'description' (the real job-posting "
+    "text). When present, TRUST it over the title for period/role/location/duration: a 'SWE Intern' "
+    "whose description says 'Summer 2026' is the WRONG cycle -> skip; a description naming Fall 2026 "
+    "or a 4-month term confirms the role; cite the description in your reason. "
+    "For every 'apply now', write a ONE-sentence cover opener "
     "using his closest hook: AI labs -> Claude Ambassador; commerce/payments/dev-tools -> Shopify "
     "PEY; early-stage/founder-y -> Call Fusion->Perfecti acqui-hire; else -> Shopify PEY.\n\n"
     "Return a JSON object EXACTLY:\n"
@@ -152,11 +190,22 @@ def frontier_triage(new_postings: list) -> tuple[dict, str | None]:
     key = env("OPENAI_API_KEY")
     if not key or NO_LLM:
         return {}, None
-    compact = [{
-        "id": p.canonical_id, "company": p.company, "title": p.title,
-        "location": p.location, "terms": p.terms, "posted_date": p.posted_date,
-        "age_days": p.age_days, "rule_verdict": S.triage_posting(p)["verdict"],
-    } for p in new_postings[:MAX_LLM]]
+
+    # Pre-compute rule verdicts once; the non-skip set is the shortlist worth
+    # reading the real JD for (skips aren't worth a fetch).
+    rule = {p.canonical_id: S.triage_posting(p)["verdict"] for p in new_postings}
+    jd_by_id = fetch_shortlist_jds(new_postings, rule)
+
+    compact = []
+    for p in new_postings[:MAX_LLM]:
+        item = {
+            "id": p.canonical_id, "company": p.company, "title": p.title,
+            "location": p.location, "terms": p.terms, "posted_date": p.posted_date,
+            "age_days": p.age_days, "rule_verdict": rule[p.canonical_id],
+        }
+        if p.canonical_id in jd_by_id:
+            item["description"] = jd_by_id[p.canonical_id]
+        compact.append(item)
     body = json.dumps({
         "model": MODEL,
         "messages": [{"role": "system", "content": SYS_PROMPT},
