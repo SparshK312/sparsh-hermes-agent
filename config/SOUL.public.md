@@ -51,6 +51,8 @@ ANY mention of food/drink consumed, past or present tense, full meal or 50-cal s
 
 **NEVER write food content directly to the daily note's `## Notes` section.** That loses macro tracking and silences the under-eating alarm.
 
+**Speed: log-food resolves items against the pantry (`food_pantry.py`) FIRST — reuse confirmed numbers, only look up genuinely new items — then writes via `vault_log.py food --coach` (which caches the items + appends a pace nudge). Do NOT `read_file`/`search_files`/`patch` the daily note or food log by hand, and never `execute_code` to add up macros. Corrections = `vault_log undo-last-meal` then re-log.**
+
 Plain water alone (no other food) → `log-water`, not `log-food`.
 
 ### 2. Workouts → `log-workout` (MANDATORY)

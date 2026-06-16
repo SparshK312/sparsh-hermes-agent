@@ -76,6 +76,11 @@ except Exception:  # noqa: BLE001 — zoneinfo always present on 3.9+, belt-and-
 INT_FIELDS = {"kcal", "protein_g", "carbs_g", "fat_g"}
 FLOAT1_FIELDS = {"water_l"}
 
+# Targets (Profile.md baseline) — for the optional post-log coach nudge.
+KCAL_TARGET = 2400
+PROTEIN_TARGET = 140
+EAT_WINDOW = (7.0, 23.0)   # eating day used to compute "expected by now"
+
 
 # ----------------------------------------------------------------- helpers
 def today() -> str:
@@ -86,6 +91,29 @@ def today() -> str:
 def now_time() -> str:
     now = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
     return now.strftime("%-I:%M %p")
+
+
+def coach_nudge(daily_kcal: int, daily_protein: int) -> str:
+    """A deterministic, instant post-log reaction grounded in real numbers + time of
+    day — the lightweight 'coach reacts when I log' feedback. (Deep coaching stays in
+    /coach + the rescues; this is the always-on one-liner, no LLM call, no latency.)"""
+    n = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
+    h = n.hour + n.minute / 60
+    frac = max(0.0, min(1.0, (h - EAT_WINDOW[0]) / (EAT_WINDOW[1] - EAT_WINDOW[0])))
+    exp_k = round(KCAL_TARGET * frac)
+    rem_k, rem_p = KCAL_TARGET - daily_kcal, PROTEIN_TARGET - daily_protein
+    behind = daily_kcal < exp_k - 300
+    if behind:
+        status = f"⚠️ behind pace — ~{exp_k - daily_kcal} kcal short of where you should be by now"
+    elif rem_k <= 0:
+        status = "✅ at target"
+    else:
+        status = "✅ on pace"
+    bits = [f"📊 {daily_kcal}/{KCAL_TARGET} kcal · {daily_protein}/{PROTEIN_TARGET}g P", status]
+    if rem_p > 0 and (behind or rem_p > PROTEIN_TARGET * (1 - frac) + 20):
+        nxt = f"next meal {min(rem_k, 900)} kcal+, protein-heavy" if rem_k > 0 else "still need protein"
+        bits.append(f"→ {rem_p}g protein to go — {nxt}")
+    return "  ".join(bits)
 
 
 def _valid_date(d: str) -> str:
@@ -185,7 +213,7 @@ def edit_frontmatter(note: Path, *, sets: dict | None = None, adds: dict | None 
         final[k] = val
 
     for k, delta in adds.items():
-        total = _num(cur_value(k)) + float(delta)
+        total = max(0.0, _num(cur_value(k)) + float(delta))   # clamp ≥0 (undo subtracts)
         val = _fmt(k, total)
         if k in index:
             fm[index[k]] = f"{k}: {val}"
@@ -290,16 +318,75 @@ def cmd_food(a) -> dict:
         adds={"kcal": macros["kcal"], "protein_g": macros["protein_g"],
               "carbs_g": macros["carbs_g"], "fat_g": macros["fat_g"]},
     )
+
+    # Auto-remember every item with macros to the pantry, so the next time he logs it
+    # there's no lookup — the cache fills itself from confirmed logs (no extra agent call).
+    if not a.no_remember:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import food_pantry  # noqa: E402
+            for it in items:
+                if it["kcal"] or it["protein_g"]:
+                    food_pantry.remember(it["name"], it["kcal"], it["protein_g"],
+                                         it["carbs_g"], it["fat_g"], source=a.source or "logged")
+        except Exception:  # noqa: BLE001 — caching is best-effort, never block a log
+            pass
+
+    dk, dp = int(_num(daily["kcal"])), int(_num(daily["protein_g"]))
+    msg = (f"✓ Logged {a.meal_type}: {int(round(macros['kcal']))} kcal · "
+           f"{int(round(macros['protein_g']))}g protein. Today: {dk}/{KCAL_TARGET} kcal · {dp}/{PROTEIN_TARGET}g P.")
+    if a.coach:
+        msg += "\n" + coach_nudge(dk, dp)
     return {
         "ok": True, "cmd": "food", "date": date, "meal_type": a.meal_type,
         "meal_kcal": int(round(macros["kcal"])), "meal_protein_g": int(round(macros["protein_g"])),
-        "daily_kcal": int(_num(daily["kcal"])), "daily_protein_g": int(_num(daily["protein_g"])),
+        "daily_kcal": dk, "daily_protein_g": dp,
         "daily_carbs_g": int(_num(daily["carbs_g"])), "daily_fat_g": int(_num(daily["fat_g"])),
-        "food_log_total_kcal": file_totals["kcal"],
-        "msg": (f"✓ Logged {a.meal_type}: {int(round(macros['kcal']))} kcal · "
-                f"{int(round(macros['protein_g']))}g protein. "
-                f"Today: {int(_num(daily['kcal']))}/2400 kcal · {int(_num(daily['protein_g']))}/140g P."),
+        "food_log_total_kcal": file_totals["kcal"], "msg": msg,
     }
+
+
+def cmd_undo(a) -> dict:
+    """Remove the LAST meal section from the Food Log + subtract its macros from the
+    daily note — so a correction is undo+re-log (two clean calls), never a hand-edit."""
+    date = _valid_date(a.date)
+    path = FOODLOG_DIR / f"{date}.md"
+    if not path.exists():
+        raise SystemExit(f"undo: no food log for {date}")
+    text = path.read_text(encoding="utf-8")
+    starts = [m.start() for m in re.finditer(r"(?m)^## ", text)]
+    if not starts:
+        raise SystemExit(f"undo: no meal entries in {date}'s food log")
+    last = text[starts[-1]:]
+    mm = re.search(r"\*\*Macros:\*\*\s*(\d+)\s*kcal.*?(\d+)g protein.*?(\d+)g carbs.*?(\d+)g fat", last)
+    removed = {"kcal": int(mm.group(1)), "protein_g": int(mm.group(2)),
+               "carbs_g": int(mm.group(3)), "fat_g": int(mm.group(4))} if mm else {k: 0 for k in INT_FIELDS}
+    header = re.search(r"(?m)^## (.+)$", last)
+    label = header.group(1) if header else "last meal"
+
+    new_text = text[:starts[-1]].rstrip() + "\n"
+    # re-sum remaining macro lines into the file frontmatter totals
+    tot = {k: 0 for k in INT_FIELDS}
+    for m in re.finditer(r"\*\*Macros:\*\*\s*(\d+)\s*kcal.*?(\d+)g protein.*?(\d+)g carbs.*?(\d+)g fat", new_text):
+        tot["kcal"] += int(m.group(1)); tot["protein_g"] += int(m.group(2))
+        tot["carbs_g"] += int(m.group(3)); tot["fat_g"] += int(m.group(4))
+    lines = new_text.split("\n")
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end:
+        repl = {"total_kcal": tot["kcal"], "total_protein_g": tot["protein_g"],
+                "total_carbs_g": tot["carbs_g"], "total_fat_g": tot["fat_g"], "last_updated": date}
+        for i in range(1, end):
+            key = lines[i].split(":", 1)[0].strip() if ":" in lines[i] else ""
+            if key in repl:
+                lines[i] = f"{key}: {repl[key]}"
+        new_text = "\n".join(lines)
+    path.write_text(new_text if new_text.endswith("\n") else new_text + "\n", encoding="utf-8")
+
+    note = DAILY_DIR / f"{date}.md"
+    if note.exists():
+        edit_frontmatter(note, adds={k: -removed[k] for k in INT_FIELDS})
+    return {"ok": True, "cmd": "undo", "date": date, "removed": removed,
+            "msg": f"↩️ Removed {label} ({removed['kcal']} kcal · {removed['protein_g']}g P). Re-log the corrected version."}
 
 
 def cmd_water(a) -> dict:
@@ -387,8 +474,14 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--carbs", type=float, default=None)
     f.add_argument("--fat", type=float, default=None)
     f.add_argument("--item", action="append", help="repeatable 'name|kcal|protein|carbs|fat' (macros optional)")
-    f.add_argument("--source", default="estimated", help="template:<name> | mcp:food-tracker | estimated")
+    f.add_argument("--source", default="estimated", help="template:<name> | mcp:food-tracker | pantry | estimated")
+    f.add_argument("--coach", action="store_true", help="append a pace/protein nudge to the reply")
+    f.add_argument("--no-remember", action="store_true", help="don't cache the items to the pantry")
     f.set_defaults(func=cmd_food)
+
+    u = sub.add_parser("undo-last-meal", help="remove the last food-log meal + subtract its macros (for corrections)")
+    add_common(u)
+    u.set_defaults(func=cmd_undo)
 
     w = sub.add_parser("water", help="add water_l to the daily note")
     add_common(w)

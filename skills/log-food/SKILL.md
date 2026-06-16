@@ -80,7 +80,21 @@ Parse the user's input (text OR vision-synthesized list from step 0) into a stru
   - User's explicit word ("lunch was…" → lunch)
   - If ambiguous, ask in the confirmation step.
 
-### 2. Try fuzzy-match against saved templates
+### 2. Resolve items against the PANTRY first (reuse — don't re-research)
+
+**Before any web/MCP lookup, check what Sparsh has already logged.** The pantry caches every item he's confirmed (his own numbers), so a repeat is instant and consistent. Make ONE call with all the items:
+
+```
+/usr/bin/python3 /home/hermes/.hermes/scripts/vault/food_pantry.py resolve --item "2 eggs" --item "fairlife" --item "..."
+```
+
+It returns JSON `{"hits": [...], "misses": [...]}`:
+- **hits** = already known. Reuse the returned macros directly (already scaled to the quantity you passed). No lookup. A `"match":"fuzzy"` hit (e.g. "fairlife" → "Fairlife Core Power") is still reused — but surface it in the confirm step so he can catch a wrong match.
+- **misses** = genuinely new → only THESE go to the template check (2b) / MCP lookup (step 3).
+
+Do NOT read `pantry.json` by hand — call the script. This one call replaces the dozen `search_food` lookups that used to run for a repeat meal.
+
+### 2b. Try fuzzy-match against saved templates (for whole-meal repeats)
 
 Read `07 - Health/Meal Templates/*.md`. For each, the frontmatter has `name`, `meal_type`, `items`, and macros.
 
@@ -97,9 +111,11 @@ If no match → proceed to step 3.
 
 **Branded / packaged items:** if an official product nutrition page exists and the brand/product is identifiable (Vector, Lay's, fairlife, restaurant label, etc.), prefer that exact serving macro over a generic USDA proxy. Scale from the stated serving size. If the user later corrects the portion, recompute from the same exact product page instead of swapping to a different database entry.
 
-### 3. Look up macros via MCP (no template match)
+### 3. Look up macros — ONLY for the pantry misses
 
-For each item in `items[]`:
+**Only look up items the pantry didn't already resolve.** Accuracy matters, so genuinely-new items DO get a real lookup — but do it efficiently: **one good source per item**, not five searches chasing the same thing.
+
+For each MISS in `items[]`:
 1. Call `mcp_food_tracker.search_food(query=item)` — returns USDA matches with kcal + macros. **This is the only MCP tool you may call. See the Forbidden tools section above.**
 2. Use the best matching canonical entry. If the user gave a quantity (e.g. `2 eggs`), scale it.
 3. For composite / restaurant / cafeteria dishes, try the dish name first, then obvious component queries when the dish itself is too fuzzy (e.g. `pad kra prow pork`, `ground pork`, `fried egg`, `thai chicken wing`, `vegetable spring roll`). Prefer partial canonical coverage over pretending the whole plate is one guessed item.
@@ -170,15 +186,24 @@ Options for the `clarify` call:
   --kcal <total_kcal> --protein <g> --carbs <g> --fat <g> \
   --item "<item 1>|<kcal>|<protein>|<carbs>|<fat>" \
   --item "<item 2>|<kcal>|<protein>|<carbs>|<fat>" \
-  --source "<template:name | mcp:food-tracker | estimated>" \
+  --source "<pantry | template:name | mcp:food-tracker | estimated>" \
+  --coach \
   [--time "1:30 PM"] [--date YYYY-MM-DD]
 ```
 
-- `--kcal/--protein/--carbs/--fat` are the **confirmed meal totals** (they win over the items). The repeated `--item` flags give the per-item breakdown for the Food Log section; macros after the name are optional (`--item "guacamole"` is fine for a name-only line).
+- `--kcal/--protein/--carbs/--fat` are the **confirmed meal totals** (they win over the items). The repeated `--item` flags give the per-item breakdown; **pass every item with its macros** — the script caches each one to the pantry, so next time it's an instant hit (this is how reuse builds up). Macros after the name are optional (`--item "guacamole"` is fine for a name-only line, but it won't cache).
+- **`--coach`** appends a 1-line pace/protein nudge from the day's real totals — always pass it; that's his post-log feedback. Relay the whole output verbatim.
 - `--time` defaults to now; `--date` defaults to today (Toronto) — pass it for retrospective / past-midnight logs.
-- It prints `✓ Logged <meal>: <kcal> kcal · <P>g protein. Today: <daily>/2400 kcal · <P>/140g P.` — **use those returned daily totals for your step-7 reply; don't recompute.**
+- It prints `✓ Logged …` + the coach line — **send that as your reply; don't recompute or pad it.**
 
-The two file formats below are **reference for what the script produces** — you don't hand-write them.
+### 🚫 Speed rules (this skill used to take 60 tool calls for one meal — don't)
+- **Never** `read_file` the daily note or the food log, **never** `search_files` for them, **never** `patch` them, **never** `write_file` them, **never** `execute_code`. `vault_log` owns all of that. Reading/searching/patching the vault by hand is the #1 source of bloat.
+- **Never** use `execute_code` or `python3 -c` to add up macros — pass the `--item` numbers and let `vault_log` sum them, or add them yourself.
+- Don't re-run `search_food` on an item the pantry already resolved, and don't chase one item across multiple web searches. Pantry → at most one lookup per miss → write. That's it.
+
+**Corrections** ("less rice", "actually it was X", "wrong, only one serving"): don't hand-edit. Run `vault_log.py undo-last-meal` to remove the just-logged meal (it subtracts the macros too), then re-log the corrected version with the `food` command above. Two clean calls, no patching.
+
+The file formats below are **reference for what the script produces** — you don't hand-write them.
 
 **A. Append to today's food log:** `07 - Health/Food Log/<date>.md` (create if missing). Create the parent directory `07 - Health/Food Log/` first if it doesn't exist.
 

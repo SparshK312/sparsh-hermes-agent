@@ -31,6 +31,12 @@ def _load_into(tmp_path: Path):
     mod.FOODLOG_DIR = tmp_path / "07 - Health" / "Food Log"
     mod.TEMPLATE = tmp_path / "Templates" / "Daily Note.md"
     mod.DAILY_DIR.mkdir(parents=True, exist_ok=True)
+    mod.FOODLOG_DIR.mkdir(parents=True, exist_ok=True)
+    # point the pantry (lazy-imported by cmd_food's auto-remember) at the temp vault too
+    import sys
+    sys.path.insert(0, str(VAULT_DIR))
+    import food_pantry
+    food_pantry.PANTRY = mod.FOODLOG_DIR / "pantry.json"
     return mod
 
 
@@ -140,3 +146,34 @@ def test_weight_out_of_range_refused(tmp_path):
     _seed_note(mod)
     with pytest.raises(SystemExit):
         _run(mod, ["weight", "--lb", "12", "--date", "2026-06-15"])
+
+
+def test_food_coach_nudge_and_pantry_autofill(tmp_path, capsys):
+    mod = _load_into(tmp_path)
+    _seed_note(mod, date="2026-06-15")
+    _run(mod, ["food", "--meal-type", "breakfast",
+               "--item", "lucky charms bowl|220|4|44|4", "--item", "latte|130|8|13|5",
+               "--source", "mcp:food-tracker", "--coach", "--date", "2026-06-15"])
+    out = capsys.readouterr().out
+    assert "✓ Logged breakfast" in out
+    assert "📊" in out and "kcal" in out and "protein" in out.lower()   # coach nudge present
+    # pantry auto-filled with both items (so next time they're hits)
+    import food_pantry
+    assert food_pantry.lookup("lucky charms") is not None
+    assert food_pantry.lookup("latte")["kcal"] == 130
+
+
+def test_undo_last_meal_reverses_food_log_and_daily(tmp_path):
+    mod = _load_into(tmp_path)
+    note = _seed_note(mod, date="2026-06-15")
+    _run(mod, ["food", "--meal-type", "lunch", "--kcal", "500", "--protein", "30",
+               "--item", "wrap|500|30|40|20", "--date", "2026-06-15"])
+    _run(mod, ["food", "--meal-type", "dinner", "--kcal", "800", "--protein", "50",
+               "--item", "steak|800|50|10|45", "--date", "2026-06-15"])
+    assert _fm(note)["kcal"] == "1300"
+    _run(mod, ["undo-last-meal", "--date", "2026-06-15"])    # removes the dinner
+    fm = _fm(note)
+    assert fm["kcal"] == "500" and fm["protein_g"] == "30"   # back to lunch-only
+    foodlog = (mod.FOODLOG_DIR / "2026-06-15.md").read_text()
+    assert foodlog.count("**Macros:**") == 1                 # dinner section gone
+    assert "total_kcal: 500" in foodlog                       # file totals re-summed
