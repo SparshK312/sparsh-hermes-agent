@@ -61,6 +61,32 @@ def test_process_payload_parses_daily_metrics(tmp_path):
     assert s["sleep_start"].startswith("2026-04-14")
 
 
+def test_cumulative_metrics_take_max_not_last(tmp_path):
+    """Steps/active-energy are daily TOTALS — across same-day payloads the archive must
+    keep the LARGEST (a late partial must not clobber a fuller value). Snapshots (RHR)
+    still take the last value."""
+    proc = _load("hae_process")
+
+    def payload(steps, akcal_kj, rhr):
+        return {"data": {"metrics": [
+            {"name": "step_count", "data": [{"date": "2026-06-15 10:00:00 -0400", "qty": steps}]},
+            {"name": "active_energy", "units": "kJ", "data": [{"date": "2026-06-15 10:00:00 -0400", "qty": akcal_kj}]},
+            {"name": "resting_heart_rate", "data": [{"date": "2026-06-15 10:00:00 -0400", "qty": rhr}]},
+        ]}}
+
+    days = {}
+    import json as _j
+    for steps, kj, rhr in [(8000, 4000, 52), (14000, 7000, 55), (12000, 6500, 50)]:
+        f = tmp_path / f"p_{steps}.json"
+        f.write_text(_j.dumps(payload(steps, kj, rhr)))
+        proc.process_payload(f, days)
+
+    row = days["2026-06-15"]
+    assert row["steps"] == 14000                       # MAX, not the last (12000)
+    assert row["active_kcal"] == round(7000 / 4.184)   # MAX active energy
+    assert row["resting_hr"] == 50                      # snapshot → last write wins
+
+
 def test_daily_ingest_frontmatter_is_line_targeted(tmp_path):
     ing = _load("hae_daily_ingest")
     note = tmp_path / "2026-04-01.md"

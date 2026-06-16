@@ -102,6 +102,18 @@ SIMPLE = {
     "six_minute_walking_test_distance":  ("six_min_walk_m", lambda q: round(q, 1)),
 }
 
+# Cumulative daily-TOTAL metrics: they only grow through the day, so the right value
+# for a date is the LARGEST one seen, not the last one written. Taking the MAX makes
+# the archive robust to (a) a late same-day partial that would otherwise clobber a
+# fuller value, and (b) re-sends — given HAE is configured to aggregate by DAY (one
+# total per day). The rest (heart rates, rates/averages, sleep) are snapshots and
+# keep last-write-wins. NOTE: this only yields correct totals when HAE exports a daily
+# total; partial intraday windows can't be reconstructed here (fix is in the HAE app).
+CUMULATIVE_COLS = {
+    "steps", "active_kcal", "basal_kcal", "exercise_min", "flights_climbed",
+    "stand_min", "stand_hours", "walk_distance_km",
+}
+
 
 def _day(s: str) -> str:
     """'2026-04-01 00:00:00 -0400' -> '2026-04-01'."""
@@ -129,7 +141,12 @@ def process_payload(path: Path, days: dict) -> None:
                 col, fn = SIMPLE[name]
                 q = _f(p.get("qty"))
                 if q is not None:
-                    row[col] = fn(q)
+                    v = fn(q)
+                    if col in CUMULATIVE_COLS:
+                        cur = _f(row.get(col))           # keep the largest daily total seen
+                        row[col] = v if cur is None else max(cur, v)
+                    else:
+                        row[col] = v                     # snapshot → last write wins
             elif name == "heart_rate":
                 for k, col in (("Min", "hr_min"), ("Avg", "hr_avg"), ("Max", "hr_max")):
                     q = _f(p.get(k))
