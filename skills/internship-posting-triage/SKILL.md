@@ -48,7 +48,7 @@ If the company is not on this list, **default verdict: skip**, but note the comp
    - SWE / Software Engineer Intern / SDE Intern
    - AI / ML / Machine Learning Intern / Research Engineer Intern
    - Data Engineer / Data Scientist Intern (lower priority but accept)
-4. **Authorization** — if posting requires US citizenship/clearance (`US Person`, `Top Secret`, `ITAR`), **skip** — Sparsh is Canadian.
+4. **Authorization** — Sparsh is a **US permanent resident (green-card holder), US work-authorized, no sponsorship needed** — *and* Canadian. So: **accept** roles requiring US work authorization. **Accept** `ITAR` / `US Person` roles — green-card holders qualify as US Persons under ITAR. **Skip only** roles explicitly requiring **US Citizenship** or an active **security clearance** (`Secret` / `Top Secret`), which need citizenship he doesn't hold. Canadian roles always pass.
 
 ## Triage Verdict Logic
 
