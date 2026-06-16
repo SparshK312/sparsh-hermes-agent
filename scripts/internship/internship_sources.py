@@ -35,6 +35,12 @@ SOURCES = [
         "url": "https://raw.githubusercontent.com/speedyapply/2026-AI-College-Jobs/main/README.md",
         "format": "markdown_table",
     },
+    {
+        # General SWE variant (broadens beyond the AI-only list). Same format.
+        "name": "speedyapply-swe",
+        "url": "https://raw.githubusercontent.com/speedyapply/2026-SWE-College-Jobs/main/README.md",
+        "format": "markdown_table",
+    },
 ]
 
 # Skip postings older than this many days. Tune up if you want a longer window.
