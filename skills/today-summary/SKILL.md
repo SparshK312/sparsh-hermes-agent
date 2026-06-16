@@ -39,6 +39,22 @@ Read-only skill. **Never writes to the vault.**
    - `lifted` — today's workout session if any
    - `vitamins_taken` (bool)
 
+4. **If wearables are involved, sanity-check the sync before you answer.**
+   - If the user says sleep/steps are wrong, do **not** ask them to hand-enter numbers first.
+   - Prefer the HAE pipeline as the source of truth for automatic health fields: check `hae_synced` in the daily note, then `07 - Health/Metrics/metrics.csv`, then `~/.hermes/health/hae/sync.log` / raw payload timestamps if needed.
+   - If the archive is still behind the user’s claim, say the feed hasn’t landed yet instead of overwriting the note.
+   - If a manual correction is needed, only apply it when the user explicitly provides the numbers or another authoritative source confirms them.
+   - See `references/hae-sync-reconciliation.md` for the reconciliation checklist and this session’s failure mode.
+
+5. **Compute against targets:**
+   - kcal vs 2400 → `<X>/2400 (<percent>%)`
+   - protein_g vs 140g → `<X>g/140g (<percent>%)`
+   - water_l vs 2.5L → `<X>L/2.5L (<percent>%)`
+   - sleep_hours vs 7h → `<X>h vs 7h target`, flag if under
+   - lifted: shows session name or `—` if empty
+
+6. **Format reply for Telegram** — compact, scannable, no padding:
+
 4. **Compute against targets:**
    - kcal vs 2400 → `<X>/2400 (<percent>%)`
    - protein_g vs 140g → `<X>g/140g (<percent>%)`

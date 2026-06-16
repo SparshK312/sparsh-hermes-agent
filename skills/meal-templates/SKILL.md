@@ -1,6 +1,6 @@
 ---
 name: meal-templates
-description: List, search, or describe Sparsh's saved meal templates (recurring meals with pre-computed macros) stored at `07 - Health/Meal Templates/`. Triggers on "/templates", "list my meals", "what templates do I have", "show meals". Each template is a markdown file with YAML frontmatter holding kcal, protein, carbs, fat, items, and meal-type. Used by log-food for fuzzy matching incoming meal descriptions to skip the nutrient-DB lookup when a saved template fits.
+description: Reusable meal-template workflows for recurring foods and correction-friendly food logs. See `references/recurring-foods.md`. (recurring meals with pre-computed macros) stored at `07 - Health/Meal Templates/`. Triggers on "/templates", "list my meals", "what templates do I have", "show meals". Each template is a markdown file with YAML frontmatter holding kcal, protein, carbs, fat, items, and meal-type. Used by log-food for fuzzy matching incoming meal descriptions to skip the nutrient-DB lookup when a saved template fits.
 version: 1.0.0
 platforms: [linux, macos]
 metadata:

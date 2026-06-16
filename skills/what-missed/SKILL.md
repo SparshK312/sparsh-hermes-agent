@@ -27,7 +27,13 @@ Read-only.
 
 2. **Read** `04 - Daily Notes/<date>.md`. Parse frontmatter.
 
-3. **Gap detection** — time-aware checks. A field is a "gap" only if (a) it's still null/empty AND (b) we're past the time it would normally be logged.
+3. **If wearables are involved, sanity-check the sync first.**
+   - Do **not** ask the user to manually supply sleep/steps if the numbers look wrong.
+   - Check whether the daily note is simply stale versus the HAE archive not yet receiving the final totals.
+   - Use `hae_synced` / `07 - Health/Metrics/metrics.csv` / `~/.hermes/health/hae/sync.log` / raw payload timestamps to distinguish "missing sync" from "needs correction".
+   - Only fall back to manual correction when the user gives the exact numbers or another authoritative source confirms them.
+
+4. **Gap detection** — time-aware checks. A field is a "gap" only if (a) it's still null/empty AND (b) we're past the time it would normally be logged.
 
 | Field | Expected by | Gap label |
 |---|---|---|

@@ -215,6 +215,8 @@ Subsequent updates within the same session: no Log.md entry needed.
 
 8. **Duplicate session same day** — if `lifted` already has content AND the user describes a separate workout (e.g., "lifted in the morning, doing cardio later"), update `lifted` with `+` and APPEND new exercises to the same workouts file. Different sessions don't get separate files.
 
+8b. **Placeholder workout gets upgraded later** — if the first message only confirms a workout happened but gives no exercise detail, it is fine to create a temporary placeholder entry. When the user later supplies the actual split/exercises for that same day, overwrite the placeholder split/body with the real workout details rather than leaving a generic "Mixed (gym session)" record around.
+
 9. **Dual-cable / per-side weight ambiguity** — user says "42.5 lb dual cable, 3 sets". If the machine adds the two sides (total load), log `weight_lb: 85` with `notes: "42.5 lb/side dual cable"`. If the machine is per-side and only one side is the working load, log `weight_lb: 42.5`. Ask the user once when ambiguous; remember the choice for future logs of the same machine.
 
 10. **Supersets and paired unilateral work** — keep paired movements as separate `exercises[]` entries and preserve the order performed. Use `notes` to link them as a superset instead of collapsing them into prose. For one-side-at-a-time work, keep `side` on each set so left/right order survives later corrections.

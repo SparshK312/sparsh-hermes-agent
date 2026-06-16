@@ -125,7 +125,7 @@ For each MISS in `items[]`:
 
 Sum the macros across items.
 
-See `references/mixed-meal-lookup.md` for the lookup pattern and confirmation wording for mixed meals and packaged snacks. See `references/mexican-restaurant-photo-logging.md` for restaurant-photo handling (enchilada-plate restaurants, chips/salsa exclusions, and photo-first timing). See `references/mexican-office-bowl-photo.md` for an office Mexican bowl photo pattern, including visible beverage-can exclusion and conservative mixed-plate portioning. See `references/office-breakfast-photo-pattern.md` for cafeteria/office breakfast trays with waffles, bacon, eggs, and fruit bowls. See `references/retrospective-day-summary.md` for whole-day “yesterday I had…” recaps that should be bucketed once and logged against the implied date. See `references/travel-weekend-recap.md` for camping / road-trip / off-grid recaps that span multiple days and need per-day bucketing. See `references/branded-packaged-foods.md` for branded/packaged or chain products with an official nutrition page — prefer the official page over generic USDA matches and scale to the stated portion. See `references/date-correction-flow.md` for how to handle explicit date corrections and blank out the mistakenly assigned day when needed.
+See `references/mixed-meal-lookup.md` for the lookup pattern and confirmation wording for mixed meals and packaged snacks. See `references/mexican-restaurant-photo-logging.md` for restaurant-photo handling (enchilada-plate restaurants, chips/salsa exclusions, and photo-first timing). See `references/mexican-office-bowl-photo.md` for an office Mexican bowl photo pattern, including visible beverage-can exclusion and conservative mixed-plate portioning. See `references/office-breakfast-photo-pattern.md` for cafeteria/office breakfast trays with waffles, bacon, eggs, and fruit bowls. See `references/retrospective-day-summary.md` for whole-day “yesterday I had…” recaps that should be bucketed once and logged against the implied date. See `references/travel-weekend-recap.md` for camping / road-trip / off-grid recaps that span multiple days and need per-day bucketing. See `references/branded-packaged-foods.md` for branded/packaged or chain products with an official nutrition page — prefer the official page over generic USDA matches and scale to the stated portion. See `references/date-correction-flow.md` for how to handle explicit date corrections and blank out the mistakenly assigned day when needed. See `references/compound-health-bundles.md` for messages that combine food, supplements, and water in one turn; split the domains and persist each via the right log before replying.
 
 ### 3b. Duplicate / correction handling before confirmation
 
@@ -143,7 +143,7 @@ If the user corrects the *food itself* after a meal was already logged — e.g. 
 
 If the user gives a partial portion correction instead of a full rewrite — e.g. "less rice", "only 2 gyozas", "skip the sauce", "remove the salad" — keep the unchanged items and revise only the named components. Re-run the estimate and confirmation with the updated portions rather than asking them to restate the whole meal.
 
-See `references/duplicate-correction-flow.md`, `references/photo-correction-confirmation.md`, `references/post-confirmation-correction.md`, and `references/correction-after-estimate.md` for the session pattern.
+See `references/duplicate-correction-flow.md`, `references/photo-correction-confirmation.md`, `references/post-confirmation-correction.md`, `references/correction-after-estimate.md`, and `references/leftover-carry-over.md` for the session pattern.
 
 
 ### 4. Confirmation flow (MANDATORY — never skip)
@@ -303,7 +303,10 @@ Skip Log.md only if the log was cancelled.
 
 6a. **Single retro meal / relative date phrasing.** If the user says "last night", "yesterday", "earlier today", or similar and the intended date is unambiguous from context, log against the implied local-date file rather than the current date. Preserve the user's relative phrasing in the meal header only when the exact clock time is unknown; otherwise convert to a normal time header for the food log and use the implied date for the daily-note update.
 
-6b. **Leftover / half-portion carry-over.** If the user says they ate the other half of a meal already logged yesterday, reuse the earlier meal's estimate as the basis for today's log instead of re-estimating from scratch. If they explicitly say the earlier estimate underreported the total plate but the portion math was still right (e.g. they ate half yesterday and the remaining half today), treat it as a continuation/carry-over, not a new composition.
+6b. **Leftover / half-portion carry-over.** If the user says they ate the *other half* or *remaining half* of a meal already logged earlier, treat the new intake as a continuation of that same plate, not a fresh composition.
+- Reuse the earlier meal's item identity and scale the portion to the remaining fraction (usually 50%) unless the user says otherwise.
+- If the earlier meal was already logged today, update today's running totals from the same item breakdown; if it was logged on a prior day, mirror that prior estimate and halve it.
+- Do not ask the user to restate the full dish when the carry-over is explicit (e.g. "this is the second half").
 7. **Sum errors.** Always re-sum the food-log file totals after each meal append. Don't trust an incremental counter that could drift.
 8. **Duplicate / correction ambiguity.** If the user re-sends a meal they already logged today — especially with a new photo of the same plate or the same item list — stop and ask whether it is a correction or an addition. Do not double-count silently.
 9. **AYCE buffet plate.** Treat as a meal with multiple items; ask user to describe roughly ("rice, paneer, salad, 2 rotis") rather than estimating from "cafeteria lunch" alone. Saved templates ("cafeteria-lunch-normal") are the way to make this fast.
