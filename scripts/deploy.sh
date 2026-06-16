@@ -11,9 +11,13 @@
 #   - Only pushes new code in this repo to the GitHub remote, then pulls on VPS.
 #
 # Usage:
-#   ./scripts/deploy.sh                    # push + pull + restart
+#   ./scripts/deploy.sh                    # sync-back agent skill edits + push + pull + restart
 #   ./scripts/deploy.sh --pull-only        # skip push (use when working from VPS only)
 #   ./scripts/deploy.sh --no-restart       # push + pull but don't restart Hermes
+#   ./scripts/deploy.sh --no-sync          # skip the agent-skill sync-back step (Step 0)
+#
+# Step 0 captures agent-authored skill edits from the VPS into the repo (3-way merge)
+# before pushing, so the self-improvement loop is never lost and never blocks the pull.
 
 set -euo pipefail
 
@@ -35,10 +39,12 @@ VPS_ROOT_HOST="${VPS_ROOT_HOST:-root@${VPS_HOST#*@}}"
 # ===== Args =====
 DO_PUSH=true
 DO_RESTART=true
+DO_SYNC=true
 for arg in "$@"; do
   case "$arg" in
     --pull-only) DO_PUSH=false ;;
     --no-restart) DO_RESTART=false ;;
+    --no-sync) DO_SYNC=false ;;
     -h|--help)
       sed -n '3,18p' "$0" | sed 's/^# \?//'
       exit 0
@@ -53,6 +59,25 @@ cd "$REPO_ROOT"
 echo "→ Repo: $REPO_ROOT"
 echo "→ VPS:  $VPS_HOST → $VPS_REPO_PATH"
 echo
+
+# ===== Step 0: Capture agent-authored skill edits from the VPS (3-way merge) =====
+# The agent edits skills/ directly on the box as it learns; those live only in the VPS
+# working tree. Pull them back into the repo FIRST (so they're committed before we push
+# and aren't clobbered by the pull). Conflicts abort the deploy for a manual merge — we
+# never silently lose either side. Only relevant on a full push (sync needs a push to
+# land in canonical); SYNC_RAN gates the safe stash+drop reconcile in Step 2.
+SYNC_RAN=false
+if [ "$DO_PUSH" = "true" ] && [ "$DO_SYNC" = "true" ]; then
+  echo "[0/3] Capturing agent skill edits from the VPS..."
+  if "$REPO_ROOT/scripts/sync_agent_skills.sh"; then
+    SYNC_RAN=true
+  else
+    echo "  ✗ sync reported conflicts (or failed). Resolve the .SYNC_CONFLICT file(s),"
+    echo "    commit, and re-run deploy. Aborting so no VPS edits are lost."
+    exit 1
+  fi
+  echo
+fi
 
 # ===== Step 1: Push (Mac → GitHub) =====
 if [ "$DO_PUSH" = "true" ]; then
@@ -77,7 +102,17 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   echo \"  cwd: \$(pwd)\"
   git fetch --all --quiet
   before=\$(git rev-parse --short HEAD)
-  git pull --ff-only
+  # If Step 0 captured the agent's skill edits into canonical, the VPS working tree is
+  # now redundant — stash + drop it so the ff-only pull isn't blocked (nothing is lost;
+  # it's already committed upstream). Without a sync run we DON'T discard (would lose
+  # uncommitted edits) — a dirty tree then surfaces as a normal pull error instead.
+  if [ \"$SYNC_RAN\" = \"true\" ] && [ -n \"\$(git status --porcelain -- skills/)\" ]; then
+    git stash push -u -m 'deploy-redundant-after-sync' >/dev/null 2>&1 && echo '  (stashed VPS skill edits — already captured upstream)'
+    git pull --ff-only
+    git stash drop >/dev/null 2>&1 || true
+  else
+    git pull --ff-only
+  fi
   after=\$(git rev-parse --short HEAD)
   if [ \"\$before\" = \"\$after\" ]; then
     echo \"  → no new commits (HEAD: \$after)\"
