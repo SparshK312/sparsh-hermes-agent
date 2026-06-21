@@ -35,6 +35,7 @@ import internship_scraper as S          # noqa: E402 — reuse the proven parser
 from internship_sources import SOURCES  # noqa: E402
 from jd_fetch import fetch_jd           # noqa: E402 — read real job descriptions
 from gmail_source import fetch_email_postings  # noqa: E402 — InternInsider etc.
+from applicant_profile import load_profile  # noqa: E402 — personal profile from gitignored file
 
 ENV_FILE = Path.home() / ".hermes" / ".env"
 CHAT_ID = "696500863"
@@ -150,13 +151,10 @@ def fetch_shortlist_jds(new_postings: list, rule: dict) -> dict:
 
 # ----------------------------------------------------------------- frontier triage (one call)
 SYS_PROMPT = (
-    "You are Sparsh's internship-pipeline triage analyst. He's a UofT ECE student doing "
-    "4 back-to-back PEY rotations, targeting SWE / AI-ML / Data INTERN roles for Fall 2026, "
-    "Winter/Spring 2027, or Summer 2027, in the US or Canada. He is a US permanent resident "
-    "(green-card holder, US work-authorized, no sponsorship) and Canadian. ACCEPT roles "
-    "needing US work authorization, and ACCEPT ITAR / 'US Person' roles (green-card holders "
-    "qualify as US Persons under ITAR). SKIP ONLY roles requiring US Citizenship or an active "
-    "security clearance (Secret / Top Secret). 4-month roles preferred; SKIP "
+    "You are the internship-pipeline triage analyst for this applicant:\n" + load_profile() + "\n\n"
+    "ACCEPT roles needing US work authorization, and ACCEPT ITAR / 'US Person' roles (the "
+    "applicant is US-work-authorized per the profile). SKIP ONLY roles requiring US Citizenship "
+    "or an active security clearance (Secret / Top Secret). 4-month roles preferred; SKIP "
     "12/16-month placements (don't fit the 4-rotation plan).\n\n"
     "Watchlist (highest priority): Meta, Apple, Netflix, Microsoft, Nvidia, Anthropic, OpenAI, "
     "xAI, Cohere, Mistral, Google DeepMind, Stripe, Plaid, Mercury, Ramp, Brex, Robinhood, "
@@ -172,9 +170,8 @@ SYS_PROMPT = (
     "text). When present, TRUST it over the title for period/role/location/duration: a 'SWE Intern' "
     "whose description says 'Summer 2026' is the WRONG cycle -> skip; a description naming Fall 2026 "
     "or a 4-month term confirms the role; cite the description in your reason. "
-    "For every 'apply now', write a ONE-sentence cover opener "
-    "using his closest hook: AI labs -> Claude Ambassador; commerce/payments/dev-tools -> Shopify "
-    "PEY; early-stage/founder-y -> Call Fusion->Perfecti acqui-hire; else -> Shopify PEY.\n\n"
+    "For every 'apply now', write a ONE-sentence cover opener using the applicant's closest "
+    "cover-opener hook from the profile above.\n\n"
     "Return a JSON object EXACTLY:\n"
     "{\n"
     '  "items": [{"id": str, "verdict": str, "reason": str (<=12 words), "cover_line": str|null}],\n'

@@ -24,7 +24,9 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 
 FIRECRAWL_URL = "https://api.firecrawl.dev/v2/scrape"
@@ -97,11 +99,11 @@ def _free_fetch(url: str, timeout: int) -> str | None:
     return _html_to_text(raw) or None
 
 
-def _firecrawl_fetch(url: str, key: str, timeout: int = 50) -> str | None:
+def _firecrawl_fetch(url: str, key: str, timeout: int = 30) -> str | None:
     # waitFor lets JS boards (Workday/Ashby) render before extraction; it costs
     # time, not extra credits. summary keeps the GPT payload small.
     body = json.dumps(
-        {"url": url, "formats": ["summary"], "onlyMainContent": True, "waitFor": 6000}
+        {"url": url, "formats": ["summary"], "onlyMainContent": True, "waitFor": 5000}
     ).encode("utf-8")
     try:
         req = urllib.request.Request(
@@ -130,6 +132,70 @@ def fetch_jd(url: str, firecrawl_key: str | None = None, timeout: int = 20) -> s
     if _is_junk(text or ""):   # both attempts thin/junk -> let triage use the title
         return None
     return text[:MAX_JD_CHARS]
+
+
+def fetch_many(
+    items: list,
+    firecrawl_key: str | None = None,
+    deadline_s: float = 45.0,
+    free_workers: int = 12,
+    fc_workers: int = 6,
+    max_fc: int = 10,
+    importance=None,
+) -> dict:
+    """Fetch many JDs concurrently, quality-first and time-bounded.
+
+    items: list of (key, url). Returns {key: jd_text} for those that yielded a
+    real description. Two phases:
+      1. Free urllib fetch for ALL items in parallel ($0, no Firecrawl limit).
+      2. Firecrawl only the ones that came back thin, in parallel, MOST IMPORTANT
+         FIRST, and only until deadline_s wall-clock — so a heavy day never blows
+         the cron budget. Whatever doesn't get a JD just gets judged on its title.
+
+    No quality is dropped to save time: every fetch that *can* happen does; we only
+    bound the slow Firecrawl tail, and we spend that budget on the best postings first.
+    """
+    start = time.time()
+    out: dict = {}
+
+    def _free(item):
+        k, url = item
+        if not url or not str(url).startswith("http"):
+            return k, None
+        t = _free_fetch(url, 15)
+        if t and not _is_junk(t) and len(t) >= MIN_GOOD_CHARS:
+            return k, t[:MAX_JD_CHARS]
+        return k, None
+
+    with ThreadPoolExecutor(max_workers=free_workers) as ex:
+        for k, t in ex.map(_free, items):
+            if t:
+                out[k] = t
+
+    if firecrawl_key:
+        rest = [it for it in items if it[0] not in out and it[1] and str(it[1]).startswith("http")]
+        # Spend the slow Firecrawl budget on the MOST IMPORTANT thin postings first,
+        # and cap the count so a heavy day can't blow the cron wall. Free fetch
+        # already covered every server-rendered board regardless of priority.
+        if importance:
+            rest.sort(key=lambda it: importance(it[0]), reverse=True)
+        rest = rest[:max_fc]
+
+        def _fc(item):
+            k, url = item
+            if time.time() - start > deadline_s:   # past budget -> skip (title fallback)
+                return k, None
+            t = _firecrawl_fetch(url, firecrawl_key)
+            if t and not _is_junk(t):
+                return k, t[:MAX_JD_CHARS]
+            return k, None
+
+        if rest:
+            with ThreadPoolExecutor(max_workers=fc_workers) as ex:
+                for k, t in ex.map(_fc, rest):
+                    if t:
+                        out[k] = t
+    return out
 
 
 if __name__ == "__main__":

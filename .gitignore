@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 *.key
+# Personal applicant profile (residency/GPA/venture hooks) — runtime-only, like SOUL.md.
+# Real file lives at ~/.hermes/internship_profile.txt; this guards a stray in-repo copy.
+internship_profile.txt
 secrets/
 
 # Personal system prompt — kept OUT of the public repo (names employer/ventures).

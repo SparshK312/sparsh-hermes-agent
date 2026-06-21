@@ -48,7 +48,7 @@ If the company is not on this list, **default verdict: skip**, but note the comp
    - SWE / Software Engineer Intern / SDE Intern
    - AI / ML / Machine Learning Intern / Research Engineer Intern
    - Data Engineer / Data Scientist Intern (lower priority but accept)
-4. **Authorization** — Sparsh is a **US permanent resident (green-card holder), US work-authorized, no sponsorship needed** — *and* Canadian. So: **accept** roles requiring US work authorization. **Accept** `ITAR` / `US Person` roles — green-card holders qualify as US Persons under ITAR. **Skip only** roles explicitly requiring **US Citizenship** or an active **security clearance** (`Secret` / `Top Secret`), which need citizenship he doesn't hold. Canadian roles always pass.
+4. **Authorization** — the applicant's work-authorization is in `~/.hermes/internship_profile.txt` (read it at runtime; kept out of this committed file). Per that profile: **accept** roles requiring US work authorization; **accept** `ITAR` / `US Person` roles (the applicant qualifies as a US Person); **skip only** roles explicitly requiring **US Citizenship** or an active **security clearance** (`Secret` / `Top Secret`). Canadian roles always pass.
 
 ## Triage Verdict Logic
 
@@ -99,13 +99,7 @@ IF already in postings_seen.json:
 
 ### 3. Draft cover line (optional, only when `verdict == "apply now"`)
 
-One sentence opener referencing the closest resume hook:
-- If AI lab: lead with Claude Ambassador
-- If Shopify-adjacent commerce / payments: lead with Shopify PEY
-- If founder-angle company (early-stage, exec-heavy hiring): lead with Call Fusion → Perfecti acqui-hire
-- Otherwise: lead with Shopify PEY (most universally credible)
-
-Example: *"I'm currently on PEY at Shopify (Toronto, May–Aug 2026) and previously sold my voice-AI startup Call Fusion to Perfecti Technologies — Stripe's developer experience for payments has been a long-time reference for the API-first work I want to keep doing."*
+One sentence opener referencing the applicant's closest hook. **Read `~/.hermes/internship_profile.txt`** for the current hook list (AI-lab / commerce-payments / founder / workload / default) and pick the closest to the company, then write a tight, specific one-liner tying that hook to the role — factual, in the applicant's voice. (Personal specifics live in that gitignored file, not in this committed skill.)
 
 ### 4. Duplicate check side effect
 
@@ -152,13 +146,7 @@ Append the posting's canonical ID (URL minus query params) to `06 - Internships/
 
 ## Resume Hooks (from Sparsh's record)
 
-For cover line generation:
-
-- **Anthropic / Claude Ambassador** — use for AI labs, model providers, AI-tooling companies
-- **Shopify PEY 2026 (Toronto)** — current; use for commerce, payments, dev tools, anywhere "real-world startup speed" matters
-- **Perfecti / Call Fusion acqui-hire (Sept 2025)** — use for founder-friendly early-stage companies, voice-AI, agents
-- **UofT ECE + AI Engineering Minor + Eng Business Minor** — use as default credibility tail
-- **3.70 sessional GPA Summer 2025 + ran Call Fusion concurrently** — use when "can you handle workload?" is the implicit screen
+For cover line generation, the applicant's hooks (AI-lab, commerce/payments, founder, workload, default credibility) live in **`~/.hermes/internship_profile.txt`** — read it at runtime and pick the hook closest to the company. Kept out of this committed file so personal specifics (venture names, GPA, status) aren't in the public repo.
 
 ## Verification
 
