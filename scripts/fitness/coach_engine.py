@@ -425,7 +425,9 @@ def _save_state(s: dict) -> None:
 
 def budget_ok(category: str, red_alert: bool = False) -> tuple[bool, str]:
     """Message budget + dedup + quiet hours so the coach never over-nudges.
-    Cap 2 proactive msgs/day (3 in red-alert), no same-category within 3h, quiet 22:30–07:00."""
+    Cap 4 proactive msgs/day (5 in red-alert), no same-category within 3h, quiet 22:30–07:00.
+    (Raised from 2→4 when water/dinner/internship check-ins were added — more categories,
+    same anti-spam discipline; only the most warranted nudges fire each day.)"""
     n = now()
     if n.hour >= 23 or n.hour < 7 or (n.hour == 22 and n.minute >= 30):
         return False, "quiet hours"
@@ -433,7 +435,7 @@ def budget_ok(category: str, red_alert: bool = False) -> tuple[bool, str]:
     today = n.date().isoformat()
     day = s.get("day")
     sent = s.get("sent", []) if day == today else []
-    cap = 3 if red_alert else 2
+    cap = 5 if red_alert else 4
     if len(sent) >= cap:
         return False, f"daily cap {cap} reached"
     for e in sent:

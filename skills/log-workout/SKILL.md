@@ -33,9 +33,9 @@ Do **NOT** use for:
 - Food/protein around workouts → log-food
 - Sleep/recovery notes → those are manual frontmatter / journal
 
-## Vault-only — no MCP, no external tools
+## Vault-only — no MCP, deterministic write
 
-Uses only `obsidian-vault-write` (read + patch). No Hevy MCP. Architecture decision in [[Architecture]] D6.
+READ the existing workout file with `read_file` / `obsidian-vault-write`. Do the WRITE with the deterministic writer **`vault_log.py workout`** (exactly like log-food → `vault_log.py food`) — it writes the canonical Workouts file (regenerating the body), sets the daily-note `lifted:` field, and updates the `**Workout:**` line in one safe call. **Never hand-patch the YAML** (`patch` on frontmatter, `python3 -c`, heredocs, `execute_code`): those trip Hermes' approval gate (nagging Sparsh to "approve a command" for every set), are hard-blocked in cron, and corrupt repeated `key:` lines. No Hevy MCP. Architecture decision in [[Architecture]] D6.
 
 ## Step-by-step
 
@@ -136,23 +136,21 @@ last_updated: <ISO 8601 timestamp, America/Toronto>
 - Set 3: 40 lb × 10
 ```
 
-The body section is **auto-regenerated** from the frontmatter on every write — never hand-edit the body. The frontmatter is the source of truth.
-
-Create the parent directory `07 - Health/Workouts/` if it doesn't exist.
-
-### 7. Update the daily note (back-compat)
-
-`04 - Daily Notes/<date>.md`:
-
-**Frontmatter `lifted:`** = category label from step 5. If already populated (e.g., morning lift + afternoon cardio), append with `+`: `Push + Cardio (20 min)`. Don't blast prior content.
-
-**`## Health` section's `**Workout:**` line** = concise narrative summary referencing the structured file. Format:
+The schema above is exactly the shape the script writes. **You build the JSON array of exercise objects; the script does the write.** Pass the FULL merged `exercises[]` array (existing entries from step 2 + your change from step 4) — the script replaces the file with what you pass, regenerates the body, recomputes `total_sets`, creates the `07 - Health/Workouts/` dir, AND updates the daily note. Never hand-edit the body or the frontmatter.
 
 ```
-- **Workout:** Pull — lat pulldown 85 lb × 3, chest-supported row 40 lb × 3 (unilateral), rear delt fly 40-45 lb × 2, preacher curl 40 lb × 3, hammer curl 20 lb × 3. Full breakdown: [[Workouts/<date>]]
+/usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py workout \
+  --date <YYYY-MM-DD> \
+  --split "<category label from step 5>" \
+  [--duration-min <N>] \
+  --exercises '<full exercises[] array as compact JSON>'
 ```
 
-If the daily note's Health section is missing the `**Workout:**` bullet (unusual — template should have it), add it.
+Example `--exercises` payload: `'[{"name":"Lat Pulldown","machine":"dual-cable","notes":"42.5/side","sets":[{"weight_lb":85,"reps":12},{"weight_lb":85,"reps":10}]}]'`. Use `reps: null` (JSON `null`) when reps are unknown — don't fabricate.
+
+### 7. Daily note — handled by the writer
+
+The `vault_log.py workout` call in step 6 already sets the daily-note `lifted:` field (appending with `+` if a label is already present, e.g. `Push + Cardio`) and rewrites the `## Health` → `**Workout:**` line linking to `[[Workouts/<date>]]`. **Nothing to do manually here.**
 
 ### 8. PR detection (best-effort)
 
@@ -178,9 +176,8 @@ Examples:
 ## Vault-write conventions
 
 - Date format `YYYY-MM-DD`, Toronto local time.
-- See `obsidian-vault-write` skill for the file-write primitive.
-- `lifted` is a free-form string in YAML — single line, no quotes needed unless it contains `:`. If the label has a colon (rare), wrap in single quotes: `lifted: 'Push: chest+shoulders'`.
-- The workout file's body is **auto-regenerated** from frontmatter on each write. Read-modify-write the YAML; rewrite the body section from scratch.
+- Use `read_file` to READ the existing workout file; use `vault_log.py workout` to WRITE (it handles quoting, body regen, and the daily-note backref).
+- `lifted` is a free-form string — the writer quotes it if needed. Read-merge-write: read the existing `exercises[]` (step 2), apply your change (step 4), pass the full array to the writer.
 - `grep -c '^---$'` on both the daily note AND the workout file should return exactly 2 after a write.
 - Preserve all other daily-note frontmatter + body content exactly. Only touch `lifted:` and `**Workout:**`.
 - See `references/superset_and_continuation.md` for the logging pattern for supersets, unilateral work, and continuation updates.

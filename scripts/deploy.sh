@@ -153,6 +153,11 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # vitamins). Invoked as 'python3 .../vault/vault_log.py <cmd> <flags>' — matches no
   # dangerous-command pattern, so it never trips the approval gate and runs in cron.
   rm -rf ~/.hermes/scripts/vault && cp -r scripts/vault ~/.hermes/scripts/vault
+  # Cost monitor (Anthropic spend guardrail). Pure stdlib python + cron wrapper;
+  # reads state.db, Telegram-alerts on daily/MTD spend thresholds. No venv, no agent.
+  rm -rf ~/.hermes/scripts/monitor && cp -r scripts/monitor ~/.hermes/scripts/monitor
+  cp scripts/cron/cost_monitor.sh          ~/.hermes/scripts/cost_monitor.sh
+  chmod +x ~/.hermes/scripts/cost_monitor.sh
   # The internship watcher (scraper + sources + frontier-triage). Vendored into the
   # repo (was VPS-only). The cron runs internship_watch.sh -> internship_triage.py
   # (one GPT-5.5 call, no agent). bs4 + the OpenAI key must be present on the box.
@@ -164,7 +169,13 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   cp scripts/cron/coach.sh                 ~/.hermes/scripts/coach.sh
   cp scripts/cron/coach_meal.sh            ~/.hermes/scripts/coach_meal.sh
   cp scripts/cron/coach_workout.sh         ~/.hermes/scripts/coach_workout.sh
-  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/trends_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh
+  # New gated check-ins (water / dinner / internship accountability) — coach.py --mode wrappers.
+  cp scripts/cron/coach_water.sh           ~/.hermes/scripts/coach_water.sh
+  cp scripts/cron/coach_dinner.sh          ~/.hermes/scripts/coach_dinner.sh
+  cp scripts/cron/coach_internship.sh      ~/.hermes/scripts/coach_internship.sh
+  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/trends_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh ~/.hermes/scripts/coach_water.sh ~/.hermes/scripts/coach_dinner.sh ~/.hermes/scripts/coach_internship.sh
+  # intent-router plugin (auto-escalate coaching turns to Sonnet). User-plugin dir.
+  rm -rf ~/.hermes/plugins/intent-router && mkdir -p ~/.hermes/plugins && cp -r plugins/intent-router ~/.hermes/plugins/intent-router
   # --- Observations README before the fail-fast patches ---------------------
   # Deployed BEFORE the fail-fast source patches below: the patchers exit
   # non-zero (under `set -e`, aborting the rest of this block) if upstream Hermes

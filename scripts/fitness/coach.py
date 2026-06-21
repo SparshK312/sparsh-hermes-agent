@@ -18,6 +18,7 @@ agent. Rescues stay SILENT (just the gate) when not warranted — no over-nudgin
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -277,6 +278,101 @@ def run_chat() -> int:
     return 0
 
 
+# ----------------------------------------------------------------- water check-in
+def run_water_check() -> int:
+    """Mid-afternoon hydration nudge — fires ONLY if behind the paced 2.5L/day target."""
+    fm = E.daily_fm(E.now().date().isoformat())
+    water = E._f(fm, "water_l") or 0.0
+    n = E.now()
+    h = n.hour + n.minute / 60
+    frac = max(0.0, min(1.0, (h - 7.0) / (23.0 - 7.0)))   # eating/waking window
+    expected = E.TARGETS["water_l"] * frac
+    if water >= expected - 0.6:                            # on/near pace → silent
+        return _silent()
+    ok, _why = E.budget_ok("water-check")
+    if not ok and not DRY:
+        return _silent()
+    short = max(0.0, round(expected - water, 1))
+    msg = (f"💧 *Water check:* {water:.1f}L by {n.strftime('%-I:%M %p')} — about {short:.1f}L behind "
+           f"pace (target 2.5L/day). Fill a bottle now and sip through the afternoon.")
+    return _emit(msg, "water-check")
+
+
+# ----------------------------------------------------------------- dinner check-in
+def run_dinner_check() -> int:
+    """Evening under-eating guard — fires ONLY if no dinner logged AND day is light on kcal."""
+    today = E.now().date().isoformat()
+    meals = E.meals_logged(today)
+    kcal = int(E._f(E.daily_fm(today), "kcal") or 0)
+    if "dinner" in meals or kcal >= 1800:                  # ate dinner or already well-fed → silent
+        return _silent()
+    ok, _why = E.budget_ok("dinner-check")
+    if not ok and not DRY:
+        return _silent()
+    gap = E.TARGETS["kcal"] - kcal
+    msg = (f"🍽️ *Dinner check:* only {kcal} kcal logged today and no dinner yet — that's the "
+           f"under-eating failure mode. Get a real, protein-forward dinner in (~{gap} kcal to target). "
+           f"What are you having?")
+    return _emit(msg, "dinner-check")
+
+
+# ----------------------------------------------------------------- internship accountability
+INTERN_STATE = E.HOME / ".hermes" / "health" / "internship_state.json"
+WORKLIST = E.VAULT / "06 - Internships" / "Apply Now Worklist - Jun 2026.md"
+
+
+def _intern_applied_today() -> bool:
+    try:
+        return json.loads(INTERN_STATE.read_text()).get("applied_date") == E.now().date().isoformat()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _worklist_backlog() -> tuple[int, str | None]:
+    """(count, top_role) parsed from the Apply-Now Worklist markdown tables. Robust to the
+    other agent's edits — reads whatever rows are present; silent if the file/format is gone."""
+    txt = E.read(WORKLIST, limit=20000)
+    if not txt:
+        return 0, None
+    rows = []
+    for c, r in re.findall(r"^\|\s*\d+[a-z]?\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|", txt, re.M):
+        company = c.replace("*", "").strip()
+        role = r.replace("*", "").strip()
+        if company.lower() in ("company", "") or role.lower() in ("role", ""):
+            continue
+        rows.append((company, role))
+    if not rows:
+        return 0, None
+    return len(rows), f"{rows[0][0]} — {rows[0][1]}"
+
+
+def run_internship_check() -> int:
+    """Weekday-evening accountability — fires ONLY if nothing applied today AND a backlog exists."""
+    if E.now().weekday() >= 5:                 # Sat/Sun off
+        return _silent()
+    if _intern_applied_today():
+        return _silent()
+    count, top = _worklist_backlog()
+    if not count:                              # no backlog / can't read worklist → silent
+        return _silent()
+    ok, _why = E.budget_ok("internship-check")
+    if not ok and not DRY:
+        return _silent()
+    msg = (f"📋 *No internship application logged today.* ~{count} roles on your Apply-Now Worklist. "
+           f"Knock out ONE before bed — top of the list: *{top}*. "
+           f"Reply 'applied: <company>' and I'll mark it done.")
+    return _emit(msg, "internship-check")
+
+
+def run_internship_applied() -> int:
+    """Mark that an application went out today (silences the evening accountability nudge).
+    The agent calls this when Sparsh reports applying — see the MEMORY.md rule."""
+    INTERN_STATE.parent.mkdir(parents=True, exist_ok=True)
+    INTERN_STATE.write_text(json.dumps({"applied_date": E.now().date().isoformat()}))
+    print("✓ Logged an internship application for today — evening accountability nudge silenced.")
+    return 0
+
+
 def main() -> int:
     return {
         "weekly": run_weekly,
@@ -284,6 +380,10 @@ def main() -> int:
         "workout-rescue": run_workout_rescue,
         "preview": run_preview,
         "chat": run_chat,
+        "water-check": run_water_check,
+        "dinner-check": run_dinner_check,
+        "internship-check": run_internship_check,
+        "internship-applied": run_internship_applied,
     }.get(MODE, run_weekly)()
 
 

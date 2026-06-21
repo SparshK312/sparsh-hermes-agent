@@ -456,6 +456,181 @@ def cmd_show(a) -> dict:
                                             if k in (INT_FIELDS | FLOAT1_FIELDS | {"weight", "sleep_hours", "vitamins_taken"}) and v)}
 
 
+# ----------------------------------------------------------------- workout
+# The log-workout SKILL (LLM) parses the message, classifies the action
+# (APPEND_NEW_EXERCISE / APPEND_SET_TO_LATEST / UPDATE_SET / FINALIZE), reads the
+# existing Workouts/<date>.md, and builds the FULL merged exercises[] array. This
+# script does only the deterministic part: write that array as the canonical file
+# (regenerate body from frontmatter), set the daily-note `lifted:` field, and best-
+# effort update the `**Workout:**` back-compat line. Stdlib-only YAML emit (no pyyaml).
+WORKOUTS_DIR = VAULT / "07 - Health" / "Workouts"
+_SET_EXTRA_KEYS = ("side", "note", "each_arm")
+_EX_SCALAR_KEYS = ("unilateral", "machine", "each_arm", "notes")
+
+
+def _yv(v) -> str:
+    """YAML block-scalar emit: numbers bare, None->null, bools lowercase, strings
+    quoted only when needed (colon/special char/ambiguous)."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return f"{v:g}"
+    s = str(v)
+    if s == "":
+        return '""'
+    if (re.search(r'[:#\[\]{}&*!|>%@`"\',]', s) or s[0] == " " or s[-1] == " "
+            or s.lower() in ("null", "true", "false", "yes", "no")
+            or re.fullmatch(r"-?\d+(\.\d+)?", s)):
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return s
+
+
+def _yv_flow(v) -> str:
+    """YAML flow-scalar (inside {k: v, ...}) — also quote commas/braces/colons."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return f"{v:g}"
+    s = str(v)
+    if s == "" or re.search(r'[,:{}\[\]"\']', s):
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return s
+
+
+def _yaml_exercises(exercises: list) -> str:
+    """Render exercises[] as an indented YAML block (the source of truth for PR/volume)."""
+    if not exercises:
+        return "exercises: []"
+    out = ["exercises:"]
+    for ex in exercises:
+        out.append(f"  - name: {_yv(ex.get('name', 'Exercise'))}")
+        for k in _EX_SCALAR_KEYS:
+            if k in ex and ex[k] not in (None, ""):
+                out.append(f"    {k}: {_yv(ex[k])}")
+        sets = ex.get("sets") or []
+        if not sets:
+            out.append("    sets: []")
+            continue
+        out.append("    sets:")
+        for st in sets:
+            pairs = [f"weight_lb: {_yv_flow(st.get('weight_lb'))}",
+                     f"reps: {_yv_flow(st.get('reps'))}"]
+            for k in _SET_EXTRA_KEYS:
+                if k in st and st[k] is not None:
+                    pairs.append(f"{k}: {_yv_flow(st[k])}")
+            out.append("      - {" + ", ".join(pairs) + "}")
+    return "\n".join(out)
+
+
+def _workout_body(date: str, split: str, exercises: list) -> str:
+    """Regenerate the human-readable body from the array (never hand-edited)."""
+    try:
+        day_label = datetime.date.fromisoformat(date).strftime("%a %b %-d, %Y")
+    except ValueError:
+        day_label = date
+    lines = [f"# Workout — {day_label} · {split}", "",
+             "> Source: log-workout v2 (vault_log workout). Daily-note **Workout:** line links back here.", ""]
+    for ex in exercises:
+        sets = ex.get("sets") or []
+        tags = ["unilateral"] if ex.get("unilateral") else []
+        suffix = f" ({len(sets)} sets{', ' + ', '.join(tags) if tags else ''})" if sets else ""
+        lines.append(f"## {ex.get('name', 'Exercise')}{suffix}")
+        if ex.get("notes"):
+            lines.append(f"*{ex['notes']}*")
+        lines.append("")
+        for i, st in enumerate(sets, 1):
+            w, r = st.get("weight_lb"), st.get("reps")
+            wtxt = f"{w:g} lb" if isinstance(w, (int, float)) else (str(w) if w else "—")
+            rtxt = f"{r:g}" if isinstance(r, (int, float)) else "—"
+            side = f" ({st['side']})" if st.get("side") else ""
+            note = f" — {st['note']}" if st.get("note") else ""
+            lines.append(f"- Set {i}: {wtxt} × {rtxt}{side}{note}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_workout_file(date: str, split: str, duration_min, exercises: list) -> dict:
+    WORKOUTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = WORKOUTS_DIR / f"{date}.md"
+    total_sets = sum(len(ex.get("sets") or []) for ex in exercises)
+    now_iso = (datetime.datetime.now(TZ) if TZ else datetime.datetime.now()).strftime("%Y-%m-%dT%H:%M:%S")
+    fm = ["---", "type: workout", f"date: {date}", f"split: {_yv(split)}"]
+    if duration_min:
+        fm.append(f"duration_min: {int(duration_min)}")
+    fm.append(f"total_sets: {total_sets}")
+    fm.append(_yaml_exercises(exercises))
+    fm.append(f"last_updated: {now_iso}")
+    fm.append("---")
+    path.write_text("\n".join(fm) + "\n\n" + _workout_body(date, split, exercises), encoding="utf-8")
+    return {"path": path, "total_sets": total_sets, "exercise_count": len(exercises)}
+
+
+def _update_daily_workout_line(note: Path, summary: str) -> None:
+    """Best-effort: replace/insert the `- **Workout:**` bullet (under ## Health). The
+    `lifted:` frontmatter is the primary record; this is just the quick-scan line."""
+    try:
+        lines = note.read_text(encoding="utf-8").split("\n")
+        for i, ln in enumerate(lines):
+            if re.match(r"\s*-?\s*\*\*Workout:\*\*", ln):
+                lines[i] = f"- **Workout:** {summary}"
+                note.write_text("\n".join(lines), encoding="utf-8")
+                return
+        for i, ln in enumerate(lines):
+            if ln.strip().lower().startswith("## health"):
+                lines.insert(i + 1, f"- **Workout:** {summary}")
+                note.write_text("\n".join(lines), encoding="utf-8")
+                return
+    except Exception:  # noqa: BLE001 — best-effort; never fail the log over the scan line
+        pass
+
+
+def cmd_workout(a) -> dict:
+    date = _valid_date(a.date)
+    try:
+        exercises = json.loads(a.exercises) if a.exercises else []
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"workout: --exercises is not valid JSON: {e}")
+    if not isinstance(exercises, list):
+        raise SystemExit("workout: --exercises must be a JSON array of exercise objects")
+    split = a.split or "Workout"
+    info = write_workout_file(date, split, a.duration_min, exercises)
+
+    note = ensure_daily_note(date)
+    # lifted: append-with-+ if already populated with a different label (morning lift + later cardio)
+    cur = ""
+    try:
+        for ln in note.read_text(encoding="utf-8").split("\n"):
+            if ln.startswith("lifted:"):
+                cur = ln.split(":", 1)[1].strip().strip('"').strip("'")
+                break
+    except Exception:  # noqa: BLE001
+        pass
+    new_lifted = f"{cur} + {split}" if (cur and split not in cur) else split
+    edit_frontmatter(note, sets={"lifted": new_lifted})
+
+    # back-compat **Workout:** quick-scan summary (best-effort)
+    parts = []
+    for ex in exercises:
+        sets = ex.get("sets") or []
+        w = next((s.get("weight_lb") for s in sets if s.get("weight_lb") is not None), None)
+        wtxt = f"{w:g} lb × {len(sets)}" if isinstance(w, (int, float)) else f"{len(sets)} sets"
+        parts.append(f"{ex.get('name', '?')} {wtxt}")
+    if parts:
+        _update_daily_workout_line(note, f"{split} — " + ", ".join(parts) + f". Full breakdown: [[Workouts/{date}]]")
+
+    return {"ok": True, "cmd": "workout", "date": date, "split": split,
+            "total_sets": info["total_sets"], "exercise_count": info["exercise_count"],
+            "msg": f"🏋️ Logged: {split}. {info['exercise_count']} exercises, {info['total_sets']} total sets."}
+
+
 # ----------------------------------------------------------------- cli
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vault_log", description="Deterministic vault writer for the health log-* skills.")
@@ -505,6 +680,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(v)
     v.add_argument("--supplements", default=None, help="comma-separated names")
     v.set_defaults(func=cmd_vitamins)
+
+    wo = sub.add_parser("workout", help="write the structured workout file + daily-note lifted/Workout line")
+    add_common(wo)
+    wo.add_argument("--exercises", dest="exercises", required=True,
+                    help="full exercises[] array as JSON. The skill reads the existing file, applies the action, and passes the merged array.")
+    wo.add_argument("--split", required=True, help="category label, e.g. 'Push (chest/shoulders/triceps)'")
+    wo.add_argument("--duration-min", dest="duration_min", type=int, default=None)
+    wo.set_defaults(func=cmd_workout)
 
     sh = sub.add_parser("show", help="print today's health frontmatter (read-only)")
     add_common(sh)

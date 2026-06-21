@@ -1,0 +1,6 @@
+name: intent-router
+version: 0.1.0
+description: "Auto-escalate coaching/planning/judgment turns to claude-sonnet-4-6; everyday logging and chatter stay on the cheap default model. Routes by mutating the session model override in pre_gateway_dispatch."
+author: "Sparsh (Hermes intelligence upgrade)"
+hooks:
+  - pre_gateway_dispatch
