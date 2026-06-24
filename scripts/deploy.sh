@@ -134,7 +134,8 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   cp scripts/cron/lunch_check.sh           ~/.hermes/scripts/health_lunch_check.sh
   cp scripts/cron/evening_summary.sh       ~/.hermes/scripts/health_evening_summary.sh
   cp scripts/cron/hae_sync.sh              ~/.hermes/scripts/health_hae_sync.sh
-  chmod +x ~/.hermes/scripts/health_*.sh
+  cp scripts/cron/prep_nudge.sh            ~/.hermes/scripts/prep_nudge.sh
+  chmod +x ~/.hermes/scripts/health_*.sh ~/.hermes/scripts/prep_nudge.sh
   # HAE wearable-bridge python (Phase 3): the always-on listener (run by the
   # hae-ingest.service systemd unit) + the raw->CSV processor + the CSV->daily-
   # note-frontmatter ingester (both run by the hae-sync cron). Mirrored here so
@@ -173,9 +174,15 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   cp scripts/cron/coach_water.sh           ~/.hermes/scripts/coach_water.sh
   cp scripts/cron/coach_dinner.sh          ~/.hermes/scripts/coach_dinner.sh
   cp scripts/cron/coach_internship.sh      ~/.hermes/scripts/coach_internship.sh
-  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/trends_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh ~/.hermes/scripts/coach_water.sh ~/.hermes/scripts/coach_dinner.sh ~/.hermes/scripts/coach_internship.sh
-  # intent-router plugin (auto-escalate coaching turns to Sonnet). User-plugin dir.
-  rm -rf ~/.hermes/plugins/intent-router && mkdir -p ~/.hermes/plugins && cp -r plugins/intent-router ~/.hermes/plugins/intent-router
+  # Nutrition visuals (daily fuel card + weekly Week-in-Food report) — nutrition_card.py wrappers.
+  cp scripts/cron/fuel_card.sh             ~/.hermes/scripts/fuel_card.sh
+  cp scripts/cron/week_food.sh             ~/.hermes/scripts/week_food.sh
+  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/trends_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh ~/.hermes/scripts/coach_water.sh ~/.hermes/scripts/coach_dinner.sh ~/.hermes/scripts/coach_internship.sh ~/.hermes/scripts/fuel_card.sh ~/.hermes/scripts/week_food.sh
+  # User plugins (auto-loaded via plugins.enabled in config.yaml).
+  mkdir -p ~/.hermes/plugins
+  rm -rf ~/.hermes/plugins/intent-router    && cp -r plugins/intent-router    ~/.hermes/plugins/intent-router       # coaching→Sonnet routing
+  rm -rf ~/.hermes/plugins/turn-context     && cp -r plugins/turn-context     ~/.hermes/plugins/turn-context        # inject today's date every turn
+  rm -rf ~/.hermes/plugins/vault-write-guard && cp -r plugins/vault-write-guard ~/.hermes/plugins/vault-write-guard  # force health logging through vault_log
   # --- Observations README before the fail-fast patches ---------------------
   # Deployed BEFORE the fail-fast source patches below: the patchers exit
   # non-zero (under `set -e`, aborting the rest of this block) if upstream Hermes

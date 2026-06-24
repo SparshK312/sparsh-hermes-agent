@@ -1,14 +1,13 @@
 {
-  "_comment": "Cron entries to APPEND into ~/.hermes/cron/jobs.json on the VPS. Do NOT replace the existing file — the daily-note-prefill and internship-watcher jobs must be preserved. Append these entries inside the `jobs` array and update `updated_at`. DESIGN: these are CONTEXT-AWARE AGENT jobs — each `script` reads today's logged state from the vault and prints a compact STATE block to stdout; Hermes injects that as context and the LLM composes the Telegram message per the job's `prompt` (so it adapts — e.g. drops the weigh-in line if weight is logged, nags only about missing items). When a nudge is moot (e.g. lunch already logged) the script prints {\"wakeAgent\": false} as its final line, which makes run_job skip the LLM entirely (no turn, nothing sent). If you change a job's `prompt` here you must also update it in the live jobs.json. For a truly $0 self-delivered job see scripts/cron/hae_sync.sh and fitness_report.sh.",
-  "_timezone_comment": "cron `expr` is evaluated in the Hermes-configured timezone: HERMES_TIMEZONE env → config.yaml `timezone:` → else SERVER-LOCAL (UTC on the VPS). The `created_at` -04:00 offsets below are cosmetic and do NOT set the schedule tz. REQUIRED on the VPS: set `timezone: America/Toronto` in ~/.hermes/config.yaml, or these fire at the wrong wall-clock time (a `0 13` 'lunch' job would hit at 09:00 Toronto under UTC).",
+  "_comment": "Cron entries to APPEND into ~/.hermes/cron/jobs.json on the VPS. Do NOT replace the existing file \u2014 the daily-note-prefill and internship-watcher jobs must be preserved. Append these entries inside the `jobs` array and update `updated_at`. DESIGN: these are CONTEXT-AWARE AGENT jobs \u2014 each `script` reads today's logged state from the vault and prints a compact STATE block to stdout; Hermes injects that as context and the LLM composes the Telegram message per the job's `prompt` (so it adapts \u2014 e.g. drops the weigh-in line if weight is logged, nags only about missing items). When a nudge is moot (e.g. lunch already logged) the script prints {\"wakeAgent\": false} as its final line, which makes run_job skip the LLM entirely (no turn, nothing sent). If you change a job's `prompt` here you must also update it in the live jobs.json. For a truly $0 self-delivered job see scripts/cron/hae_sync.sh and fitness_report.sh.",
+  "_timezone_comment": "cron `expr` is evaluated in the Hermes-configured timezone: HERMES_TIMEZONE env \u2192 config.yaml `timezone:` \u2192 else SERVER-LOCAL (UTC on the VPS). The `created_at` -04:00 offsets below are cosmetic and do NOT set the schedule tz. REQUIRED on the VPS: set `timezone: America/Toronto` in ~/.hermes/config.yaml, or these fire at the wrong wall-clock time (a `0 13` 'lunch' job would hit at 09:00 Toronto under UTC).",
   "_script_path_note": "Hermes' cron dispatcher refuses scripts outside ~/.hermes/scripts/ (sandbox: 'resolved script path is outside the allowed scripts directory'). The repo scripts are mirrored into that root by scripts/deploy.sh on every deploy, with a 'health_' prefix to avoid collision with bundled Hermes scripts. The script paths here reference the mirrored copies, NOT the repo paths.",
-  "_apply_procedure": "See docs/DEPLOY.md → 'Adding cron entries'. Use the deploy script's merge helper rather than hand-editing.",
-
+  "_apply_procedure": "See docs/DEPLOY.md \u2192 'Adding cron entries'. Use the deploy script's merge helper rather than hand-editing.",
   "jobs_to_append": [
     {
       "id": "a1f5d3c9b2e0",
       "name": "health-morning-nudge",
-      "prompt": "Compose Sparsh's terse morning Telegram nudge from the [morning-nudge state] block above. Lead with last night's sleep: hours (add ⚠️ if under sleep_floor_h, else ✅), then deep/REM/RHR/HRV and the 7-day avg on one line. If sleep_synced is no, say it didn't sync and suggest `/sleep <hrs>`. If weight_logged_today is no, add ONE line nudging the weigh-in: `/weight <lb>` (after bathroom, before food); if it is yes, skip the weigh-in line entirely. End with `/today` for the full picture. Markdown, bullets, terse, short header only, no fluff. Use ONLY the facts in the state block.",
+      "prompt": "Compose Sparsh's terse morning Telegram nudge from the [morning-nudge state] block above. Lead with last night's sleep: hours (add \u26a0\ufe0f if under sleep_floor_h, else \u2705), then deep/REM/RHR/HRV and the 7-day avg on one line. If sleep_synced is no, say it didn't sync and suggest `/sleep <hrs>`. If weight_logged_today is no, add ONE line nudging the weigh-in: `/weight <lb>` (after bathroom, before food); if it is yes, skip the weigh-in line entirely. End with `/today` for the full picture. Markdown, bullets, terse, short header only, no fluff. Use ONLY the facts in the state block.",
       "skills": [],
       "skill": null,
       "model": null,
@@ -44,7 +43,7 @@
     {
       "id": "b3c7e9f1a4d2",
       "name": "health-lunch-check",
-      "prompt": "Compose a short lunch-log nudge from the [lunch-nudge state] block above (you are only invoked when lunch is NOT logged yet). Remind him to log lunch — describe it, send a photo, or `/log-food`. Note where he stands vs target using kcal_so_far / protein_so_far_g vs the targets. The office is AYCE — an easy protein-dense anchor. End with `/today` for running totals. Markdown, terse, no fluff. Use ONLY the facts in the state block.",
+      "prompt": "Compose a short lunch-log nudge from the [lunch-nudge state] block above (you are only invoked when lunch is NOT logged yet). Remind him to log lunch \u2014 describe it, send a photo, or `/log-food`. Note where he stands vs target using kcal_so_far / protein_so_far_g vs the targets. The office is AYCE \u2014 an easy protein-dense anchor. End with `/today` for running totals. Markdown, terse, no fluff. Use ONLY the facts in the state block.",
       "skills": [],
       "skill": null,
       "model": null,
@@ -80,7 +79,7 @@
     {
       "id": "c8d4a2b1e5f9",
       "name": "health-evening-summary-nudge",
-      "prompt": "Compose Sparsh's terse evening check-in from the [evening-nudge state] block above. Nudge ONLY about items listed in `missing` (dinner / water / vitamins) — never mention things already done. If kcal_so_far or protein_so_far_g is short of target, note the gap in one line. Always close with the non-negotiable: bed by midnight. Markdown, no fluff. If `missing` is nothing and macros are at/near target, send just one line: 'You're set for the day — bed by midnight.' Use ONLY the facts in the state block.",
+      "prompt": "Compose Sparsh's terse evening check-in from the [evening-nudge state] block above. Nudge ONLY about items listed in `missing` (dinner / water / vitamins) \u2014 never mention things already done. If kcal_so_far or protein_so_far_g is short of target, note the gap in one line. Always close with the non-negotiable: bed by midnight. Markdown, no fluff. If `missing` is nothing and macros are at/near target, send just one line: 'You're set for the day \u2014 bed by midnight.' Use ONLY the facts in the state block.",
       "skills": [],
       "skill": null,
       "model": null,
@@ -160,9 +159,16 @@
       "base_url": null,
       "script": "/home/hermes/.hermes/scripts/coach_meal.sh",
       "context_from": null,
-      "schedule": { "kind": "cron", "expr": "0 15 * * *", "display": "0 15 * * *" },
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 15 * * *",
+        "display": "0 15 * * *"
+      },
       "schedule_display": "0 15 * * *",
-      "repeat": { "times": null, "completed": 0 },
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
       "enabled": true,
       "state": "scheduled",
       "paused_at": null,
@@ -189,14 +195,57 @@
       "base_url": null,
       "script": "/home/hermes/.hermes/scripts/coach_workout.sh",
       "context_from": null,
-      "schedule": { "kind": "cron", "expr": "0 20 * * *", "display": "0 20 * * *" },
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 20 * * *",
+        "display": "0 20 * * *"
+      },
       "schedule_display": "0 20 * * *",
-      "repeat": { "times": null, "completed": 0 },
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
       "enabled": true,
       "state": "scheduled",
       "paused_at": null,
       "paused_reason": null,
       "created_at": "2026-06-15T18:00:00-04:00",
+      "next_run_at": null,
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "/home/hermes/vault"
+    },
+    {
+      "id": "9c2e7a4b1f30",
+      "name": "prep-nudge",
+      "prompt": "Compose Sparsh's daily interview-prep accountability nudge from the [prep-nudge state] block above. Tone: terse, plain, matter-of-fact, lightly motivating but NOT a cheerleader. Use ONLY facts in the state block. (1) If fresh_start is yes, it's day one \u2014 nudge him to start with next_item (e.g. Two Sum), keep it light, note he can reply 'did <problem>' to log it. (2) Otherwise lead with the streak (current_streak_days, add a flame if >=1) + progress, then the single next_item, and if redo_due is not none tell him to re-solve those from memory first (spaced repetition). Ask if he got a rep in today. (3) If escalate is yes, get more pointed \u2014 name days_since_rep, note Mercor won't prep itself, push for one easy problem. Always remind he logs by replying e.g. 'did Two Sum'. Markdown, short, no fluff. Target: Mercor + bigger brands.",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/prep_nudge.sh",
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "30 20 * * *",
+        "display": "30 20 * * *"
+      },
+      "schedule_display": "30 20 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-06-24T20:30:00-04:00",
       "next_run_at": null,
       "last_run_at": null,
       "last_status": null,
