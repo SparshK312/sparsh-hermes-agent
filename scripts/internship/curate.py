@@ -25,11 +25,36 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import socket
 import sys
+import time
 import urllib.parse
 import urllib.request
 from datetime import date, datetime
 from pathlib import Path
+
+
+def _wait_for_network(hosts=("boards-api.greenhouse.io", "api.openai.com", "api.telegram.org"),
+                      tries=18, delay=5) -> bool:
+    """Scheduled runs fire as the Mac wakes, and the network settles UNEVENLY — the job
+    boards resolve before OpenAI/Telegram do. Wait (up to ~90s) until ALL critical hosts
+    resolve, so a wake-run doesn't harvest fine but then DNS-fail the fit pass + Telegram
+    notify (observed 2026-06-24: 94 unscored + no Telegram on a 9:36 wake-run). If a host
+    never comes up, proceed anyway — harvest may still work, fit/notify degrade gracefully,
+    and the harvest-collapse guard protects the board."""
+    for i in range(tries):
+        try:
+            for h in hosts:
+                socket.gethostbyname(h)
+            return True
+        except OSError:
+            if i == 0:
+                print("[refresh] network still settling — waiting for full connectivity…",
+                      file=sys.stderr)
+            time.sleep(delay)
+    print("[refresh] some hosts still unresolved after wait — proceeding (fit/notify may degrade)",
+          file=sys.stderr)
+    return False
 
 # Telegram (reuse the Hermes bot — same chat the other crons send to)
 TELEGRAM_CHAT_ID = "696500863"
@@ -104,17 +129,17 @@ VAULT = Path(os.environ.get("HERMES_VAULT")
              or ("/home/hermes/vault" if Path("/home/hermes/vault").exists()
                  else str(Path.home() / "Documents" / "School Vault - UofT")))
 STORE_PATH = Path(os.environ.get("CURATED_STORE",
-                  VAULT / "06 - Internships" / "Internship Pipeline" / "curated_postings.json"))
+                  VAULT / "06 - Internships" / "Job Search" / "curated_postings.json"))
 XLSX_PATH = Path(os.environ.get("CURATED_XLSX",
-                 VAULT / "06 - Internships" / "Curated Board.xlsx"))
-OLD_TRACKER = VAULT / "06 - Internships" / "Application Tracker.xlsx"
+                 VAULT / "06 - Internships" / "Job Search" / "Curated Board.xlsx"))
+OLD_TRACKER = VAULT / "06 - Internships" / "Job Search" / "Legacy" / "Application Tracker.xlsx"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(VAULT / "Scripts"))
 
 import brand_first_source  # noqa: E402
 import wide_net_source  # noqa: E402
-from build_curated_xlsx import check_lock, read_back_human, write_board  # noqa: E402
+from build_curated_xlsx import is_locked, read_back_human, write_board  # noqa: E402
 from curated_store import CuratedStore  # noqa: E402
 from hotness import hotness, role_lane  # noqa: E402
 from internship_scraper import canonical_id, normalize_company_name  # noqa: E402
@@ -208,7 +233,11 @@ def import_old_tracker_history(store) -> int:
 
 
 async def refresh(notify: bool = False) -> int:
-    check_lock(XLSX_PATH)
+    # An open-in-Excel lock no longer aborts the whole refresh — we still harvest, score,
+    # and update the store JSON, and only DEFER the xlsx render (step 5). That keeps the
+    # board data fresh even when it's left open in Excel for days (the old behavior froze
+    # the board until Excel was closed). read_back_human can still read an open .xlsx.
+    _wait_for_network()      # scheduled runs fire on wake before wifi is up — wait for it
     today = date.today().isoformat()
     store = CuratedStore(STORE_PATH).load()
     prior_cids = set(store.postings.keys())   # to detect genuinely-new postings
@@ -271,6 +300,18 @@ async def refresh(notify: bool = False) -> int:
     print(f"[refresh] {len(lane1)} lane-1 + {len(lane2)} lane-2 -> "
           f"{len(harvested)} after cross-lane dedup", file=sys.stderr)
 
+    # SAFETY GUARD: a network-less cron run (DNS failures on a sleeping/just-woke Mac)
+    # harvests ~nothing. WITHOUT this, the stale-check below would mark every posting
+    # dead and wipe the board to 0. If the harvest collapsed but we had a healthy board
+    # before, abort and leave the store + xlsx UNTOUCHED (the next good run restores it).
+    # A healthy run harvests 100+ roles. Under 50 (when we had a real board before) means
+    # a network failure (full or partial), not that the postings genuinely vanished.
+    if len(harvested) < 50 and len(prior_cids) > 80:
+        print(f"[refresh] ⚠️ harvest collapsed ({len(harvested)} roles vs {len(prior_cids)} "
+              f"stored) — almost certainly a network failure. Aborting WITHOUT touching the "
+              f"board (no stale-check, no overwrite).", file=sys.stderr)
+        return 0
+
     # 4) re-score everything (recency decays) + stale-check brand-board dropouts
     stale = 0
     for cid, rec in store.items():
@@ -302,14 +343,19 @@ async def refresh(notify: bool = False) -> int:
     except Exception as e:  # noqa: BLE001 — never block the refresh on the LLM
         print(f"[refresh] fit pass skipped: {type(e).__name__}: {e}", file=sys.stderr)
 
-    # 5) persist + render
+    # 5) persist the store ALWAYS; render the xlsx unless Excel has it open (defer if so)
     gen = datetime.now().strftime("%Y-%m-%d %H:%M")
     store.save(gen)
-    counts = write_board(store, XLSX_PATH, gen)
-    print(f"\n✅ Curated Board refreshed — {counts['queue']} in queue, "
-          f"{counts['applications']} applications "
-          f"({len(harvested)} live brand-board roles, {stale} newly stale)")
-    print(f"   {XLSX_PATH}")
+    if is_locked(XLSX_PATH):
+        print(f"\n⏸️  Store updated ({len(store.postings)} postings, {stale} newly stale) — xlsx "
+              f"render DEFERRED ('{XLSX_PATH.name}' is open in Excel). The board re-renders on the "
+              f"next run with Excel closed; no data lost, notify still runs.", file=sys.stderr)
+    else:
+        counts = write_board(store, XLSX_PATH, gen)
+        print(f"\n✅ Curated Board refreshed — {counts['queue']} in queue, "
+              f"{counts['applications']} applications, {counts.get('reviewed', 0)} reviewed/skipped "
+              f"({len(harvested)} live brand-board roles, {stale} newly stale)")
+        print(f"   {XLSX_PATH}")
 
     # 6) notify (only when scheduled, only on genuinely-new postings, never on the
     #    first-ever run; silent otherwise — matches the other crons' discipline)

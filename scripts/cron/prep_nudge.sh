@@ -20,7 +20,9 @@ except Exception:
     TZ = None
 
 # ---- config -------------------------------------------------------------------
-ESCALATE_DAYS = 3
+ESCALATE_DAYS = 3            # quiet days after a rep before the nudge gets pointed
+ESCALATE_DAYS_FRESH = 2      # days since prep went live with STILL ZERO reps -> escalate
+PREP_START_DATE = "2026-06-24"   # when the nudge went live (for never-started escalation)
 # Known low-prep windows (inclusive) — nudge stays silent. Keep these in sync with
 # his calendar (CSC384 midterm Jul 7; SF/YC Jul 24-29). Add ranges as needed.
 LOW_PREP_WINDOWS = [
@@ -114,8 +116,13 @@ for ln in section("Redo list").splitlines():
             if re.match(r"20\d\d-\d{2}-\d{2}", due) and due <= today_s and not donecol.strip():
                 redo_due.append(prob)
 
-escalate = (days_since is not None and days_since >= ESCALATE_DAYS)
 fresh_start = (done == 0 and not log_dates)
+days_since_start = (today - datetime.date.fromisoformat(PREP_START_DATE)).days
+if fresh_start:
+    # never logged a single rep -> escalate once it's been a couple days since go-live
+    escalate = days_since_start >= ESCALATE_DAYS_FRESH
+else:
+    escalate = (days_since is not None and days_since >= ESCALATE_DAYS)
 
 # ---- emit STATE block ---------------------------------------------------------
 L = [f"[prep-nudge state · {today_s}]"]
@@ -128,6 +135,7 @@ L.append(f"current_streak_days: {streak}")
 L.append(f"redo_due: {', '.join(redo_due) if redo_due else 'none'}")
 L.append(f"escalate: {'yes' if escalate else 'no'}")
 L.append(f"fresh_start: {'yes' if fresh_start else 'no'}")
+L.append(f"days_since_prep_went_live: {days_since_start}")
 L.append("target: Mercor (referral-guaranteed interview, triggers when ready) + bigger brands")
 L.append("plan: [[Technical Interview Study Plan]] · log a rep by replying e.g. 'did Two Sum + Valid Anagram'")
 print("\n".join(L))
