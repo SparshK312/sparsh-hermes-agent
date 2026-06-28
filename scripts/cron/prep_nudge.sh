@@ -70,7 +70,9 @@ next_item, next_ctx = None, None
 ctx = None
 for ln in live.splitlines():
     h = re.match(r"\s*(?:#{2,4}\s+|\*\*)(.+?)(?:\*\*)?\s*$", ln)
-    if h and ("Pattern" in ln or ln.strip().startswith("#")):
+    if h and (ln.strip().startswith("#") or ln.strip().startswith("**")):
+        # capture both ## section headers AND **bold pattern names** so the nudge's
+        # next-item context is the specific pattern (e.g. "Arrays / Strings / Hash").
         ctx = re.sub(r"[*#]", "", ln).strip()
     m = re.search(r"\[ \]\s*([^·\n]+)", ln)
     if m:
