@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from muscle_volume import parse_workouts, LANDMARKS, ORDER, VAULT  # noqa: E402
-from muscle_heatmap import build_card, _bucket  # noqa: E402
+from muscle_heatmap import build_card, build_svg, _bucket  # noqa: E402
 
 HOME = Path.home()
 ENV_FILE = HOME / ".hermes" / ".env"
@@ -154,11 +154,58 @@ def send_photo(png: Path, caption: str) -> bool:
     return False
 
 
+def session_card_png(date: str) -> Path | None:
+    """Render TODAY's single-session muscle card in HEAT mode (which muscles were worked,
+    by intensity — NOT the weekly vs-target view, which would misread one session as
+    'undertrained everywhere'). Returns the PNG path, or None if no workout today."""
+    vol, n, unmapped, window, used = parse_workouts(1)   # today only
+    if n == 0:
+        return None
+    import cairosvg
+    CHARTS.mkdir(parents=True, exist_ok=True)
+    png = CHARTS / f"session-{date}.png"
+    cairosvg.svg2png(bytestring=build_svg(vol, "heat").encode(), write_to=str(png), output_width=1180)
+    return png
+
+
+def session_caption(date: str) -> str:
+    vol, n, unmapped, window, used = parse_workouts(1)
+    hit = ", ".join(m for m in ORDER if vol.get(m, 0) > 0) or "—"
+    cap = f"💪 *Today's session — muscles worked*\n{hit}"
+    if unmapped:
+        cap += f"\n⚠️ not in the muscle map (undercounted): {', '.join(sorted(unmapped))}"
+    return cap
+
+
+def send_session_card(date: str) -> bool:
+    """Render + send the single-session heat card to Telegram. Returns True on send."""
+    png = session_card_png(date)
+    if not png:
+        return False
+    return send_photo(png, session_caption(date)[:1020])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=7)
+    ap.add_argument("--session", action="store_true",
+                    help="render TODAY's single session in heat mode (which muscles you hit) instead of the weekly vs-target card")
     ap.add_argument("--no-send", action="store_true")
     args = ap.parse_args()
+
+    if args.session:
+        today = datetime.datetime.now(TZ).strftime("%Y-%m-%d")
+        png = session_card_png(today)
+        if not png:
+            print("[SILENT]")  # no workout today
+            return 0
+        if args.no_send:
+            print(session_caption(today))
+            print(f"(card → {png})")
+            return 0
+        ok = send_photo(png, session_caption(today)[:1020])
+        print("[SILENT]" if ok else "send-failed")
+        return 0 if ok else 1
 
     vol, n, unmapped, window, used = parse_workouts(args.days)
     if n == 0:

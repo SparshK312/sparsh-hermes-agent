@@ -80,10 +80,12 @@ def _route(event=None, gateway=None, session_store=None, **kwargs):
         escalate = bool(_ESCALATE.search(text)) and not _LOG_ONLY.match(text)
         if escalate:
             overrides[key] = {"model": COACH_MODEL, "_source": "router"}
+            gateway._evict_cached_agent(key)  # evict the warm agent so the next turn actually rebuilds on the escalated model (a dict-only override is ignored by a live cached agent)
             logger.info("intent-router: escalated turn to %s | %r", COACH_MODEL, text[:60])
             _audit("SONNET", text)
         elif cur:
             overrides.pop(key, None)  # was router-set; revert to the cheap default tier
+            gateway._evict_cached_agent(key)  # evict so the next turn rebuilds on the cheap default
             logger.info("intent-router: reverted to default tier | %r", text[:60])
             _audit("revert", text)
         else:

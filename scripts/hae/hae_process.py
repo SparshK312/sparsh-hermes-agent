@@ -153,18 +153,30 @@ def process_payload(path: Path, days: dict) -> None:
                     if q is not None:
                         row[col] = round(q)
             elif name == "sleep_analysis":
-                for k, col, nd in (
-                    ("totalSleep", "sleep_total_h", 2), ("core", "sleep_core_h", 2),
-                    ("deep", "sleep_deep_h", 2), ("rem", "sleep_rem_h", 2),
-                    ("awake", "sleep_awake_h", 2), ("inBed", "sleep_in_bed_h", 2),
-                ):
-                    q = _f(p.get(k))
-                    if q is not None:
-                        row[col] = round(q, nd)
-                if p.get("sleepStart"):
-                    row["sleep_start"] = str(p["sleepStart"])
-                if p.get("sleepEnd"):
-                    row["sleep_end"] = str(p["sleepEnd"])
+                # A single night is re-sent across payloads with SHRINKING look-back
+                # windows — e.g. 6.25h (full night) → 5.07h → 1.93h → 0.13h (last 40min).
+                # Last-write-wins grabbed the 0.13h scrap → garbage sleep. Instead keep
+                # the FULLEST record (largest total) for the day, and take its whole stage
+                # breakdown together so the stages stay consistent with the headline total.
+                # (Summing would be wrong — it'd multi-count the same night.)
+                total = _f(p.get("totalSleep"))
+                if total is None:  # HAE-version fallback: derive from stages, then asleep
+                    stages = [_f(p.get(k)) for k in ("core", "deep", "rem")]
+                    stages = [s for s in stages if s is not None]
+                    total = sum(stages) if stages else _f(p.get("asleep"))
+                prev = _f(row.get("sleep_total_h"))
+                if total is not None and (prev is None or total >= prev):
+                    row["sleep_total_h"] = round(total, 2)
+                    for k, col in (("core", "sleep_core_h"), ("deep", "sleep_deep_h"),
+                                   ("rem", "sleep_rem_h"), ("awake", "sleep_awake_h"),
+                                   ("inBed", "sleep_in_bed_h")):
+                        q = _f(p.get(k))
+                        if q is not None:
+                            row[col] = round(q, 2)
+                    if p.get("sleepStart"):
+                        row["sleep_start"] = str(p["sleepStart"])
+                    if p.get("sleepEnd"):
+                        row["sleep_end"] = str(p["sleepEnd"])
 
 
 def load_existing() -> dict:

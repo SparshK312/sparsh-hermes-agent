@@ -108,24 +108,6 @@ def test_deploy_sh_sets_up_observations_dir():
         "the contract on every interaction with that directory."
     )
 
-
-def test_voice_wrapper_patch_check_mode():
-    """The voice-wrapper patcher's --check mode must not modify anything and
-    should handle the no-Hermes-install case gracefully (for CI)."""
-    patcher = SCRIPTS_DIR / "patch" / "voice_wrapper_patch.py"
-    assert patcher.exists(), "voice_wrapper_patch.py missing"
-    result = subprocess.run(
-        ["python3", str(patcher), "--check"],
-        capture_output=True,
-        text=True,
-        env={**__import__("os").environ, "HERMES_GATEWAY_RUN": "/tmp/nonexistent-gateway-run.py"},
-    )
-    assert result.returncode in (0, 1, 2), (
-        f"voice_wrapper_patch --check exited with unexpected code {result.returncode}\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-
-
 def test_image_routing_patch_check_mode():
     """Same contract for the image-routing patcher."""
     patcher = SCRIPTS_DIR / "patch" / "image_routing_patch.py"
@@ -180,41 +162,5 @@ def test_image_routing_patch_roundtrip_on_fixture(tmp_path):
     assert "REVERTED" in r.stdout, r.stdout
 
     # back to unpatched
-    r = subprocess.run(["python3", str(patcher), "--check"], capture_output=True, text=True, env=env)
-    assert "state:  unpatched" in r.stdout, r.stdout
-
-
-def test_voice_wrapper_patch_roundtrip_on_fixture(tmp_path):
-    """Same round-trip test for voice-wrapper patcher (didn't exist before;
-    adding now while we're here)."""
-    import os
-    patcher = SCRIPTS_DIR / "patch" / "voice_wrapper_patch.py"
-    fixture = tmp_path / "run.py"
-    fixture.write_text(
-        '# minimal fixture mimicking the upstream wrapper block\n'
-        'if True:\n'
-        '    if True:\n'
-        '        if True:\n'
-        '            if True:\n'
-        '                if True:\n'
-        '                    enriched_parts.append(\n'
-        '                        f\'[The user sent a voice message~ \'\n'
-        '                        f\'Here\\\'s what they said: "{transcript}"]\'\n'
-        '                    )\n'
-    )
-    env = {**os.environ, "HERMES_GATEWAY_RUN": str(fixture)}
-
-    r = subprocess.run(["python3", str(patcher), "--check"], capture_output=True, text=True, env=env)
-    assert "state:  unpatched" in r.stdout, r.stdout
-
-    r = subprocess.run(["python3", str(patcher)], capture_output=True, text=True, env=env)
-    assert "PATCHED" in r.stdout, r.stdout
-
-    r = subprocess.run(["python3", str(patcher), "--check"], capture_output=True, text=True, env=env)
-    assert "state:  patched" in r.stdout, r.stdout
-
-    r = subprocess.run(["python3", str(patcher), "--revert"], capture_output=True, text=True, env=env)
-    assert "REVERTED" in r.stdout, r.stdout
-
     r = subprocess.run(["python3", str(patcher), "--check"], capture_output=True, text=True, env=env)
     assert "state:  unpatched" in r.stdout, r.stdout

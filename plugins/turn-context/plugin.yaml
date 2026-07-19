@@ -1,0 +1,6 @@
+name: turn-context
+version: 0.1.0
+description: "Inject the current date (America/Toronto) + a recent-day map into every turn via pre_llm_call, so date handling stops depending on the model remembering to run `date`. Fixes wrong-day food logging."
+author: "Sparsh (Hermes logging-reliability fix)"
+hooks:
+  - pre_llm_call

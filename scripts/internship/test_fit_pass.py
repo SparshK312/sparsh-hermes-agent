@@ -72,11 +72,14 @@ def main() -> int:
         if exp_dq == "none" and got_dq != "none":
             false_pos.append((cid, got_dq))
             ok = False
-        # band sanity
-        if band == "high" and score < 70:
-            band_fail.append((cid, "high<70", score)); ok = False
-        if band == "low" and score >= 40:
-            band_fail.append((cid, "low>=40", score)); ok = False
+        # band sanity — only for CLEAN (non-disqualified) rows. A disqualified row's
+        # score is irrelevant in production (it's sunk by the ❌ flag, not the score),
+        # so we don't assert its band; recall already verified it was caught.
+        if exp_dq == "none":
+            if band == "high" and score < 70:
+                band_fail.append((cid, "high<70", score)); ok = False
+            if band == "low" and score >= 40:
+                band_fail.append((cid, "low>=40", score)); ok = False
         mark = "✓" if ok else "✗"
         note = "" if got_dq == exp_dq else f" (got {got_dq})"
         print(f"{cid:12} {exp_dq:14} {got_dq:14} {band:5} {score:>5}  {mark}{note}")

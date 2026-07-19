@@ -21,9 +21,15 @@ import datetime
 import glob
 import os
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+# Exercise→muscle resolver (exact MAP ∪ learned overlay → fuzzy → keyword → untracked).
+# Same-dir import; exercise_playbook lazy-imports our MAP, so no import cycle at load.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import exercise_playbook  # noqa: E402
 
 def _default_vault() -> Path:
     """Single source of truth for the vault root across the fitness package
@@ -127,14 +133,17 @@ def parse_workouts(days: int):
         def flush(name, sets):
             if not name or sets == 0:
                 return
-            key = _norm(name)
-            if key not in MAP:
+            # Resolve via the exercise playbook: exact (MAP ∪ learned) → fuzzy →
+            # anatomical keyword → untracked → None. A None is a genuinely novel
+            # movement (flag it); a resolved-but-empty result (cardio/core/forearm)
+            # is recognized and adds no tracked volume — NOT a gap.
+            res = exercise_playbook.lookup(name)
+            if res is None:
                 unmapped.add(name)
                 return
-            prim, sec = MAP[key]
-            for m in prim:
+            for m in res["primary"]:
                 vol[m] += sets
-            for m in sec:
+            for m in res["secondary"]:
                 vol[m] += 0.5 * sets
         for ln in fm.split("\n"):
             m = re.match(r"^  - name:\s*(.+)$", ln)

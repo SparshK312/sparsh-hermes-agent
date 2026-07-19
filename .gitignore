@@ -58,3 +58,6 @@ scratch/
 state/
 *.sqlite
 *.db
+
+# Personal internship fit rubric — contains residency/targeting details, keep local (like internship_profile.txt)
+scripts/internship/fit_rubric.md

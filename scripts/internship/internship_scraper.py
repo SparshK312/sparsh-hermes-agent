@@ -246,6 +246,43 @@ COUNTRY_POSITIVE_SUBSTRINGS = [
     "nyc", "new york city",
 ]
 
+# Spelled-out state / province names. Real ATS boards (Ashby, Greenhouse) list
+# locations as "City, California" — the 2-letter-code check alone misses these,
+# which silently dropped nearly every elite US/Canada intern role.
+US_STATE_NAMES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+    "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+    "missouri", "montana", "nebraska", "nevada", "new hampshire", "new jersey",
+    "new mexico", "new york", "north carolina", "north dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina",
+    "south dakota", "tennessee", "texas", "utah", "vermont", "virginia",
+    "washington", "west virginia", "wisconsin", "wyoming",
+    "district of columbia",
+}
+CA_PROVINCE_NAMES = {
+    "alberta", "british columbia", "manitoba", "new brunswick", "newfoundland",
+    "labrador", "nova scotia", "northwest territories", "nunavut", "ontario",
+    "prince edward island", "quebec", "québec", "saskatchewan", "yukon",
+}
+# Major US/Canada tech hubs — catches bare-city listings ("Toronto") with no
+# state/country. Deliberately excludes ambiguous names (e.g. "Cambridge", which
+# is also UK) — those still resolve via a ", MA"/"massachusetts" signal instead.
+NA_CITIES = {
+    # US
+    "san francisco", "new york", "seattle", "boston", "austin", "los angeles",
+    "san jose", "sunnyvale", "mountain view", "palo alto", "menlo park",
+    "cupertino", "santa clara", "san diego", "chicago", "denver", "atlanta",
+    "dallas", "houston", "portland", "pittsburgh", "bellevue", "redmond",
+    "san mateo", "foster city", "culver city", "bentonville", "ann arbor",
+    "boulder", "irvine", "santa monica", "brooklyn",
+    # Canada
+    "toronto", "vancouver", "montreal", "montréal", "ottawa", "waterloo",
+    "kitchener", "calgary", "edmonton", "mississauga", "markham", "north york",
+    "kanata", "burnaby",
+}
+
 # Strings that strongly indicate non-US/Canada. Tested against location lowercased.
 COUNTRY_NEGATIVE_SUBSTRINGS = [
     "united kingdom", " uk", "uk,", "england", "scotland", "wales",
@@ -369,7 +406,16 @@ def is_watchlist_company(company: str) -> bool:
 
 
 def classify_location(location: str) -> tuple[str, str]:
-    """Returns one of ('match' | 'reject' | 'unclear', reason)."""
+    """Returns one of ('match' | 'reject' | 'unclear', reason).
+
+    Recognizes US/Canada across every format the ATS boards actually emit:
+      • explicit country words ("United States", "Canada")
+      • 2-letter codes, comma OR Workday-prefixed ("City, CA" / "US-CA-..." / "CA-ON-...")
+      • spelled-out state / province names ("San Francisco, California")
+      • bare major-hub cities ("Toronto")
+    Non-US/Canada country hits are word-boundary matched so "Indiana" is not
+    read as "India" and "Ukraine" is not read as "uk".
+    """
     if not location:
         return "unclear", "empty location"
     loc = location.strip()
@@ -383,27 +429,41 @@ def classify_location(location: str) -> tuple[str, str]:
                      "remote (canada)", "remote, canada"}:
         return "match", "remote (assume US/Canada-based)"
 
-    # Positive country mention wins — even if a non-target country is also in
+    # 1) Positive country mention wins — even if a non-target country is also in
     # the string (e.g. "Toronto, Canada / London UK").
     for pos in COUNTRY_POSITIVE_SUBSTRINGS:
         if pos in loc_lower:
             return "match", f"contains '{pos}'"
 
-    # Negative country hits → reject
+    # 2) Known non-US/Canada country/city → reject. Word-boundary matched so
+    # "Indianapolis, Indiana" is not killed by the "india" negative, etc.
     for neg in COUNTRY_NEGATIVE_SUBSTRINGS:
-        if neg in loc_lower:
-            return "reject", f"non-US/Canada (contains '{neg.strip()}')"
+        n = neg.strip()
+        if n and re.search(rf"\b{re.escape(n)}\b", loc_lower):
+            return "reject", f"non-US/Canada (contains '{n}')"
 
-    # State / province codes — require a COMMA prefix so we don't false-match
-    # leading country codes ("DE Schwalbach Frankfurt" → Delaware?? No, Germany).
-    # North American format is consistently "City, ST" — comma-prefixed.
-    code_matches = re.findall(r",\s*([A-Z]{2})\b", loc)
-    us_codes = {c for c in code_matches if c in US_STATES}
-    ca_codes = {c for c in code_matches if c in CA_PROVINCES}
-    if us_codes:
-        return "match", f"US state: {','.join(sorted(us_codes))}"
-    if ca_codes:
-        return "match", f"Canada province: {','.join(sorted(ca_codes))}"
+    # 3) 2-letter state/province codes: comma format ("City, CA") OR Workday's
+    # country-prefixed format ("US-CA-...", "CA-ON-..."). The country prefix is
+    # required for the hyphen form so a foreign "DE-BW-..." can't false-match.
+    codes = set(re.findall(r",\s*([A-Z]{2})\b", loc))
+    codes |= set(re.findall(r"\b(?:US|USA|CA)-([A-Z]{2})\b", loc))
+    if codes & US_STATES:
+        return "match", f"US state: {','.join(sorted(codes & US_STATES))}"
+    if codes & CA_PROVINCES:
+        return "match", f"Canada province: {','.join(sorted(codes & CA_PROVINCES))}"
+
+    # 4) Spelled-out state / province names ("San Francisco, California").
+    for name in US_STATE_NAMES:
+        if re.search(rf"\b{re.escape(name)}\b", loc_lower):
+            return "match", f"US state name: {name}"
+    for name in CA_PROVINCE_NAMES:
+        if re.search(rf"\b{re.escape(name)}\b", loc_lower):
+            return "match", f"Canada province name: {name}"
+
+    # 5) Bare major-hub city with no state/country ("Toronto", "San Francisco").
+    for city in NA_CITIES:
+        if re.search(rf"\b{re.escape(city)}\b", loc_lower):
+            return "match", f"NA city: {city}"
 
     return "reject", f"no US/Canada signal in '{loc[:60]}'"
 

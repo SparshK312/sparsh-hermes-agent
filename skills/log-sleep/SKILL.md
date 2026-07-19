@@ -1,6 +1,6 @@
 ---
 name: log-sleep
-description: 'Log last night''s sleep hours and optional quality rating to today''s daily-note frontmatter. Triggers on "/sleep 7.5", "slept 6 hours", "/sleep 7 quality 8", or natural mentions. Prefer Health Auto Export / watch data when available; use user-reported sleep as fallback when the watch was dead/uncharged or the cache has not populated yet.'
+description: 'Log last night''s sleep hours and optional quality rating to today''s daily-note frontmatter. Triggers on "/sleep 7.5", "slept 6 hours", "/sleep 7 quality 8", or natural mentions. When the user REPORTS a number, log it directly — their report is authoritative; do NOT dig through the HAE watch cache. Watch/HAE sleep flows into the note automatically via the hae-sync cron, so you never reconcile the two live.'
 version: 1.0.0
 platforms: [linux, macos]
 metadata:
@@ -11,6 +11,12 @@ metadata:
 
 # log-sleep
 
+## ⚡ How to log — read first
+
+1. **The date is GIVEN** in the turn context (`[Current date …] Today = YYYY-MM-DD`, plus recent days). Use it exactly — **never run `date` or guess.**
+2. **Write via `vault_log.py sleep` run through `terminal` — the ONE and ONLY write.** Direct `patch` / `write_file` / `execute_code` on the daily note are BLOCKED by a guard; don't attempt them. **Log immediately — no confirmation prompt** — then relay `vault_log`'s confirmation line (don't recompute it).
+
+
 ## When to Use
 
 When the user reports last night's sleep. Examples:
@@ -19,7 +25,7 @@ When the user reports last night's sleep. Examples:
 - "slept 6 hours" → 6 hours
 - "got 7.5 last night, felt rough — 5/10" → 7.5h, quality 5
 
-**HAE caveat:** when Apple Watch / Health Auto Export data is expected, check the cache first before treating a natural-language report as final. If the watch was dead/uncharged, or the cache has not populated yet, use the user report as a temporary fallback and backfill later when tracker data arrives. See `references/watch-cache-fallback.md` for the cache-backfill workflow.
+**🛑 Do NOT spelunk the HAE cache when the user reports a number.** If the user says "slept 10 hours" / "/sleep 7.5", their report IS the value — log it immediately and stop. The watch/HAE sleep lands in the note on its own via the `hae-sync` cron (`hae_daily_ingest.py`); you do NOT need to read `~/.hermes/health/hae/last.json` or loop through `raw/*.json` to "confirm" it. Doing so is what makes the bot thrash — the watch cache is often sparse/empty for a given night, so hunting for `sleep_analysis` there is a dead end. The two paths (manual report vs watch sync) are independent by design.
 
 ## Step-by-step
 
@@ -27,11 +33,9 @@ When the user reports last night's sleep. Examples:
    - Hours: float, required. Range 0–14 (sanity-check; flag if outside).
    - Quality: optional integer 1–10.
 
-2. **Check for tracker/cache data first.**
-   - If the user is clearly asking for logged sleep and Apple Watch / HAE data is expected, check the latest cache snapshot before falling back to the user's wording.
-   - Quick probe: `~/.hermes/health/hae/last.json`.
-   - If needed for a specific night/week, inspect `~/.hermes/health/hae/raw/<timestamp>.json` for `sleep_analysis`.
-   - If tracker data is present, prefer it over a fuzzy natural-language summary.
+2. **User gave a number → log it, skip the cache entirely.** Go straight to step 3. Do not read `last.json`, do not open any `raw/*.json`. (The watch value, if any, syncs in on its own.)
+
+   **Only** touch the cache in the narrow case where the user asks *what the watch/tracker recorded* and gives NO number of their own (e.g. "what did my watch say I slept?"). Even then: read `~/.hermes/health/hae/last.json` **once**. If that night's `sleep_analysis` total isn't there, tell them the watch didn't capture it and stop — do **not** loop through `raw/*.json` hunting for it. That loop is the thrash we're avoiding.
 
 3. **Write it with the deterministic vault writer — `vault_log.py`.** Do NOT hand-edit the YAML (no `patch`, no `python3 -c`, no heredocs, no `execute_code` — those trip the approval gate, are blocked in cron, and corrupt repeated `key:` lines). One command sets `sleep_hours` (replaces, never accumulates) + optional `sleep_quality`, preserves every other field + the body, and creates the note from the template if missing. Sleep that *ended* today is logged on today's note (default date is today, Toronto):
 

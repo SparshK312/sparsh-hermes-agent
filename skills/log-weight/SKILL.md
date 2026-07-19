@@ -11,6 +11,12 @@ metadata:
 
 # log-weight
 
+## ⚡ How to log — read first
+
+1. **The date is GIVEN** in the turn context (`[Current date …] Today = YYYY-MM-DD`, plus recent days). Use it exactly — **never run `date` or guess.**
+2. **Write via `vault_log.py weight` run through `terminal` — the ONE and ONLY write.** Direct `patch` / `write_file` / `execute_code` on the daily note are BLOCKED by a guard; don't attempt them. **Log immediately — no confirmation prompt** — then relay `vault_log`'s confirmation line (don't recompute it).
+
+
 ## When to Use
 
 When the user reports a bodyweight measurement. Examples:

@@ -290,6 +290,47 @@ def build_evidence(days: int = 7) -> dict:
     }
 
 
+def session_evidence(date: str) -> dict | None:
+    """Per-session readout for the JUST-FINISHED workout on `date`: split, exercises
+    (name/sets/top weight), total sets, muscles worked (that day), and per-lift vs-last.
+    Returns None if there's no workout file for that date."""
+    wf = WORKOUTS / f"{date}.md"
+    if not wf.exists():
+        return None
+    txt = read(wf, 20000)
+    fm = txt.split("---")[1] if txt.count("---") >= 2 else txt
+
+    def _g(key: str, default: str = "") -> str:
+        m = re.search(rf"^{key}:\s*(.+)$", fm, re.M)
+        return m.group(1).strip() if m else default
+
+    exercises, cur, weights = [], None, []
+    for ln in fm.split("\n"):
+        m = re.match(r"^  - name:\s*(.+)$", ln)
+        if m:
+            if cur:
+                exercises.append({"name": cur, "sets": len(weights), "top_lb": max(weights) if weights else None})
+            cur, weights = m.group(1).strip(), []
+        else:
+            wm = re.search(r"weight_lb:\s*([\d.]+)", ln)
+            if cur and wm:
+                try:
+                    weights.append(float(wm.group(1)))
+                except ValueError:
+                    pass
+    if cur:
+        exercises.append({"name": cur, "sets": len(weights), "top_lb": max(weights) if weights else None})
+
+    vol, n, unmapped, window, used = parse_workouts(1)   # today's muscle volume
+    muscles = {m: round(vol[m], 1) for m in ORDER if vol.get(m, 0) > 0}
+    prog = {p["lift"]: p for p in lift_progression(90)}  # wide window → each lift's previous session
+    return {
+        "date": date, "split": _g("split", "Workout"), "total_sets": _g("total_sets", "0"),
+        "duration_min": _g("duration_min", ""), "exercises": exercises,
+        "muscles_worked": muscles, "lift_vs_last": prog, "unmapped": sorted(unmapped),
+    }
+
+
 def context_docs() -> dict:
     return {
         "profile": read(HEALTH / "Profile.md"),
@@ -476,6 +517,45 @@ def memory_append(line: str) -> None:
         path.write_text(txt, encoding="utf-8")
     except Exception:  # noqa: BLE001
         pass
+
+
+def memory_refresh(snapshot: str, working: list, leaking: list, window_days: int) -> bool:
+    """Rewrite the coach-OWNED '## Adherence snapshot (auto)' section in Coach Memory from
+    real logged data, bump `last_updated`, and retire the stale '_TBD_' Works placeholder.
+    Leaves every human-authored section (stance, watch flags, the dated Log, Coach-logged)
+    untouched — so the agent keeps its own adherence read current instead of Sparsh fighting
+    its writes. Idempotent: re-running replaces the managed section in place."""
+    path = HEALTH / "Coach Memory.md"
+    try:
+        txt = path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return False
+    stamp = now().strftime("%Y-%m-%d")
+    txt = re.sub(r"^last_updated:.*$", f"last_updated: {stamp}", txt, count=1, flags=re.M)
+    txt = txt.replace(
+        "- _TBD — fill in as adherence data comes in._",
+        "- _Auto-refreshed from logged data — see **Adherence snapshot (auto)** below._")
+
+    sec = ["## Adherence snapshot (auto)",
+           f"*Refreshed {stamp} · last {window_days} days. The coach maintains this from logged data — don't hand-edit; it gets overwritten.*",
+           "", f"**Now:** {snapshot.strip()}", "", "**Working:**"]
+    sec += [f"- {b.strip()}" for b in (working or ["_not enough data yet_"])]
+    sec += ["", "**Leaking:**"]
+    sec += [f"- {b.strip()}" for b in (leaking or ["_nothing flagged_"])]
+    block = "\n".join(sec) + "\n"
+
+    marker = "## Adherence snapshot (auto)"
+    if marker in txt:
+        txt = re.sub(rf"{re.escape(marker)}.*?(?=\n## )", block.rstrip() + "\n", txt, count=1, flags=re.S)
+    elif "## Log" in txt:
+        txt = txt.replace("## Log", block + "\n## Log", 1)
+    else:
+        txt = txt.rstrip() + "\n\n" + block
+    try:
+        path.write_text(txt, encoding="utf-8")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 WAKE_GATE = '{"wakeAgent": false}'

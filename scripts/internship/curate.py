@@ -105,15 +105,32 @@ def _new_postings_digest(store, new_cids: set) -> str | None:
     clean = sorted([m for m in rows if not _disq(m)], key=lambda m: -int(m.get("hotness", 0) or 0))
     flagged = [m for m in rows if _disq(m)]
     n = len(rows)
-    lines = [f"🔥 *{n} new internship role{'s' if n != 1 else ''}* on your Curated Board:"]
-    for m in clean[:8]:
-        fresh = m.get("fresh", "")
+
+    def _fmt(m):
         fit = m.get("fit_score")
         fitstr = f" · fit {fit}" if isinstance(fit, (int, float)) else ""
-        lines.append(f"• [{m.get('tier', '?')}] *{m.get('company', '?')}* — "
-                     f"{str(m.get('role', '?'))[:46]}{fitstr} {fresh}".rstrip())
-    if len(clean) > 8:
-        lines.append(f"…and {len(clean) - 8} more.")
+        return (f"• [{m.get('tier', '?')}] *{m.get('company', '?')}* — "
+                f"{str(m.get('role', '?'))[:46]}{fitstr} {m.get('fresh', '')}".rstrip())
+
+    # CYCLE-OPEN WATCHER: a new tier-S/A role means a top brand just opened (or
+    # added) an intern req. These are rare + time-sensitive (top spots fill fast),
+    # so lead with them so they never get buried under B-tier volume.
+    elite = [m for m in clean if str(m.get("tier", "")).upper() in ("S", "A")]
+    rest = [m for m in clean if str(m.get("tier", "")).upper() not in ("S", "A")]
+
+    lines = [f"🔥 *{n} new internship role{'s' if n != 1 else ''}* on your Curated Board:"]
+    if elite:
+        lines.append(f"\n🚨 *{len(elite)} TOP-BRAND role{'s' if len(elite) != 1 else ''} "
+                     f"just opened* — apply early, these fill fast:")
+        lines += [_fmt(m) for m in elite[:8]]
+        if len(elite) > 8:
+            lines.append(f"…and {len(elite) - 8} more top-brand.")
+    if rest:
+        if elite:
+            lines.append("\n*Other new roles:*")
+        lines += [_fmt(m) for m in rest[:8]]
+        if len(rest) > 8:
+            lines.append(f"…and {len(rest) - 8} more.")
     if flagged:
         lines.append(f"\n⚠️ {len(flagged)} flagged (sunk, AI found a disqualifier):")
         for m in flagged[:4]:

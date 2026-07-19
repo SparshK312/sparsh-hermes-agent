@@ -21,10 +21,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 # Applicant profile is loaded from a gitignored local file (not hardcoded here) so
@@ -33,19 +34,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from applicant_profile import load_profile  # noqa: E402
 
 # ── config (swapping the model is a one-line edit) ────────────────────────────
-FIT_MODEL = "gpt-5.4-mini"          # EMPIRICALLY VALIDATED 2026-06-20 (test_fit_pass.py: 11/11 recall,
-#                                     0 false-pos incl. ITAR decoy, bands clean). -> "gpt-5.5" or
-#                                     "claude-haiku-4-5" only if a future eval fails.
-JD_TRUNC_CHARS = 2500               # head of the JD — eligibility/term language lives here (~714 tok)
-CHUNK_SIZE = 8                      # postings per LLM call
+FIT_MODEL = "gpt-5.4-mini"          # EMPIRICALLY VALIDATED 2026-06-22 with the fit_rubric.md prompt:
+#                                     test_fit_pass.py 7/7 runs STABLE PASS, 14/14 recall, 0 false-pos.
+#                                     The rich rubric made the cheap model consistent (raw mini was flaky).
+#                                     Escalate -> "gpt-5.5" (slow, reasoning) or "claude-..." only if a
+#                                     future eval fails. gpt-5.5 needs max_tokens headroom (handled below).
+# JD truncation: eligibility/requirements live at the TOP, but application DEADLINES
+# and legal text live at the BOTTOM. Pure-head truncation misses deadlines, so we keep
+# the head AND the tail of long JDs (~900 tok total).
+JD_HEAD = 2200
+JD_TAIL = 1300
+CHUNK_SIZE = 5                      # postings per LLM call (smaller = steadier recall, no dropped items)
 MAX_LLM_PER_RUN = 120              # hard cost guard (first run is ~94)
-PROMPT_VERSION = "fit-v1"          # bump to force re-score on prompt changes (part of cache key)
+PROMPT_VERSION = "fit-v3.4"        # bump to force re-score on prompt changes (part of cache key)
+#                                    v3.1: head+tail JD truncation so deadlines (end of JD) are seen
+#                                    v3.2: target cycles (Fall26/Win27/Spr27/Sum27) never wrong-cycle;
+#                                          7-8mo Sep-Apr co-ops are long-placement (not wrong-cycle)
+#                                    v3 (2026-06-22): externalized rubric (fit_rubric.md) — explicit
+#                                    decision procedure + "does NOT apply" guards + worked examples
 
 ENV_FILE = Path.home() / ".hermes" / ".env"
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 VALID_DQ = {"none", "wrong-cycle", "phd-required", "citizenship",
-            "clearance", "long-placement", "other"}
+            "clearance", "long-placement", "deadline-passed", "other"}
+_TEMPERATURE_OK = {"gpt-5.4-mini"}   # non-reasoning models that accept temperature=0
 # rough per-MTok pricing (USD) for the cost log — confirm against the live dashboard
 PRICE = {"gpt-5.4-mini": (0.25, 2.0), "gpt-5.5": (1.0, 8.0),
          "claude-haiku-4-5": (1.0, 5.0), "claude-sonnet-4-6": (3.0, 15.0)}
@@ -68,42 +81,111 @@ def log(msg: str) -> None:
     print(f"[fit-pass] {msg}", file=sys.stderr)
 
 
-# ── system prompt (eligibility language mirrors internship_triage.py) ─────────
-SYS_PROMPT = (
-    "You screen internship job descriptions for " + load_profile() + "\n\n"
-    "For EACH posting you get the real job description (jd). Read it and return per posting:\n"
-    "- fit_score: integer 0-100. 85-100 = target role (SWE/ML/Data intern) at a strong brand, "
-    "eligible, right cycle. 60-84 = eligible, good role, weaker brand or vaguer fit. 40-59 = "
-    "adjacent/uncertain. 0-39 = poor fit. ANY disqualifier => score <= 30.\n"
-    "- fit_why: <= 14 words, plain, why this score (cite the JD when relevant).\n"
-    "- disqualifier: ONE of [none, wrong-cycle, phd-required, citizenship, clearance, "
-    "long-placement, other]. If several apply pick the most severe "
-    "(citizenship/clearance > wrong-cycle > long-placement > phd-required > other).\n"
-    "- jd_summary: 1-2 sentences (<= 240 chars) summarizing the role from the JD.\n\n"
-    "Disqualifier definitions — be strict and literal:\n"
-    "- wrong-cycle: the JD EXPLICITLY names a term OUTSIDE {Fall 2026, Winter 2027, Spring 2027, "
-    "Summer 2027}, e.g. 'Summer 2026', 'Spring 2026', 'May-Aug 2026'. IMPORTANT: if the JD does NOT "
-    "state a specific term, leave disqualifier=none. Do NOT guess a cycle.\n"
-    "- phd-required: the JD REQUIRES an enrolled or completed PhD (not 'preferred', not Master's).\n"
-    "- citizenship: requires US CITIZENSHIP specifically. NOTE: ITAR, 'US Person', "
-    "green-card-acceptable, or 'must be authorized to work in the US' are NOT disqualifiers if the "
-    "applicant is US-work-authorized (see the profile above). Flag ONLY if it says US Citizen / citizenship.\n"
-    "- clearance: requires an ACTIVE security clearance (Secret / Top Secret / TS-SCI).\n"
-    "- long-placement: the JD states a 12-month or 16-month (or 'year-long', '8+ month') placement. "
-    "4-month / one-term / summer / standard co-op terms are FINE.\n"
-    "- other: a genuine disqualifier not above (e.g. role physically located outside US/Canada). "
-    "Use sparingly.\n"
-    "- none: default. When in doubt, prefer none — a hallucinated disqualifier on a good role is "
-    "WORSE than a missed one.\n\n"
-    'Return a JSON object EXACTLY: {"items":[{"id":str,"fit_score":int,"fit_why":str,'
-    '"disqualifier":str,"jd_summary":str}]}. Include EVERY id given. Use ONLY the postings provided.'
-)
+def _truncate_jd(jd: str) -> str:
+    """Keep the HEAD (eligibility/requirements) AND the TAIL (deadlines/legal) of a long
+    JD. Pure-head truncation misses application deadlines, which sit at the bottom."""
+    jd = jd or ""
+    if len(jd) <= JD_HEAD + JD_TAIL:
+        return jd
+    return jd[:JD_HEAD] + "\n…[middle omitted]…\n" + jd[-JD_TAIL:]
+
+
+_DATE = (r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+20\d\d"
+         r"|\d{1,2}/\d{1,2}/20\d\d|20\d\d-\d{2}-\d{2}")
+# Require a REAL application-deadline phrase before the date, not just any date near a loose
+# keyword — otherwise start/posting/grad dates false-positive. (_DATE needs a DAY number, so
+# bare "June 2026" start/grad dates can't match at all, which removes the dominant noise.)
+_DL_CTX = (r"(?:application[s]?[^.\n]{0,40}?(?:accept|until|through|by|clos|deadline|due)"
+           r"|accept(?:ed|ing|s)?[^.\n]{0,30}?(?:until|through|by)"
+           r"|appl(?:y|ication[s]?)[^.\n]{0,5}?by"
+           r"|deadline"
+           r"|clos(?:e|es|ing)[^.\n]{0,15}?(?:date|on|:|until))")
+_DEADLINE_RE = re.compile(_DL_CTX + r"[^.\n]{0,20}?(" + _DATE + r")", re.I)
+_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+
+
+def _extract_deadline(jd: str) -> str:
+    """Pull an application deadline/close date from the JD if stated (the model misses it
+    in a long JD tail at batch scale). Returns the date string, or '' if none found."""
+    m = _DEADLINE_RE.search(jd or "")
+    return m.group(1).strip() if m else ""
+
+
+def _parse_deadline(s: str):
+    """Parse the date string _extract_deadline returns into a date, or None."""
+    if not s:
+        return None
+    s = s.strip().rstrip(".")
+    m = re.match(r"(20\d\d)-(\d{2})-(\d{2})$", s)
+    if m:
+        try:
+            return date(int(m[1]), int(m[2]), int(m[3]))
+        except ValueError:
+            return None
+    m = re.match(r"(\d{1,2})/(\d{1,2})/(20\d\d)$", s)
+    if m:
+        try:
+            return date(int(m[3]), int(m[1]), int(m[2]))
+        except ValueError:
+            return None
+    m = re.match(r"([A-Za-z]+)\.?\s+(\d{1,2}),?\s+(20\d\d)$", s)
+    if m:
+        mo = _MONTHS.get(m[1][:3].lower())
+        if mo:
+            try:
+                return date(int(m[3]), mo, int(m[2]))
+            except ValueError:
+                return None
+    return None
+
+
+def _deadline_passed(jd: str) -> tuple[bool, str]:
+    """Deterministic: (True, date-string) if the JD states an application deadline now in the
+    PAST. The date comparison is done in CODE, never left to the model — the model mis-reads
+    'accepted at least until <date>' as a floor, not a deadline, and lets dead roles through."""
+    s = _extract_deadline(jd)
+    d = _parse_deadline(s)
+    return (bool(d and d < date.today()), s)
+
+
+# ── system prompt: loaded from the externalized rubric (fit_rubric.md) ────────
+# The rubric is the analyzer's full instruction set (decision procedure, disqualifier
+# rules with "does NOT apply" guards, fit bands, worked examples). The personal profile
+# is injected at the {{PROFILE}} token from the gitignored applicant_profile. Editing the
+# rubric .md is how you tune the analyzer — bump PROMPT_VERSION after, then re-run the eval.
+_RUBRIC_FILE = Path(__file__).resolve().parent / "fit_rubric.md"
+
+
+def _build_sys_prompt() -> str:
+    try:
+        rubric = _RUBRIC_FILE.read_text(encoding="utf-8")
+        if "{{PROFILE}}" in rubric:
+            return rubric.replace("{{PROFILE}}", load_profile())
+        return rubric
+    except Exception as e:  # noqa: BLE001 — rubric missing/unreadable -> safe minimal fallback
+        log(f"rubric file unreadable ({e}); using built-in fallback")
+        return ("You screen internship job descriptions for " + load_profile() + " For each "
+                "posting (with its jd) return JSON {\"items\":[{\"id\":str,\"fit_score\":int 0-100,"
+                "\"fit_why\":str,\"disqualifier\":\"none|wrong-cycle|phd-required|citizenship|"
+                "clearance|long-placement|deadline-passed|other\",\"jd_summary\":str}]}. Flag ONLY "
+                "clearly-stated disqualifiers; the applicant is US+Canada work-authorized (green "
+                "card, no sponsorship) so work-authorization requirements are NOT disqualifiers. "
+                "When unsure, use none. Include every id.")
+
+
+SYS_PROMPT = _build_sys_prompt()
 
 
 # ── model call (OpenAI + Claude branches, selected by model string) ───────────
 def _call_model(model: str, user_content: str, max_tokens: int = 1500):
     """Return parsed JSON dict from the model, or None on failure (3 retries)."""
     is_claude = model.startswith("claude")
+    # reasoning OpenAI models (gpt-5.5) spend tokens on hidden reasoning BEFORE the
+    # JSON output — give them headroom or the JSON truncates and items go missing.
+    is_reasoning = (not is_claude) and (model not in _TEMPERATURE_OK)
+    if is_reasoning:
+        max_tokens = max(max_tokens, 8000)
     key = env("ANTHROPIC_API_KEY" if is_claude else "OPENAI_API_KEY")
     if not key:
         log(f"no API key for {model}")
@@ -117,13 +199,18 @@ def _call_model(model: str, user_content: str, max_tokens: int = 1500):
                    "content-type": "application/json"}
         url = ANTHROPIC_URL
     else:
-        body = json.dumps({
+        payload = {
             "model": model,
             "messages": [{"role": "system", "content": SYS_PROMPT},
                          {"role": "user", "content": user_content}],
             "response_format": {"type": "json_object"},
             "max_completion_tokens": max_tokens,
-        }).encode()
+        }
+        # only non-reasoning models accept an explicit temperature; reasoning models
+        # (gpt-5.5) reject it. They're inherently steadier, so we just omit it there.
+        if model in _TEMPERATURE_OK:
+            payload["temperature"] = 0
+        body = json.dumps(payload).encode()
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         url = OPENAI_URL
     for attempt in range(3):
@@ -181,15 +268,28 @@ def score_batch(items: list[dict], model: str = FIT_MODEL) -> tuple[dict, dict]:
     for i in range(0, len(items), CHUNK_SIZE):
         chunk = items[i:i + CHUNK_SIZE]
         valid_ids = {it["id"] for it in chunk}
-        user = "Score these postings:\n" + json.dumps(chunk, ensure_ascii=False)
+        # explicitly extract any application deadline (it's buried in the JD tail and the
+        # model misses it at batch scale) and hand it to the model as a field to compare.
+        enriched = [{**it, "application_deadline": _extract_deadline(it.get("jd", ""))}
+                    for it in chunk]
+        user = (f"TODAY'S DATE is {date.today().isoformat()} (use it to judge deadline-passed; "
+                "an 'application_deadline' before today => deadline-passed).\n"
+                "Score these postings:\n" + json.dumps(enriched, ensure_ascii=False))
         parsed, usage = _call_model(model, user)
         usage_tot["prompt_tokens"] += usage.get("prompt_tokens", usage.get("input_tokens", 0))
         usage_tot["completion_tokens"] += usage.get("completion_tokens", usage.get("output_tokens", 0))
         if not parsed:
             continue
+        jd_by_id = {it["id"]: it.get("jd", "") for it in chunk}
         for it in parsed.get("items", []):
             v = _validate_item(it, valid_ids)
             if v:
+                # deterministic override: code, not the model, decides deadline-passed.
+                passed, ddl = _deadline_passed(jd_by_id.get(it["id"], ""))
+                if passed and v["fit_disqualifier"] != "deadline-passed":
+                    v["fit_disqualifier"] = "deadline-passed"
+                    v["fit_score"] = min(v["fit_score"], 10)
+                    v["fit_why"] = f"Application window closed ({ddl})."
                 out[it["id"]] = v
     return out, usage_tot
 
@@ -224,6 +324,25 @@ def _needs_scoring(m: dict, model: str) -> bool:
             or m.get("fit_prompt_ver") != PROMPT_VERSION)
 
 
+def _deadline_sweep(store) -> int:
+    """Deterministic deadline pass over EVERY posting (not just LLM-scored ones). Pure date
+    math, no API cost, so a role whose application window closes WHILE its fit is cached still
+    gets sunk. Authoritative over the model (which mis-reads 'accepted at least until <date>').
+    Returns how many roles it newly sank."""
+    flagged = 0
+    for cid, rec in store.items():
+        m = rec.get("machine", {})
+        passed, ddl = _deadline_passed((m.get("full_jd") or "").strip())
+        if passed and m.get("fit_disqualifier") != "deadline-passed":
+            store.upsert_machine(cid, {
+                "fit_disqualifier": "deadline-passed",
+                "fit_score": min(int(m.get("fit_score") or 100), 10),
+                "fit_why": f"Application window closed ({ddl}).",
+            })
+            flagged += 1
+    return flagged
+
+
 def run_fit_pass(store, model: str = FIT_MODEL, max_llm: int = MAX_LLM_PER_RUN,
                  dry_run: bool = False) -> FitStats:
     """Score JD-bearing postings that are new/changed; cache results in the store.
@@ -249,28 +368,35 @@ def run_fit_pass(store, model: str = FIT_MODEL, max_llm: int = MAX_LLM_PER_RUN,
     if len(todo) > max_llm:
         log(f"{len(todo)} need scoring; capping at {max_llm} (rest next run)")
         todo = todo[:max_llm]
-    if not todo:
-        return st
     if dry_run:
-        log(f"DRY: would score {len(todo)} postings on {model}")
+        if todo:
+            log(f"DRY: would score {len(todo)} postings on {model}")
         st.scored = len(todo)
         return st
 
-    items = [{"id": cid, "company": m.get("company", ""), "title": m.get("role", ""),
-              "location": m.get("location", ""), "cycle": m.get("cycle", ""),
-              "jd": (m.get("full_jd") or "")[:JD_TRUNC_CHARS]} for cid, m in todo]
-    results, usage = score_batch(items, model)
-    today = datetime.now().strftime("%Y-%m-%d")
-    for cid, m in todo:
-        r = results.get(cid)
-        if not r:
-            st.errors += 1
-            continue
-        store.upsert_machine(cid, {
-            **r, "fit_model": model, "fit_prompt_ver": PROMPT_VERSION,
-            "fit_at": today, "fit_jd_hash": _jd_hash((m.get("full_jd") or "").strip()),
-        })
-        st.scored += 1
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    if todo:
+        items = [{"id": cid, "company": m.get("company", ""), "title": m.get("role", ""),
+                  "location": m.get("location", ""), "cycle": m.get("cycle", ""),
+                  "jd": _truncate_jd(m.get("full_jd") or "")} for cid, m in todo]
+        results, usage = score_batch(items, model)
+        today = datetime.now().strftime("%Y-%m-%d")
+        for cid, m in todo:
+            r = results.get(cid)
+            if not r:
+                st.errors += 1
+                continue
+            store.upsert_machine(cid, {
+                **r, "fit_model": model, "fit_prompt_ver": PROMPT_VERSION,
+                "fit_at": today, "fit_jd_hash": _jd_hash((m.get("full_jd") or "").strip()),
+            })
+            st.scored += 1
+
+    # deterministic deadline sweep — ALWAYS (covers cached-only refreshes too)
+    sunk = _deadline_sweep(store)
+    if sunk:
+        log(f"deadline sweep: sank {sunk} past-deadline role(s)")
+
     st.cost = _cost(model, usage)
     log(f"{model}: scored {st.scored}, cached {st.cached}, no-JD {st.no_jd}, "
         f"errors {st.errors} · ~${st.cost:.4f} "
@@ -285,6 +411,6 @@ if __name__ == "__main__":
     VAULT = Path(os.environ.get("HERMES_VAULT")
                  or ("/home/hermes/vault" if Path("/home/hermes/vault").exists()
                      else str(Path.home() / "Documents" / "School Vault - UofT")))
-    store = CuratedStore(VAULT / "06 - Internships" / "Internship Pipeline" / "curated_postings.json").load()
+    store = CuratedStore(VAULT / "06 - Internships" / "Job Search" / "curated_postings.json").load()
     stats = run_fit_pass(store, dry_run="--dry-run" in sys.argv)
     print(stats)

@@ -11,6 +11,14 @@ metadata:
 
 # log-workout
 
+## ⚡ How to log — read first, follow exactly
+
+1. **The date is GIVEN** in the turn context (`[Current date …] Today = YYYY-MM-DD`, plus recent days for backfill). Use it exactly — **never run `date` or guess.**
+2. **Read** the existing `07 - Health/Workouts/<date>.md` first (recover an in-progress session), build the full merged `exercises[]`, then **write with `vault_log.py workout` via `terminal` — the ONE and ONLY write.**
+3. **Log immediately — NO confirmation menu.** Don't show a "✓ Log · ✎ Edit" gate or wait for approval. Write it, then **show the breakdown** (the exercises + sets you logged). If he says it's off, fix it then (reactive).
+
+🛑 **Direct vault writes are BLOCKED by a guard.** `patch` / `write_file` / `execute_code` on `Workouts/` or the daily-note health fields will be rejected — don't attempt them. `vault_log.py workout` (run via `terminal`) is the only way a workout reaches the vault. (Reading the workout file is fine.)
+
 ## What changed in v2
 
 v1 wrote a prose `**Workout:**` line to the daily note. That made progressive overload impossible to query — "what was my preacher curl max in May" required reading every daily note by hand. v2 keeps the daily-note line for the quick-scan UX, but the **canonical record** is now a structured file at `07 - Health/Workouts/<date>.md` with a YAML `exercises:` array of `{weight_lb, reps, ...}` objects. Dataview can now answer PR + volume questions.
@@ -52,7 +60,7 @@ Path: `07 - Health/Workouts/<date>.md`. If the file exists, parse the YAML front
 - **`APPEND_NEW_EXERCISE`** — user mentions an exercise name not yet in `exercises[]`, OR this is the first log of a fresh session. Add a new entry to `exercises[]`.
 - **`APPEND_SET_TO_LATEST`** — user mentions sets/weight without naming an exercise (e.g., "20 lb 3 sets" after "now doing hammer curls"). Append the new sets to `exercises[-1].sets`.
 - **`UPDATE_SET`** — user corrects a specific prior set (e.g., "rear delt 2nd set was actually 45 lb"). Find the matching exercise (by name, fuzzy-matched), then mutate `exercises[i].sets[j]`.
-- **`FINALIZE`** — user signals end-of-session ("done", empty message, photo with no caption mid-conversation). Compute totals; no exercise change.
+- **`FINALIZE`** — user signals end-of-session ("done", "that's it", empty message, photo with no caption mid-conversation). Compute totals; no exercise change. **→ Then auto-send the post-workout review (step 10): coaching readout + the muscle diagram.** If you're not sure he's actually done, ask one short question before triggering it.
 
 If the action is genuinely ambiguous (e.g., "did 20 lb" with no prior context), ask one clarifying question instead of guessing.
 
@@ -172,6 +180,34 @@ Examples:
 - `🏋️ Logged: Pull. 5 exercises, 14 sets. Session 1/4 for the week.`
 - `🏋️ Logged: Push. 4 exercises, 12 sets. 🎯 PR — Incline DB Press: 35 lb (prev max 30 lb).`
 - `🏋️ Logged: Cardio (30 min).`
+
+### 10. On FINALIZE (workout DONE) — auto-send the post-workout review
+
+When the action is **`FINALIZE`** — it's CLEAR the workout is finished (Sparsh says "done" / "that's it" / "finished my workout" / "wrapping up" / "that's my push day", or has clearly moved on) — then **after the final `vault_log.py workout` write, automatically run the post-workout review** (he should NOT have to ask):
+
+**First, teach any genuinely-new movement to the exercise playbook** (so the muscle diagram is complete). The playbook resolves almost everything automatically — exact match, fuzzy match against his history, and anatomical keywords (`pushdown`→Triceps, `leg press`→Quads, etc.). Only a *truly novel* name it can't place needs you. Run:
+
+```
+/home/hermes/.hermes/venvs/fitness/bin/python3 /home/hermes/.hermes/scripts/fitness/exercise_playbook.py resolve --name "<exercise 1>" --name "<exercise 2>" ...
+```
+
+For each name in the `misses` list (rare), assign its muscles from anatomy and teach it ONCE — it's an exact hit forever after:
+
+```
+/home/hermes/.hermes/venvs/fitness/bin/python3 /home/hermes/.hermes/scripts/fitness/exercise_playbook.py teach --name "<exact logged name>" --primary "Triceps" --secondary "Front Delts, Side Delts"
+```
+
+Muscle-group names must be from this exact set: `Chest, Front Delts, Side Delts, Triceps, Lats, Mid-Back, Rear Delts, Biceps, Quads, Hamstrings, Glutes, Calves`. Cardio / core / forearm work resolves to "untracked" on its own — **do NOT teach it muscles** (it correctly trains nothing scored). If `misses` is empty (the usual case), skip straight to the review.
+
+Then run the post-workout review:
+
+```
+HERMES_VAULT=/home/hermes/vault /home/hermes/.hermes/venvs/fitness/bin/python3 /home/hermes/.hermes/scripts/fitness/coach.py --mode session-review
+```
+
+Run it via `terminal` (note the **fitness venv** — the muscle card needs `cairosvg`). It **self-sends two Telegram messages**: a coaching readout of how the session went (lifts vs last time, what to push next) AND the muscle diagram of the muscles he hit today. It prints `[SILENT]`/the wake-gate — **relay nothing extra after it**; the script delivers both. Your own step-9 "🏋️ Logged" line still goes out as the immediate confirmation; the review follows from the script.
+
+**Only auto-trigger when it's clearly done.** If you're not sure he's finished (he just logged a set and might keep going), do NOT run it — keep logging, or ask ONE short question ("Done for today, or more to go?"). Once he confirms, run it. **Never run it mid-session** (it's a wrap-up). One review per finished session.
 
 ## Vault-write conventions
 

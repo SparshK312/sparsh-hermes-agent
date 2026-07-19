@@ -120,6 +120,18 @@ def update_frontmatter(note_path: Path, updates: dict, prev: dict, protected: se
     for idx, ln in enumerate(fm):
         if ln and not ln.startswith((" ", "\t", "#")) and ":" in ln:
             existing[ln.split(":", 1)[0].strip()] = idx
+
+    # Sleep is ATOMIC. If the headline `sleep_hours` is a manual value HAE doesn't own
+    # (e.g. the user reported a real 10.23h night the watch missed), do NOT write ANY
+    # sleep stage fields either — a 4.64h watch-fragment breakdown would contradict the
+    # manual total and leave the note self-inconsistent (which is what made the bot
+    # thrash trying to reconcile). Either HAE owns the whole sleep block, or it stays out.
+    if "sleep_hours" in existing:
+        cur = _field_value(fm[existing["sleep_hours"]])
+        last = prev.get("sleep_hours")
+        if cur != "" and (last is None or cur != last):
+            updates = {k: v for k, v in updates.items() if k not in protected}
+
     changed = 0
     written: dict[str, str] = {}
     for k, v in updates.items():

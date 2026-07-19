@@ -159,6 +159,9 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   rm -rf ~/.hermes/scripts/monitor && cp -r scripts/monitor ~/.hermes/scripts/monitor
   cp scripts/cron/cost_monitor.sh          ~/.hermes/scripts/cost_monitor.sh
   chmod +x ~/.hermes/scripts/cost_monitor.sh
+  # Ops+health dashboard (Phase 1). Pure-stdlib read-only web page served over the
+  # tailnet by hermes-dashboard.service; opens state.db mode=ro, serves vault charts.
+  rm -rf ~/.hermes/scripts/dashboard && cp -r scripts/dashboard ~/.hermes/scripts/dashboard
   # The internship watcher (scraper + sources + frontier-triage). Vendored into the
   # repo (was VPS-only). The cron runs internship_watch.sh -> internship_triage.py
   # (one GPT-5.5 call, no agent). bs4 + the OpenAI key must be present on the box.
@@ -174,10 +177,11 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   cp scripts/cron/coach_water.sh           ~/.hermes/scripts/coach_water.sh
   cp scripts/cron/coach_dinner.sh          ~/.hermes/scripts/coach_dinner.sh
   cp scripts/cron/coach_internship.sh      ~/.hermes/scripts/coach_internship.sh
+  cp scripts/cron/coach_refresh.sh         ~/.hermes/scripts/coach_refresh.sh
   # Nutrition visuals (daily fuel card + weekly Week-in-Food report) — nutrition_card.py wrappers.
   cp scripts/cron/fuel_card.sh             ~/.hermes/scripts/fuel_card.sh
   cp scripts/cron/week_food.sh             ~/.hermes/scripts/week_food.sh
-  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/trends_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh ~/.hermes/scripts/coach_water.sh ~/.hermes/scripts/coach_dinner.sh ~/.hermes/scripts/coach_internship.sh ~/.hermes/scripts/fuel_card.sh ~/.hermes/scripts/week_food.sh
+  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/trends_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh ~/.hermes/scripts/coach_water.sh ~/.hermes/scripts/coach_dinner.sh ~/.hermes/scripts/coach_internship.sh ~/.hermes/scripts/coach_refresh.sh ~/.hermes/scripts/fuel_card.sh ~/.hermes/scripts/week_food.sh
   # User plugins (auto-loaded via plugins.enabled in config.yaml).
   mkdir -p ~/.hermes/plugins
   rm -rf ~/.hermes/plugins/intent-router    && cp -r plugins/intent-router    ~/.hermes/plugins/intent-router       # coaching→Sonnet routing
@@ -200,15 +204,10 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   cp config/observations-README.md ~/.hermes/memories/observations/README.md
   echo \"  → observations dir ready (README.md \$(wc -c < ~/.hermes/memories/observations/README.md) bytes)\"
 
-  # Apply the voice-wrapper patch to Hermes' gateway/run.py. Strips the
-  # [The user sent a voice message~ ...] wrapper that breaks openai-codex
-  # voice handling. Idempotent — safe to call after every deploy. If the
-  # upstream source drifts and the patcher can't find the expected block,
-  # this exits non-zero and the deploy fails fast (so we know to manually
-  # re-verify before voice silently breaks).
-  echo
-  echo '  applying voice-wrapper patch to Hermes...'
-  /home/hermes/.hermes/hermes-agent/venv/bin/python3 scripts/patch/voice_wrapper_patch.py
+  # NOTE (2026-07-18, v0.18.2 upgrade): the voice-wrapper patch is RETIRED —
+  # upstream fixed the underlying bug (gateway/run.py now emits the transcript
+  # de-wrapped), so the patcher's anchor no longer exists and running it would
+  # fail-fast and abort this deploy. scripts/patch/voice_wrapper_patch.py deleted.
   # Apply the image-routing patch to Hermes' agent/image_routing.py. Drops
   # the 'What do you see in this image?' auto-prompt that fires when a photo
   # has no caption — that prompt biases the LLM into describe-image mode and

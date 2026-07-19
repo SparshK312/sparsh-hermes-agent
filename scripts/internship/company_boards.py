@@ -54,7 +54,6 @@ BOARDS = [
     {"name": "Cohere", "tier": "A", "ats_type": "ashby", "org": "cohere"},
     {"name": "Mercury", "tier": "A", "ats_type": "greenhouse", "token": "mercury"},
     {"name": "Coinbase", "tier": "A", "ats_type": "greenhouse", "token": "coinbase"},
-    {"name": "Visa", "tier": "A", "ats_type": "smartrecruiters", "company": "Visa"},
     {"name": "SoFi", "tier": "B", "ats_type": "greenhouse", "token": "sofi"},
     {"name": "Adobe", "tier": "A", "ats_type": "workday",
      "host": "adobe.wd5.myworkdayjobs.com", "site": "external_experienced"},
@@ -81,15 +80,34 @@ BOARDS = [
      "host": "mydpr.wd5.myworkdayjobs.com", "site": "11212017"},
     {"name": "1Password", "tier": "B", "ats_type": "ashby", "org": "1password"},
     {"name": "Rivian / VW", "tier": "B", "ats_type": "ashby", "org": "rivianvw.tech"},
-    {"name": "Cerebras", "tier": "B", "ats_type": "greenhouse", "token": "earlytalentcerebras"},
+    {"name": "Cerebras", "tier": "B", "ats_type": "ashby", "org": "cerebras"},
     {"name": "Lila Sciences", "tier": "B", "ats_type": "greenhouse", "token": "lilasciences"},
-    {"name": "UPSIDE Foods", "tier": "B", "ats_type": "greenhouse", "token": "memphismeats"},
     {"name": "Bosch", "tier": "B", "ats_type": "smartrecruiters", "company": "BoschGroup"},
     {"name": "Eversana", "tier": "B", "ats_type": "smartrecruiters", "company": "EVERSANA1"},
+
+    # ── ADDED 2026-07: elite brands missing from the list (tokens validated via
+    #    --validate-boards; dead ones pruned). ────────────────────────────────
+    {"name": "Palantir", "tier": "S", "ats_type": "lever", "site": "palantir"},
+    {"name": "Anduril", "tier": "A", "ats_type": "greenhouse", "token": "andurilindustries"},
+    {"name": "DoorDash", "tier": "A", "ats_type": "greenhouse", "token": "doordashusa"},
+    {"name": "Dropbox", "tier": "A", "ats_type": "greenhouse", "token": "dropbox"},
+    {"name": "Cloudflare", "tier": "A", "ats_type": "greenhouse", "token": "cloudflare"},
+    {"name": "Roblox", "tier": "A", "ats_type": "greenhouse", "token": "roblox"},
+    {"name": "Discord", "tier": "A", "ats_type": "greenhouse", "token": "discord"},
+    {"name": "Verkada", "tier": "B", "ats_type": "greenhouse", "token": "verkada"},
+    {"name": "Nuro", "tier": "B", "ats_type": "greenhouse", "token": "nuro"},
+    {"name": "Hudson River Trading", "tier": "A", "ats_type": "greenhouse", "token": "wehrtyou"},
+    {"name": "Samsara", "tier": "B", "ats_type": "greenhouse", "token": "samsara"},
+    {"name": "Affirm", "tier": "B", "ats_type": "greenhouse", "token": "affirm"},
 
     # ── manual / custom (no public API) — click-through, ranked by brand ────
     {"name": "Tesla", "tier": "S", "ats_type": "manual", "url": "https://www.tesla.com/careers/search/?type=3"},
     {"name": "Apple", "tier": "S", "ats_type": "manual", "url": "https://jobs.apple.com/en-us/search?team=internships"},
+    {"name": "Google", "tier": "S", "ats_type": "manual", "url": "https://www.google.com/about/careers/applications/jobs/results/?employment_type=INTERN"},
+    {"name": "Meta", "tier": "S", "ats_type": "manual", "url": "https://www.metacareers.com/jobs?is_intern=true"},
+    {"name": "Microsoft", "tier": "S", "ats_type": "manual", "url": "https://careers.microsoft.com/v2/global/en/students"},
+    {"name": "Netflix", "tier": "S", "ats_type": "manual", "url": "https://explore.jobs.netflix.net/careers"},
+    {"name": "Uber", "tier": "A", "ats_type": "manual", "url": "https://www.uber.com/us/en/careers/list/?query=intern"},
     {"name": "Rippling", "tier": "B", "ats_type": "manual", "url": "https://ats.rippling.com/rippling/jobs"},
 ]
 

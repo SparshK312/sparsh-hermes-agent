@@ -373,9 +373,108 @@ def run_internship_applied() -> int:
     return 0
 
 
+# ----------------------------------------------------------------- post-workout session review
+SESSION_SYS = (
+    "You are Sparsh's strength coach giving a SHORT post-workout readout of the session he "
+    "JUST finished. Near-beginner on a lean bulk; COACH ADHERENCE + progressive overload. "
+    "Blunt, numbers-first, plain English, no fluff, no fake hype. Using ONLY the session JSON: "
+    "(1) one line naming what he did (split · N exercises · M sets); (2) call out lifts that beat "
+    "/ matched / dropped vs last time from `lift_vs_last` (cite the lb numbers; status 'new' = "
+    "first time logged); (3) ONE concrete push for next time (add reps, or +2.5–5 lb on a flat "
+    "lift). If a major muscle group is missing, note it for next session. ≤5 short lines. Honest "
+    "but end on a real positive. NEVER invent numbers — use only what's in the JSON."
+)
+
+
+def run_session_review() -> int:
+    """Post-workout: a coaching readout of TODAY's session + the per-session muscle card.
+    Invoked by log-workout on FINALIZE (workout clearly done). Run under the FITNESS venv —
+    the muscle card render needs cairosvg."""
+    today = E.now().date().isoformat()
+    ev = E.session_evidence(today)
+    if not ev:
+        return _silent()   # no workout logged today — nothing to review
+    msg = None
+    if not NO_LLM:
+        # GPT-5.5 is a reasoning model — it spends tokens on hidden reasoning BEFORE the
+        # visible answer, so a low cap returns EMPTY. Give it real headroom (≥2500).
+        msg = E.compose_text(SESSION_SYS, json.dumps(ev, indent=2, default=str), max_tokens=3000)
+    if not msg:
+        lines = [f"🏋️ *{ev['split']}* — {len(ev['exercises'])} exercises, {ev['total_sets']} sets."]
+        for ex in ev["exercises"][:8]:
+            w = ex.get("top_lb")
+            lines.append(f"• {ex['name']}: {ex['sets']} sets" + (f" @ {w:g} lb" if w else ""))
+        if ev["muscles_worked"]:
+            lines.append("Hit: " + ", ".join(ev["muscles_worked"].keys()) + ".")
+        msg = "\n".join(lines)
+    rc = _emit(msg, "session-review")
+    # send the per-session muscle card (heat mode) — needs cairosvg (fitness venv)
+    if not DRY:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import fitness_report as FR  # noqa: E402
+            FR.send_session_card(today)
+        except Exception as e:  # noqa: BLE001
+            print(f"session card send failed: {e}", file=sys.stderr)
+    return rc
+
+
+# ----------------------------------------------------------------- coach-memory refresh
+REFRESH_SYS = (
+    "You maintain Sparsh's Coach Memory 'Adherence snapshot' from his REAL logged data. "
+    "Given the evidence packet, output JSON: {\"snapshot\": \"<=20-word current-state line\", "
+    "\"working\": [2-4 short bullets — patterns/behaviors that ARE driving adherence], "
+    "\"leaking\": [2-4 short bullets — where adherence breaks]}. Ground EVERY bullet in the "
+    "data and cite real numbers (sessions/week, avg kcal & protein, days logged, weight "
+    "trend). His #1 failure mode is under-eating + inconsistency; protein is the chronic "
+    "miss. Be specific and blunt — no hype, no generic advice, NEVER invent numbers. If a "
+    "field has no data, say so plainly rather than fabricating."
+)
+
+
+def run_refresh_memory() -> int:
+    """Refresh the coach-owned 'Adherence snapshot (auto)' section of Coach Memory from the
+    last 4 weeks of logged data + bump last_updated. Silent (file write only, no Telegram);
+    meant to run weekly so the coaching memory never goes stale. Reuses the weekly evidence."""
+    ev = E.build_evidence(28)
+    n, t, bw = ev["nutrition"], ev["training"], ev["bodyweight"]
+    if not NO_LLM:
+        docs = E.context_docs()
+        user = (f"## Profile\n{docs['profile']}\n\n## Coach Memory\n{docs['coach_memory']}\n\n"
+                f"## Evidence packet (last {ev['window_days']} days)\n"
+                f"{json.dumps(ev, indent=2, default=str)}\n\nOutput the adherence-snapshot JSON.")
+        parsed = E.compose_json(REFRESH_SYS, user)
+        if parsed and parsed.get("snapshot"):
+            ok = E.memory_refresh(parsed.get("snapshot", ""), parsed.get("working", []),
+                                  parsed.get("leaking", []), ev["window_days"])
+            print("refreshed coach memory" if ok else "refresh write failed")
+            return 0 if ok else 1
+        print("refresh: structured compose failed; templated", file=sys.stderr)
+    # deterministic fallback straight from the evidence numbers
+    snap = (f"{t['sessions_done']} lifts in {ev['window_days']}d · avg "
+            f"{n['avg_kcal']} kcal / {n['avg_protein_g']}g protein · weight trend "
+            f"{bw['trend_lb_over_window']} lb")
+    working, leaking = [], []
+    if n["days_logged"]:
+        working.append(f"Food logged {n['days_logged']}/{ev['window_days']} days — the tracking habit is holding")
+    if t["sessions_done"]:
+        working.append(f"{t['sessions_done']} sessions logged in the window")
+    if (n["avg_protein_g"] or 0) < 140:
+        leaking.append(f"Protein chronically under target — averaging {n['avg_protein_g']}g vs 140g")
+    if n["undereating_days"]:
+        leaking.append(f"{n['undereating_days']} under-eating day(s) below {n['undereating_threshold_kcal']} kcal")
+    if t["untrained"]:
+        leaking.append("Untrained muscle groups this window: " + ", ".join(t["untrained"]))
+    ok = E.memory_refresh(snap, working, leaking, ev["window_days"])
+    print("refreshed coach memory (templated)" if ok else "refresh write failed")
+    return 0 if ok else 1
+
+
 def main() -> int:
     return {
         "weekly": run_weekly,
+        "session-review": run_session_review,
+        "refresh-memory": run_refresh_memory,
         "meal-rescue": run_meal_rescue,
         "workout-rescue": run_workout_rescue,
         "preview": run_preview,
