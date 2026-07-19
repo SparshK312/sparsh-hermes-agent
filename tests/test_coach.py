@@ -100,7 +100,7 @@ def test_budget_daily_cap(monkeypatch, tmp_path):
     monkeypatch.setattr(E, "STATE", tmp_path / "coach_state.json")
     monkeypatch.setattr(E, "now", lambda: datetime.datetime(2026, 6, 15, 14, 0, tzinfo=TZ))
     assert E.budget_ok("a")[0]
-    E.record_send("a")
-    E.record_send("b")
-    assert not E.budget_ok("c")[0]   # 2 already sent today (normal cap)
-    assert E.budget_ok("c", red_alert=True)[0]   # red-alert cap is 3
+    for _cat in ("a", "b", "c", "d"):
+        E.record_send(_cat)
+    assert not E.budget_ok("e")[0]   # 4 already sent today (normal cap is 4)
+    assert E.budget_ok("e", red_alert=True)[0]   # red-alert cap is 5
