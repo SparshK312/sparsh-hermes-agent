@@ -45,14 +45,60 @@ CASES = [
 ]
 
 
+# Tier 2 — needs_approval(): destructive rewrites of high-value docs must ASK first,
+# additive edits must pass silently. (name, tool, args, expect_approval)
+_BIG = "x" * 400          # a chunk of existing content being removed
+_SMALL = "y" * 40
+
+APPROVE_CASES = [
+    # ---- MUST ASK (destructive) ----
+    ("rewrite Action Items section (the Peru incident)", "patch",
+     {"file_path": "00 - Dashboard/Action Items.md", "old_string": _BIG, "new_string": _SMALL}, True),
+    ("overwrite a Perfecti draft (the David incident)", "patch",
+     {"file_path": "/home/hermes/vault/06 - Internships/Perfecti/Engineering/David Wind-Down Message - Jul 18.md",
+      "old_string": _BIG, "new_string": ""}, True),
+    ("write_file over a dashboard doc", "write_file",
+     {"file_path": "00 - Dashboard/Life Context.md", "content": "replaced"}, True),
+    ("execute_code against internships dir", "execute_code",
+     {"code": "open('06 - Internships/x.md','w').write('gone')"}, True),
+    # ---- MUST PASS SILENTLY (additive / harmless) ----
+    ("append a task to Action Items", "patch",
+     {"file_path": "00 - Dashboard/Action Items.md", "old_string": "## Tasks", "new_string": "## Tasks\n- [ ] new thing"}, False),
+    ("tick a checkbox (same-length swap)", "patch",
+     {"file_path": "00 - Dashboard/Interview Prep.md", "old_string": "- [ ] rep 12", "new_string": "- [x] rep 12"}, False),
+    ("small typo fix in a dashboard", "patch",
+     {"file_path": "00 - Dashboard/Action Items.md", "old_string": "teh", "new_string": "the"}, False),
+    # ---- MUST NOT ASK (outside the protected tier) ----
+    ("big rewrite of course notes (not protected)", "patch",
+     {"file_path": "01 - Courses/CSC384/notes.md", "old_string": _BIG, "new_string": ""}, False),
+    ("daily-note rewrite stays out (prefill cron must not prompt)", "patch",
+     {"file_path": "04 - Daily Notes/2026-07-22.md", "old_string": _BIG, "new_string": ""}, False),
+    ("coach-memory rewrite stays out (refresh cron must not prompt)", "patch",
+     {"file_path": "07 - Health/Coach Memory.md", "old_string": _BIG, "new_string": ""}, False),
+    ("read_file never asks", "read_file",
+     {"file_path": "00 - Dashboard/Action Items.md"}, False),
+    ("terminal never asks", "terminal", {"command": "cat '00 - Dashboard/Action Items.md'"}, False),
+]
+
+
 def main() -> int:
     ok = True
+    print("--- Tier 1: decide() block/allow ---")
     for name, tool, args, exp in CASES:
         blocked = g.decide(tool, args) is not None
         status = "PASS" if blocked == exp else "FAIL"
         if blocked != exp:
             ok = False
         print(f"  [{status}] {'BLOCK' if blocked else 'allow'} (want {'BLOCK' if exp else 'allow'}) — {name}")
+
+    print("\n--- Tier 2: needs_approval() ask/pass ---")
+    for name, tool, args, exp in APPROVE_CASES:
+        asks = g.needs_approval(tool, args) is not None
+        status = "PASS" if asks == exp else "FAIL"
+        if asks != exp:
+            ok = False
+        print(f"  [{status}] {'ASK' if asks else 'pass'} (want {'ASK' if exp else 'pass'}) — {name}")
+
     print("\n=== ALL PASS ===" if ok else "\n=== SOME FAILED ===")
     return 0 if ok else 1
 
