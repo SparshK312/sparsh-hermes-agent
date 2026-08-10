@@ -28,6 +28,7 @@ import csv
 import glob
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -69,6 +70,16 @@ COLUMNS = [
     "walk_asymmetry_pct", "walk_double_support_pct",
     "stair_speed_up", "stair_speed_down", "physical_effort",
     "env_audio_db", "headphone_audio_db", "six_min_walk_m",
+    # --- provenance / confidence (not measurements) ---
+    # sleep_stages_valid: "false" when HAE reported a real total with an all-zero
+    #   stage breakdown, so downstream can say "stages unavailable" instead of
+    #   reporting a confident zero for deep sleep.
+    # last_export_utc / day_complete: HAE exports a RUNNING day-to-date total, so a
+    #   day's value is only final once an export arrives after that day ended. Without
+    #   this, a 13:14 partial (e.g. 3,838 steps) is indistinguishable from a finished
+    #   day, and the coach reasons off it as fact. day_complete=false means "so far",
+    #   not "this is the total".
+    "sleep_stages_valid", "last_export_utc", "day_complete",
 ]
 
 # Simple metrics: HAE metric name -> (csv column, transform(qty) -> value)
@@ -127,9 +138,21 @@ def _f(v):
         return None
 
 
+def _export_stamp(path) -> str:
+    """The export instant, from the payload FILENAME (e.g.
+    '2026-08-10T17-14-08-910203Z.json' -> '2026-08-10T17:14:08Z').
+
+    It cannot come from the data: with Aggregate=Day every point is stamped
+    00:00 local, so the point carries no information about WHEN it was sent."""
+    stem = Path(path).stem
+    m = re.match(r"(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})", stem)
+    return f"{m.group(1)}T{m.group(2)}:{m.group(3)}:{m.group(4)}Z" if m else ""
+
+
 def process_payload(path: Path, days: dict) -> None:
     payload = json.loads(Path(path).read_text())
     data = payload.get("data", payload)
+    stamp = _export_stamp(path)
     for m in data.get("metrics", []):
         name = m.get("name")
         for p in m.get("data", []):
@@ -137,6 +160,9 @@ def process_payload(path: Path, days: dict) -> None:
             if not d:
                 continue
             row = days.setdefault(d, {"date": d})
+            # Latest export that carried data for this day -> completeness signal.
+            if stamp and stamp > str(row.get("last_export_utc") or ""):
+                row["last_export_utc"] = stamp
             if name in SIMPLE:
                 col, fn = SIMPLE[name]
                 q = _f(p.get("qty"))
@@ -148,10 +174,20 @@ def process_payload(path: Path, days: dict) -> None:
                     else:
                         row[col] = v                     # snapshot → last write wins
             elif name == "heart_rate":
-                for k, col in (("Min", "hr_min"), ("Avg", "hr_avg"), ("Max", "hr_max")):
+                # Min/Max are daily EXTREMES, so they must aggregate as min()/max()
+                # across a day's payloads — not last-write-wins, which let a late
+                # partial window (say an evening at rest) overwrite the true daily
+                # max recorded during a lift. Avg stays last-write: HAE's own daily
+                # average is already computed over the full day, and we have no
+                # sample counts to re-weight a mean correctly.
+                for k, col, agg in (("Min", "hr_min", min), ("Avg", "hr_avg", None),
+                                    ("Max", "hr_max", max)):
                     q = _f(p.get(k))
-                    if q is not None:
-                        row[col] = round(q)
+                    if q is None:
+                        continue
+                    v = round(q)
+                    cur = _f(row.get(col))
+                    row[col] = v if (agg is None or cur is None) else agg(round(cur), v)
             elif name == "sleep_analysis":
                 # A single night is re-sent across payloads with SHRINKING look-back
                 # windows — e.g. 6.25h (full night) → 5.07h → 1.93h → 0.13h (last 40min).
@@ -165,14 +201,36 @@ def process_payload(path: Path, days: dict) -> None:
                     stages = [s for s in stages if s is not None]
                     total = sum(stages) if stages else _f(p.get("asleep"))
                 prev = _f(row.get("sleep_total_h"))
-                if total is not None and (prev is None or total >= prev):
+                # Strictly greater, not >=. On a tie the block re-entered and each
+                # stage wrote only `if q is not None`, so a later equal-total record
+                # that OMITS a stage key leaves the earlier record's stage in place —
+                # a row whose total/start/end come from one record and whose `deep`
+                # comes from another. Latent today (observed duplicates are identical)
+                # but it is exactly the kind of mixed-provenance row that is
+                # impossible to debug later.
+                if total is not None and (prev is None or total > prev):
                     row["sleep_total_h"] = round(total, 2)
+                    stages = {}
                     for k, col in (("core", "sleep_core_h"), ("deep", "sleep_deep_h"),
                                    ("rem", "sleep_rem_h"), ("awake", "sleep_awake_h"),
                                    ("inBed", "sleep_in_bed_h")):
                         q = _f(p.get(k))
                         if q is not None:
-                            row[col] = round(q, 2)
+                            stages[col] = round(q, 2)
+                    # HAE sometimes reports a real total with every stage at 0 (e.g.
+                    # 2026-07-28: totalSleep 2.34 with core=deep=rem=0). Writing those
+                    # zeros produces an arithmetically self-contradictory row that reads
+                    # downstream as "zero deep sleep" rather than "stages unavailable".
+                    # Keep the headline total; drop the bogus breakdown and say so.
+                    scored = sum(stages.get(c, 0) for c in
+                                 ("sleep_core_h", "sleep_deep_h", "sleep_rem_h"))
+                    if scored <= 0 and total > 0:
+                        for c in ("sleep_core_h", "sleep_deep_h", "sleep_rem_h"):
+                            stages.pop(c, None)
+                        row["sleep_stages_valid"] = "false"
+                    else:
+                        row["sleep_stages_valid"] = "true"
+                    row.update(stages)
                     if p.get("sleepStart"):
                         row["sleep_start"] = str(p["sleepStart"])
                     if p.get("sleepEnd"):
@@ -190,7 +248,22 @@ def load_existing() -> dict:
     return days
 
 
+def mark_completeness(days: dict) -> None:
+    """Set day_complete per row.
+
+    HAE (Date Range = 'Since Last Sync') exports a RUNNING day-to-date total, so a
+    day's numbers are only final once an export arrived AFTER that day ended. A day
+    whose last contributing export still falls on the same calendar day is a
+    partial — that is why 2026-08-10 reads 3,838 steps at 13:14 and why 14 of the
+    last 20 days understate. Rather than guess a correction, label it, so every
+    downstream surface can say "so far today" instead of stating a total."""
+    for d, row in days.items():
+        stamp = str(row.get("last_export_utc") or "")
+        row["day_complete"] = "true" if (stamp and stamp[:10] > d) else "false"
+
+
 def write_csv(days: dict) -> None:
+    mark_completeness(days)
     CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
     with CSV_PATH.open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=COLUMNS, extrasaction="ignore")

@@ -71,10 +71,40 @@ FIELD_MAP = {
 SLEEP_FIELDS = {"sleep_hours", "sleep_rem_h", "sleep_deep_h", "sleep_core_h", "sleep_awake_h"}
 
 
-def target_date() -> str:
-    if len(sys.argv) > 1:
-        return sys.argv[1]
-    return datetime.datetime.now(TZ).strftime("%Y-%m-%d")
+DEFAULT_BACKFILL_DAYS = 7
+
+
+def target_dates() -> list[str]:
+    """Dates to ingest, newest first.
+
+    Was `target_date()` — today only. That was the single biggest data-integrity
+    bug in the pipeline: the last hae-sync of the day runs at 21:40 local, so any
+    payload arriving after it updated metrics.csv (which reprocesses every raw
+    payload) but never reached the note, which was frozen forever at whatever the
+    21:40 partial happened to be. Across 103 days, 32 notes disagreed with the
+    archive and the notes understated steps by 18.5% — and coach_engine reads the
+    NOTE layer, so the coaching reasoned off the low numbers.
+
+    Ingest is idempotent and manual-edit-protected (see update_frontmatter), so
+    re-walking recent days is safe and self-healing.
+
+      hae_daily_ingest.py                -> last DEFAULT_BACKFILL_DAYS days
+      hae_daily_ingest.py 2026-08-04     -> that date only (back-compat)
+      hae_daily_ingest.py --days 30      -> last 30 days
+    """
+    args = [a for a in sys.argv[1:] if a]
+    if "--days" in args:
+        i = args.index("--days")
+        try:
+            n = max(1, int(args[i + 1]))
+        except (IndexError, ValueError):
+            n = DEFAULT_BACKFILL_DAYS
+    elif args and not args[0].startswith("-"):
+        return [args[0]]                      # explicit single date
+    else:
+        n = DEFAULT_BACKFILL_DAYS
+    today = datetime.datetime.now(TZ).date()
+    return [(today - datetime.timedelta(days=i)).isoformat() for i in range(n)]
 
 
 def load_row(date: str) -> dict | None:
@@ -176,15 +206,12 @@ def _save_state(state: dict) -> None:
         pass
 
 
-def main() -> int:
-    date = target_date()
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
-        print(f"refusing malformed date: {date!r}", file=sys.stderr)
-        return 1
+def ingest_one(date: str, state: dict) -> tuple[int, str]:
+    """Ingest a single date. Returns (fields_written, one-line status).
+    `state` is mutated in place; the caller persists it once."""
     row = load_row(date)
     if not row:
-        print(f"{date}: no metrics row in archive; nothing to write")
-        return 0
+        return 0, f"{date}: no metrics row in archive; nothing to write"
     has_sleep = bool(row.get("sleep_total_h"))
     updates: dict[str, str] = {}
     for col, field in FIELD_MAP.items():
@@ -195,15 +222,12 @@ def main() -> int:
             continue
         updates[field] = val
     if not updates:
-        print(f"{date}: archive row has no mappable metrics yet")
-        return 0
+        return 0, f"{date}: archive row has no mappable metrics yet"
     updates["hae_synced"] = datetime.datetime.now(TZ).isoformat(timespec="seconds")
 
     note = DAILY_DIR / f"{date}.md"
     if not note.exists():
-        print(f"{date}: daily note does not exist ({note.name}); skipping (CSV archive still has it)")
-        return 0
-    state = _load_state()
+        return 0, f"{date}: daily note does not exist ({note.name}); skipping (CSV archive still has it)"
     prev = state.get(date, {})
     n, written = update_frontmatter(note, updates, prev, SLEEP_FIELDS)
     # Remember what HAE now owns for this date, so a later manual edit is detected
@@ -211,9 +235,27 @@ def main() -> int:
     merged = dict(prev)
     merged.update(written)
     state[date] = merged
-    _save_state(state)
     metric_fields = [k for k in updates if k != "hae_synced"]
-    print(f"{date}: {'wrote' if n else 'no change'} ({len(metric_fields)} HAE fields, sleep={has_sleep})")
+    return n, f"{date}: {'wrote' if n else 'no change'} ({len(metric_fields)} HAE fields, sleep={has_sleep})"
+
+
+def main() -> int:
+    dates = target_dates()
+    bad = [d for d in dates if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d)]
+    if bad:
+        print(f"refusing malformed date(s): {bad!r}", file=sys.stderr)
+        return 1
+    # Load state ONCE and persist ONCE, so a multi-day walk is a single atomic
+    # update rather than one rewrite per day.
+    state = _load_state()
+    total_written = 0
+    for date in dates:
+        n, line = ingest_one(date, state)
+        total_written += n
+        print(line)
+    _save_state(state)
+    if len(dates) > 1:
+        print(f"backfill: {len(dates)} day(s) walked, {total_written} field(s) written")
     return 0
 
 
