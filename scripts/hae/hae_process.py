@@ -25,11 +25,18 @@ the morning/evening ingest so the two concerns stay decoupled.
 from __future__ import annotations
 
 import csv
+import datetime
 import glob
 import json
 import os
 import re
 import sys
+
+try:
+    from zoneinfo import ZoneInfo
+    _TZ = ZoneInfo("America/Toronto")
+except Exception:  # noqa: BLE001 — fall back to naive UTC rather than crash the pipeline
+    _TZ = None
 from pathlib import Path
 
 KJ_PER_KCAL = 4.184
@@ -149,6 +156,25 @@ def _export_stamp(path) -> str:
     return f"{m.group(1)}T{m.group(2)}:{m.group(3)}:{m.group(4)}Z" if m else ""
 
 
+def _export_local_day(stamp_utc: str) -> str:
+    """'2026-08-10T01:52:26Z' -> the America/Toronto CALENDAR DAY it fell on.
+
+    The payload FILENAME is UTC (trailing Z) but every day key in this archive is
+    Toronto-local (HAE stamps its points '... -0400'). Comparing the two directly
+    marks a day complete up to 4 hours early: an export at 01:52Z is 21:52 the
+    PREVIOUS evening in Toronto, i.e. the day was still running. 2026-08-09 hit
+    exactly this — last export 2026-08-10T01:52:26Z, genuinely a same-day partial
+    (~2h of activity missing), but a naive prefix compare called it complete."""
+    if not stamp_utc:
+        return ""
+    try:
+        dt = datetime.datetime.strptime(stamp_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return ""
+    return (dt.astimezone(_TZ) if _TZ else dt).date().isoformat()
+
+
 def process_payload(path: Path, days: dict) -> None:
     payload = json.loads(Path(path).read_text())
     data = payload.get("data", payload)
@@ -258,8 +284,8 @@ def mark_completeness(days: dict) -> None:
     last 20 days understate. Rather than guess a correction, label it, so every
     downstream surface can say "so far today" instead of stating a total."""
     for d, row in days.items():
-        stamp = str(row.get("last_export_utc") or "")
-        row["day_complete"] = "true" if (stamp and stamp[:10] > d) else "false"
+        local_day = _export_local_day(str(row.get("last_export_utc") or ""))
+        row["day_complete"] = "true" if (local_day and local_day > d) else "false"
 
 
 def write_csv(days: dict) -> None:
