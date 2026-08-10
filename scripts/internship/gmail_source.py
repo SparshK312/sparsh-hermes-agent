@@ -117,7 +117,9 @@ def fetch_email_postings(env, since_days: int = SINCE_DAYS) -> tuple[list, list]
     host = env("EMAIL_IMAP_HOST") or IMAP_HOST_DEFAULT
     postings, fails, seen = [], [], set()
     try:
-        M = imaplib.IMAP4_SSL(host)
+        # Bounded connect: an unreachable IMAP host used to hang the whole watcher
+        # past Hermes' 120s cron script limit (2026-06-21 hotfix).
+        M = imaplib.IMAP4_SSL(host, timeout=10)
         M.login(user, pw)
         M.select("INBOX", readonly=True)
         since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%d-%b-%Y")

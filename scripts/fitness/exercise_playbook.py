@@ -82,10 +82,10 @@ KEYWORD_RULES: list[tuple[list[str], list[str], list[str]]] = [
       "rowing machine", "row erg", " erg"], [], []),
     # 2. forearm / wrist → untracked (we don't score forearms)
     (["wrist", "forearm"], [], []),
-    # 3. core / abs → untracked
+    # 3. core / abs → Abs
     (["crunch", "sit up", "situp", "sit-up", "plank", "leg raise", "knee raise",
       "hanging", "oblique", "ab machine", "ab wheel", "russian twist", "toes to bar",
-      "l-sit", "l sit", "dead bug", "pallof"], [], []),
+      "l-sit", "l sit", "dead bug", "pallof"], ["Abs"], []),
     # 4. rear delts (before "fly")
     (["rear delt", "reverse fly", "reverse pec", "reverse peck", "face pull"],
      ["Rear Delts"], []),

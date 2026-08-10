@@ -35,6 +35,11 @@ FRONT_SLUG = {
     "trapezius": ["Mid-Back"],
     "quadriceps": ["Quads"],
     "calves": ["Calves"],
+    # Abs became a tracked group (LANDMARKS + ORDER) on the VPS 2026-07-17, but the
+    # slug maps were never updated — so ab volume was scored in the goals panel while
+    # the body always rendered it as "not trained". Both front regions -> the one group.
+    "abs": ["Abs"],
+    "obliques": ["Abs"],
 }
 BACK_SLUG = {
     "deltoids": ["Rear Delts"],

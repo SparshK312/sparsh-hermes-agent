@@ -100,10 +100,11 @@ LANDMARKS = {
     "Hamstrings":  (6, 10, 16, 20),
     "Glutes":      (0, 6, 12, 16),
     "Calves":      (8, 12, 16, 20),
+    "Abs":         (4, 6, 10, 12),
 }
-# render order (push→pull→arms→legs)
+# render order (push→pull→arms→legs→core)
 ORDER = ["Chest", "Front Delts", "Side Delts", "Triceps", "Lats", "Mid-Back",
-         "Rear Delts", "Biceps", "Quads", "Hamstrings", "Glutes", "Calves"]
+         "Rear Delts", "Biceps", "Quads", "Hamstrings", "Glutes", "Calves", "Abs"]
 
 
 def _norm(name: str) -> str:
