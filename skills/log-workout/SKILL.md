@@ -47,6 +47,16 @@ READ the existing workout file with `read_file` / `obsidian-vault-write`. Do the
 
 ## Step-by-step
 
+### 0. Photo input — check the FULL image cache before asking (skip if text-only)
+
+When the user sends a Hevy screenshot, **do NOT use `clarify` to ask for weights/reps as a first move.** The user typically sends multiple screenshots in the same session — a summary card (exercise names + set counts + total volume, but NO per-set weights) plus one or more detail screens (per-exercise sets with weight × reps). Check for all of them first:
+
+```
+ls -t /home/hermes/.hermes/image_cache/img_*.jpg
+```
+
+`vision_analyze` every image not already read in this conversation. The summary card is usually the first image sent; detail screens are subsequent. Only after exhausting the cache with no weight data should you log with `reps: null` / `weight_lb: null` placeholders — and even then, do not use `clarify`; just log the structure and note weights are missing in the reply.
+
 ### 1. Determine today's date
 
 In America/Toronto: `YYYY-MM-DD`.
@@ -216,7 +226,7 @@ Run it via `terminal` (note the **fitness venv** — the muscle card needs `cair
 - `lifted` is a free-form string — the writer quotes it if needed. Read-merge-write: read the existing `exercises[]` (step 2), apply your change (step 4), pass the full array to the writer.
 - `grep -c '^---$'` on both the daily note AND the workout file should return exactly 2 after a write.
 - Preserve all other daily-note frontmatter + body content exactly. Only touch `lifted:` and `**Workout:**`.
-- See `references/superset_and_continuation.md` for the logging pattern for supersets, unilateral work, and continuation updates.
+- See `references/superset_and_continuation.md` for the logging pattern for supersets, unilateral work, and continuation updates. See `references/hevy-screenshot-structure.md` for the Hevy image layout (summary card vs detail screens) and the cache-check pattern.
 
 ## Log the change
 
@@ -230,7 +240,9 @@ Subsequent updates within the same session: no Log.md entry needed.
 
 ## Pitfalls
 
-1. **Voice transcription noise** — fillers ("um", "and then"), homophones ("found his shoulder press" instead of "fourth he shoulder press"). Clean up when parsing. If a number sounds wrong (e.g., "two hundred pounds" for a known 30 lb dumbbell exercise), flag in reply rather than logging the bad number.
+1. **Hevy summary card ≠ full workout data — check the cache before asking.** The Hevy share card shows exercise names, set counts, total volume, and duration — but NO per-set weights or reps. Users routinely send the summary card PLUS detail screens in the same session. **Before using `clarify` or asking the user for weights, run `ls -t /home/hermes/.hermes/image_cache/img_*.jpg` and `vision_analyze` any unread images.** Detail screens (per-exercise breakdown with weight × reps) are typically the 2nd and 3rd images sent. Only after exhausting the cache with no weight data should you log with `weight_lb: null` / `reps: null` placeholders — and still do NOT use clarify; just note the gap in the reply and ask the user to send the detail screenshots. Never fabricate per-set data silently.
+
+2. **Voice transcription noise** — fillers ("um", "and then"), homophones ("found his shoulder press" instead of "fourth he shoulder press"). Clean up when parsing. If a number sounds wrong (e.g., "two hundred pounds" for a known 30 lb dumbbell exercise), flag in reply rather than logging the bad number.
 
 2. **Continuation messages** — "20 lb 3 sets" after "now doing X" means `APPEND_SET_TO_LATEST`, NOT a new exercise. Use the LATEST mentioned exercise in the conversation, even if it wasn't the most recent `APPEND_NEW_EXERCISE` action (user might be replying about a still-active exercise).
 

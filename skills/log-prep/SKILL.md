@@ -47,6 +47,8 @@ Keep his voice in mind for any prose (plain, matter-of-fact). Encourage lightly,
 
 ## Edge cases
 - **Item not found in the tracker** (he did something not on the list): still append a Session-log row + note it; suggest adding it to the plan if it recurs. Don't fabricate a checkbox.
-- **Multiple problems in one message:** check off all, one Session-log row summarizing (or one per problem — your call), redo rows for each coding problem.
+- **Multiple problems in one session (same message or across messages):** check off all. Create ONE Session-log row with all problems listed (e.g., "Two Sum, Contains Duplicate, Valid Anagram"). Add a separate redo row for EACH problem — all with "First solved" = today, "Re-solve due" = today+1 initially. Example:
+  - Session log: `| 2026-06-27 | Two Sum, Contains Duplicate, Valid Anagram | — | Batch session, Arrays/Hash pattern |`
+  - Redo rows: one per problem, same date.
 - **Ambiguous** ("did some leetcode"): ask one short question (which problems?) rather than guessing which to check off.
 - Never check off more than he actually reported.

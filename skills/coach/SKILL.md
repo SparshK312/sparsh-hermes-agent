@@ -20,11 +20,14 @@ to a proactive coach message (weekly check-in, meal rescue, missed-workout rescu
 - "/coach" · "coach me" · "how am I doing this week?"
 - "what should I focus on?" · "am I on track?" · "what do I need to fix?"
 - "should I be worried about my weight?" · "is my eating okay?"
+- "what's the workout advice for today?" · "review this session" · "how should I run this lift?"
 - a reply to a coach check-in like "no time is what broke" or "what should dinner be?"
 
 Do NOT use for plain logging (food/workout/weight/water/vitamins → the log-* skills) or for
-a simple read-out of today's numbers (→ today-summary). This skill is for coaching *judgment*,
-which runs on the frontier coach engine, not on you.
+a simple read-out of today's numbers (→ today-summary). If the user explicitly asks for
+advice/critique on a workout, switch to coach mode even if they also mention sets/weights;
+don't keep logging by default. This skill is for coaching *judgment*, which runs on the
+frontier coach engine, not on you.
 
 ## How it works
 
