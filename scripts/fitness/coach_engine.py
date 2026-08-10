@@ -102,6 +102,37 @@ def _f(d: dict, k: str):
         return None
 
 
+def has_value(d: dict, k: str) -> bool:
+    """True only if the frontmatter key exists AND carries a parseable number.
+
+    The whole nudge layer used `_f(fm, k) or 0`, which makes a BLANK field
+    indistinguishable from a logged zero. Once logging stopped on 2026-07-16 that
+    read as "0 kcal, 0L water" — i.e. maximum urgency — so lunch-check,
+    meal-rescue, water-check and dinner-check fired every single day for 24 days
+    with confident numbers that were never measured. Absence is not zero."""
+    return _f(d, k) is not None
+
+
+def logging_dark_days(max_days: int = 30) -> int:
+    """Consecutive days ending TODAY with no food logged at all (0 = logged today).
+
+    Lets the nudges tell "he ate nothing" (act on it) from "he isn't tracking"
+    (a different problem, and one that daily calorie alarms actively worsen)."""
+    today = now().date()
+    for i in range(max_days):
+        d = (today - datetime.timedelta(days=i)).isoformat()
+        if meals_logged(d) or has_value(daily_fm(d), "kcal"):
+            return i
+    return max_days
+
+
+def intake_is_tracked(date: str | None = None) -> bool:
+    """Did he log ANY food today? If not, today's kcal/protein are unknown, not zero,
+    and no nudge may assert a numeric shortfall."""
+    date = date or now().date().isoformat()
+    return bool(meals_logged(date)) or has_value(daily_fm(date), "kcal")
+
+
 def _avg(xs):
     xs = [x for x in xs if x is not None]
     return round(sum(xs) / len(xs), 1) if xs else None

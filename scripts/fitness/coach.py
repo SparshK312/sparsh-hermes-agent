@@ -17,6 +17,7 @@ agent. Rescues stay SILENT (just the gate) when not warranted — no over-nudgin
 """
 from __future__ import annotations
 
+import datetime
 import json
 import re
 import sys
@@ -153,7 +154,50 @@ MEAL_SYS = (
 )
 
 
+# Days-dark checkpoints at which the re-engagement nudge is allowed to speak.
+# Deliberately sparse: nagging daily about not-tracking is what made the channel
+# noise in the first place (4 false alarms/day for 24 days, 0 replies).
+DARK_CHECKPOINTS = (2, 5, 10, 20)
+DARK_TAIL_EVERY = 14   # past the last checkpoint, speak at most fortnightly
+
+
+def _dark_speaks(dark: int) -> bool:
+    """Checkpoint hit, or the fortnightly long tail. The tail matters: with
+    checkpoints alone, a lapse that lands between two of them (24 days, say)
+    would sit silent for weeks — which is how "quiet" becomes "abandoned"."""
+    return dark in DARK_CHECKPOINTS or (
+        dark > max(DARK_CHECKPOINTS) and dark % DARK_TAIL_EVERY == 0)
+
+
+def run_tracking_dark() -> int:
+    """Owns the 'he isn't logging' case that the intake nudges now decline.
+
+    One message at each checkpoint instead of a daily calorie alarm built on an
+    empty log — ~5 messages over five weeks rather than ~35."""
+    dark = E.logging_dark_days()
+    if not _dark_speaks(dark):
+        return _silent()
+    ok, _why = E.budget_ok("tracking-dark")
+    if not ok and not DRY:
+        return _silent()
+    since = (E.now().date() - datetime.timedelta(days=dark)).strftime("%b %-d")
+    if dark <= 5:
+        msg = (f"📉 *Food tracking has been dark since {since}* ({dark} days). "
+               f"I've muted the intake nudges because I genuinely don't know what you've "
+               f"eaten — they'd be guessing. Log one meal and they come back on.")
+    else:
+        msg = (f"📉 *{dark} days without a food log* (since {since}). Nothing downstream "
+               f"works without it — no fuel card, no muscle map, no weekly review. "
+               f"Restart with one meal today; the pantry remembers your usuals so it's fast.")
+    return _emit(msg, "tracking-dark")
+
+
 def run_meal_rescue() -> int:
+    # Nothing logged today => intake is UNKNOWN, not zero. Asserting "you're 1385 kcal
+    # short" off an empty log is how this fired 18/18 days into a dead channel. Hand the
+    # case to the re-engagement nudge; this one only speaks when it has real data.
+    if not E.intake_is_tracked():
+        return run_tracking_dark()
     pace = E.intake_pace()
     if not (pace["behind_kcal"] or pace["behind_protein"]):
         return _silent()
@@ -287,6 +331,10 @@ def run_chat() -> int:
 def run_water_check() -> int:
     """Mid-afternoon hydration nudge — fires ONLY if behind the paced 2.5L/day target."""
     fm = E.daily_fm(E.now().date().isoformat())
+    # Blank water_l means unlogged, not zero litres. Reporting "0.0L by 4:14 PM" off an
+    # absent field is a fabricated measurement.
+    if not E.has_value(fm, "water_l"):
+        return _silent()
     water = E._f(fm, "water_l") or 0.0
     n = E.now()
     h = n.hour + n.minute / 60
@@ -307,6 +355,9 @@ def run_water_check() -> int:
 def run_dinner_check() -> int:
     """Evening under-eating guard — fires ONLY if no dinner logged AND day is light on kcal."""
     today = E.now().date().isoformat()
+    # Same rule as meal-rescue: an empty log is unknown intake, not a light day.
+    if not E.intake_is_tracked(today):
+        return _silent()
     meals = E.meals_logged(today)
     kcal = int(E._f(E.daily_fm(today), "kcal") or 0)
     if "dinner" in meals or kcal >= 1800:                  # ate dinner or already well-fed → silent
@@ -514,6 +565,7 @@ def main() -> int:
         "session-review": run_session_review,
         "refresh-memory": run_refresh_memory,
         "meal-rescue": run_meal_rescue,
+        "tracking-dark": run_tracking_dark,
         "workout-rescue": run_workout_rescue,
         "preview": run_preview,
         "chat": run_chat,
