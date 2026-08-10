@@ -213,10 +213,44 @@ def _clip(s: str, limit: int) -> str:
     return s[: cut if cut > 0 else limit].rstrip()
 
 
+_RESOLVED_MARKERS = ("✅ resolved", "~~", "✅ done", "— done", "no longer relevant",
+                     "moot", "cancelled", "canceled", "superseded")
+
+
+def _drop_resolved_blocks(section: str) -> str:
+    """Drop '### ...' sub-blocks whose HEADING marks them resolved/struck.
+
+    Hard Deadlines accumulates history at the top — the first ~700 chars are a
+    RESOLVED July term-test block. With a flat 2600-char clip that history
+    displaced the genuinely urgent items further down (the Aug 17 extension
+    signature, the Aug 19 registrar correction, the Aug 22 final), so the one
+    message he reads each morning was spending its budget on settled matters.
+    Only the heading is inspected, so a live item that merely mentions a
+    finished sub-task is kept."""
+    blocks: list[list[str]] = [[]]          # [0] holds any preamble before the first '###'
+    for line in section.split("\n"):
+        if line.startswith("### "):
+            blocks.append([line])
+        else:
+            blocks[-1].append(line)
+    kept = []
+    for b in blocks:
+        heading = b[0] if b and b[0].startswith("### ") else ""
+        if heading and any(mk in heading.lower() for mk in _RESOLVED_MARKERS):
+            continue                        # settled item — drop the whole block
+        kept.append("\n".join(b))
+    return "\n".join(kept).strip()
+
+
 def gather_action_items() -> dict:
     """Hard Deadlines section text + a trimmed 'this week' slice from Action Items."""
     text = _read(ACTION_ITEMS)
     hard = _section(text, "## 🔴 hard deadlines") or _section(text, "## hard deadlines")
+    pruned = _drop_resolved_blocks(hard)
+    # Only accept the pruned version if it kept something — never let a heading-format
+    # change silently empty the most important input to the brief.
+    if pruned:
+        hard = pruned
     # 'this week' = the dated plan section if present, else the streams' urgent slice
     plan = ""
     m = re.search(r"^##\s*🗓️.*$", text, re.MULTILINE)

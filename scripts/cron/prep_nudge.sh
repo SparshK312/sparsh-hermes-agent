@@ -23,11 +23,15 @@ except Exception:
 ESCALATE_DAYS = 3            # quiet days after a rep before the nudge gets pointed
 ESCALATE_DAYS_FRESH = 2      # days since prep went live with STILL ZERO reps -> escalate
 PREP_START_DATE = "2026-06-24"   # when the nudge went live (for never-started escalation)
-# Known low-prep windows (inclusive) — nudge stays silent. Keep these in sync with
-# his calendar (CSC384 midterm Jul 7; SF/YC Jul 24-29). Add ranges as needed.
+# Known low-prep windows (inclusive) — nudge stays silent. Hand-maintained: when a
+# window passes, add the next one. Both original entries had EXPIRED, so the nudge had
+# no coverage for the CSC384 final or Peru — the two stretches it most obviously should
+# not nag through. Check this list whenever a fixed date lands in Life Context.
 LOW_PREP_WINDOWS = [
-    ("2026-07-06", "2026-07-07"),   # CSC384 midterm cram + day
-    ("2026-07-24", "2026-07-29"),   # SF / YC Startup School
+    ("2026-07-06", "2026-07-07"),   # CSC384 midterm cram + day (past)
+    ("2026-07-24", "2026-07-29"),   # SF / YC Startup School (past)
+    ("2026-08-15", "2026-08-22"),   # CSC384 final run-up + exam day (Sat Aug 22, 9am, 65% of grade)
+    ("2026-08-29", "2026-09-07"),   # Peru
 ]
 
 def vault() -> Path:
