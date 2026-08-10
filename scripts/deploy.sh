@@ -107,9 +107,17 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # it's already committed upstream). Without a sync run we DON'T discard (would lose
   # uncommitted edits) — a dirty tree then surfaces as a normal pull error instead.
   if [ \"$SYNC_RAN\" = \"true\" ] && [ -n \"\$(git status --porcelain -- skills/)\" ]; then
-    git stash push -u -m 'deploy-redundant-after-sync' >/dev/null 2>&1 && echo '  (stashed VPS skill edits — already captured upstream)'
+    # Pathspec-scoped: Step 0 only inspects skills/, so stashing the whole tree
+    # would discard un-captured work elsewhere (that is how the Abs muscle-tracking
+    # edits and the IMAP timeout fix became orphans in ~/.hermes/scripts/).
+    git stash push -u -m \"deploy-redundant-after-sync \$(date +%Y-%m-%d)\" -- skills/ >/dev/null 2>&1 \\
+      && echo '  (stashed VPS skill edits — already captured upstream)'
     git pull --ff-only
-    git stash drop >/dev/null 2>&1 || true
+    # Deliberately NOT dropped. The old 'git stash drop || true' dropped stash@{0}
+    # unconditionally — and if the push above stashed nothing, that silently ate a
+    # REAL earlier stash (this box carries two, from 2026-05-27 and 2026-06-10).
+    # A retained stash costs nothing and is the only recovery path.
+    echo '  (stash retained — inspect with: git stash list)'
   else
     git pull --ff-only
   fi
@@ -231,6 +239,17 @@ echo "[2b/3] Deploying SOUL ($SOUL_SRC) to VPS..."
 ssh -i "$VPS_SSH_KEY" "$VPS_HOST" '[ -f ~/.hermes/SOUL.md ] && cp ~/.hermes/SOUL.md ~/.hermes/SOUL.md.bak || true'
 scp -i "$VPS_SSH_KEY" "$SOUL_SRC" "$VPS_HOST:.hermes/SOUL.md"
 echo "  ✓ SOUL deployed (rollback: cp ~/.hermes/SOUL.md.bak ~/.hermes/SOUL.md)"
+
+# fit_rubric.md is gitignored (personal residency detail) but REQUIRED at runtime:
+# fit_pass.py loads it from its own directory, and Step 2 above just rm -rf'd that
+# directory. It can never arrive via git pull, so it ships here like SOUL.md does.
+if [ -f "scripts/internship/fit_rubric.md" ]; then
+  scp -q -i "$VPS_SSH_KEY" "scripts/internship/fit_rubric.md" \
+    "$VPS_HOST:.hermes/scripts/internship/fit_rubric.md"
+  echo "  ✓ fit_rubric.md shipped (gitignored — cannot ride the pull)"
+else
+  echo "  ⚠ scripts/internship/fit_rubric.md missing locally; fit_pass will fall back"
+fi
 echo
 
 # ===== Step 3: Restart Hermes =====
@@ -246,6 +265,12 @@ if [ "$DO_RESTART" = "true" ]; then
     # Tolerate absence on hosts where Phase 3 isn't installed.
     if systemctl list-unit-files hae-ingest.service >/dev/null 2>&1; then
       systemctl restart hae-ingest.service && systemctl is-active hae-ingest.service
+    fi
+    # Same for the dashboard: Step 2 rm -rf's ~/.hermes/scripts/dashboard and copies a
+    # new serve.py in, but the running unit kept executing the old code until someone
+    # restarted it by hand. Mirroring without restarting is a no-op.
+    if systemctl list-unit-files hermes-dashboard.service >/dev/null 2>&1; then
+      systemctl restart hermes-dashboard.service && systemctl is-active hermes-dashboard.service
     fi
   "
   echo "  ✓ restarted"
