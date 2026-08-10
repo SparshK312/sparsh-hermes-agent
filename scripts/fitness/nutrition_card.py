@@ -651,7 +651,10 @@ def main() -> int:
     if a.weekly:
         week = parse_week(date, a.days)
         if week["logged"] == 0:
-            print("[SILENT]")  # nothing logged in the window
+            # NOT [SILENT] — that means "delivered, stay quiet". Conflating the two
+            # is why nutrition-week-food reported success every Sunday since
+            # 2026-07-19 without rendering anything.
+            print(f"[NO-DATA] no meals logged in the last {a.days} days")
             return 0
         if a.no_send or a.out:
             svg = build_weekly_svg(week)
@@ -670,7 +673,8 @@ def main() -> int:
 
     day = parse_day(date)
     if not day:
-        print("[SILENT]")  # nothing logged — caller stays quiet
+        # nutrition-fuel-daily logged this as a clean exit for 23 consecutive nights.
+        print(f"[NO-DATA] nothing logged for {date}")
         return 0
 
     if a.no_send or a.out:

@@ -17,7 +17,10 @@ echo "$out" >> "$LOG"
 
 tail -n 300 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG" 2>/dev/null || true
 
+# See fuel_card.sh: [NO-DATA] is NOT success. This wrapper reported ok every Sunday
+# since 2026-07-19 while rendering nothing, because both cases printed [SILENT].
 case "$out" in
   *"[SILENT]"*|"") : ;;
+  *"[NO-DATA]"*) echo "no-data: $out" >> "$LOG" ;;
   *) echo "⚠️ weekly food report failed to send — check ~/.hermes/health/fitness.log" ;;
 esac

@@ -197,7 +197,10 @@ def main() -> int:
         today = datetime.datetime.now(TZ).strftime("%Y-%m-%d")
         png = session_card_png(today)
         if not png:
-            print("[SILENT]")  # no workout today
+            # NOT [SILENT]: that marker means "delivered, stay quiet". Using it here
+            # made "nothing to render" indistinguishable from success, so this cron
+            # logged a clean exit for weeks while producing no card at all.
+            print("[NO-DATA] no workout logged today")
             return 0
         if args.no_send:
             print(session_caption(today))
@@ -209,7 +212,10 @@ def main() -> int:
 
     vol, n, unmapped, window, used = parse_workouts(args.days)
     if n == 0:
-        print("[SILENT]")  # no workouts in window — nothing to report
+        # See above: distinct marker so a permanently-empty renderer is visible.
+        # fitness-weekly last produced a card on 2026-07-19 and reported ok every
+        # Sunday after that.
+        print(f"[NO-DATA] no workouts in the last {args.days} days")
         return 0
 
     import cairosvg

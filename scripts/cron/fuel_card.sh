@@ -27,8 +27,15 @@ find "$HERMES_VAULT/07 - Health/Charts" -maxdepth 1 -type f \
   \( -name 'fuel-*.png' -o -name 'session-*.png' -o -name 'week-food-*.png' -o -name 'coverage-*.png' \) \
   -mtime +45 -delete 2>/dev/null || true
 
-# [SILENT] = photo sent (or nothing logged today) → stay quiet. Anything else = a problem.
+# [SILENT]  = photo sent            -> quiet, and it genuinely worked.
+# [NO-DATA] = nothing to render     -> quiet to Telegram, but recorded distinctly so
+#             "the renderer produced nothing" stops looking like "the renderer
+#             succeeded". This case ran 23 consecutive nights reporting ok while
+#             producing no card, because both used to print [SILENT].
+#             The user-facing side of a long gap is coach.py --mode tracking-dark.
+# anything else = a real failure.
 case "$out" in
   *"[SILENT]"*|"") : ;;
+  *"[NO-DATA]"*) echo "no-data: $out" >> "$LOG" ;;
   *) echo "⚠️ fuel card failed to send — check ~/.hermes/health/fitness.log" ;;
 esac
