@@ -48,6 +48,26 @@ _APPROVE_DIRS = ("00 - Dashboard/", "06 - Internships/")
 # checkbox flips are well under this; wholesale section rewrites are well over.
 _DESTRUCTIVE_NET_CHARS = 200
 
+# TIER 3 — ADDITIVE claims about the outside world (provenance).
+# On 2026-07-30 Sparsh screenshotted a Zero2Sudo Instagram story — an account that
+# reposts interview processes OTHER people receive — and the agent recorded it as his
+# own, writing "INTERVIEW REQUEST Jul 30 ... 45 min technical via Google Meet" into
+# Internship Pipeline.md. He corrected it immediately; the agent said "Rolled back the
+# pipeline update" and made zero tool calls. The fabrication sat in his career dashboard
+# for 11 days. Tiers 1-2 both missed it because it was a small ADDITIVE edit.
+#
+# So: an edit that introduces a third-party commitment (an interview, an offer, a
+# rejection) into the career dashboards must be confirmed. These are claims about what
+# someone ELSE has done, they are load-bearing for real decisions, and the agent cannot
+# verify them from a screenshot. Additive edits that don't assert one still pass silently.
+_CLAIM_DIRS = ("00 - Dashboard/Internship Pipeline", "06 - Internships/")
+_CLAIM_MARKERS = (
+    "interview request", "interview invite", "interview invitation", "expedited interview",
+    "offer letter", "received an offer", "offer received", "moving to the next round",
+    "advanced to", "onsite scheduled", "phone screen scheduled", "technical scheduled",
+    "rejected", "rejection", "declined my application",
+)
+
 _MSG = (
     "🚫 vault-write-guard: don't hand-edit health files (it corrupts totals and lands on "
     "the wrong day). Use the deterministic writer via `terminal` instead:\n"
@@ -95,6 +115,18 @@ def decide(tool_name, args) -> str | None:
     return None
 
 
+def _new_outside_claim(path: str, old: str, new: str) -> str | None:
+    """The first outside-world claim marker that `new` introduces and `old` lacks,
+    for a path in the career dashboards. None otherwise. Pure + testable."""
+    if not any(d.lower() in (path or "").lower() for d in _CLAIM_DIRS):
+        return None
+    old_l, new_l = (old or "").lower(), (new or "").lower()
+    for marker in _CLAIM_MARKERS:
+        if marker in new_l and marker not in old_l:
+            return marker
+    return None
+
+
 def needs_approval(tool_name, args) -> str | None:
     """Return an approval-request message if this is a DESTRUCTIVE edit to a high-value
     doc (dashboards / internships), else None. Additive edits return None (pass silently).
@@ -121,7 +153,18 @@ def needs_approval(tool_name, args) -> str | None:
         new = args.get("new_string") or ""
         removed = len(old) - len(new)
         if removed < _DESTRUCTIVE_NET_CHARS:
-            return None  # additive / small edit — append, tick a box, fix a typo
+            # Additive — but check Tier 3 before waving it through.
+            claim = _new_outside_claim(path, old, new)
+            if claim:
+                return (
+                    f"✋ This adds an outside-world claim to {target}: \"{claim}\". "
+                    "Confirm it is about YOU and came from a document addressed to you — not a "
+                    "screenshot of someone else's process, a forwarded example, or a newsletter. "
+                    "(Guard added after 2026-07-30, when a Zero2Sudo Instagram story about other "
+                    "people's Google interviews was written into the pipeline as Sparsh's own and "
+                    "sat there for 11 days.)"
+                )
+            return None  # ordinary additive edit — append, tick a box, fix a typo
         return (
             f"✋ Destructive edit to {target}: this patch removes ~{removed} characters of "
             "existing content (a rewrite, not an append). Approve only if you actually want "

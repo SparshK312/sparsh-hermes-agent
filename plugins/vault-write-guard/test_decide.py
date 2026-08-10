@@ -78,6 +78,28 @@ APPROVE_CASES = [
     ("read_file never asks", "read_file",
      {"file_path": "00 - Dashboard/Action Items.md"}, False),
     ("terminal never asks", "terminal", {"command": "cat '00 - Dashboard/Action Items.md'"}, False),
+    # ---- Tier 3: ADDITIVE outside-world claims (the Zero2Sudo incident) ----
+    ("the real 2026-07-30 fabrication (3rd-party IG story -> pipeline)", "patch",
+     {"file_path": "00 - Dashboard/Internship Pipeline.md",
+      "old_string": "| **Google** | app submitted |",
+      "new_string": "| **Google** | INTERVIEW REQUEST Jul 30 | expedited interview request, "
+                    "45 min technical via Google Meet |"}, True),
+    ("adds an offer claim to internships", "patch",
+     {"file_path": "06 - Internships/Applications/Foo.md",
+      "old_string": "status: applied", "new_string": "status: offer received"}, True),
+    ("adds a rejection claim", "patch",
+     {"file_path": "00 - Dashboard/Internship Pipeline.md",
+      "old_string": "| Composio | onsite done |", "new_string": "| Composio | rejected Aug 10 |"}, True),
+    ("ordinary append to the pipeline still passes", "patch",
+     {"file_path": "00 - Dashboard/Internship Pipeline.md",
+      "old_string": "| **Mercor** | App pending |",
+      "new_string": "| **Mercor** | App pending | pinged the referrer |"}, False),
+    ("editing a row whose claim ALREADY existed passes", "patch",
+     {"file_path": "00 - Dashboard/Internship Pipeline.md",
+      "old_string": "rejected May 28", "new_string": "rejected May 28 (no reason given)"}, False),
+    ("same wording outside the career dirs passes", "patch",
+     {"file_path": "04 - Daily Notes/2026-08-10.md",
+      "old_string": "x", "new_string": "got an interview request today"}, False),
 ]
 
 
