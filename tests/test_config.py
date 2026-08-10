@@ -126,6 +126,17 @@ SOUL_REQUIRED_ROUTING_TARGETS = [
     "obsidian-vault-write",  # task/journal rule names the primitive
 ]
 
+# Of the above, the ones that must resolve to a real skill directory. web_search
+# is a Hermes builtin TOOL, not a skill, so it has no directory of its own.
+SOUL_ROUTING_SKILLS = [t for t in SOUL_REQUIRED_ROUTING_TARGETS if t != "web_search"]
+
+# Skills bundled with Hermes rather than living in this repo. SOUL rules and cron
+# jobs may legitimately name these even though skills/<name>/ is absent here.
+BUNDLED_SKILLS = {"google-workspace", "obsidian", "claude-code", "codex", "plan",
+                  "hermes-agent", "notion", "linear"}
+
+SKILLS_DIR = REPO_ROOT / "skills"
+
 
 def test_soul_md_exists():
     """config/SOUL.md must exist and be non-empty. deploy.sh copies it to
@@ -160,6 +171,58 @@ def test_soul_md_names_specialized_skills_in_routing():
         f"SOUL.md routing rules missing references to: {missing}. "
         "Hard routing only works if the skill names appear in SOUL."
     )
+
+
+def test_soul_routing_targets_resolve_to_real_skills():
+    """Every skill SOUL routes to must actually EXIST.
+
+    This is the other half of the test above, and its absence cost 47 days.
+    On 2026-06-25 the background curator deleted skills/obsidian-vault-write
+    (collateral from raw `terminal` mv sweeps — it was never on the curator's
+    declared archive list, so it is not in .archive/, and it had never been
+    committed to git). Every 06:50 daily-note-prefill run since logged
+    "Skill 'obsidian-vault-write' not found", silently dropping the Google
+    Calendar prefill and the Action-Items deadline lift.
+
+    The suite stayed green the whole time: the presence test above asserts the
+    STRING is in SOUL, never that the skill resolves. It therefore actively
+    REQUIRED the dangling reference — cleaning SOUL would have failed CI.
+    Presence and existence are different assertions; assert both."""
+    for name in SOUL_ROUTING_SKILLS:
+        if name in BUNDLED_SKILLS:
+            continue
+        skill_md = SKILLS_DIR / name / "SKILL.md"
+        assert skill_md.is_file(), (
+            f"SOUL routes to '{name}' but {skill_md.relative_to(REPO_ROOT)} does "
+            f"not exist. Either restore the skill or remove it from SOUL's routing "
+            f"rules — a routing rule pointing at nothing degrades silently to a "
+            f"WARNING in errors.log that nobody reads."
+        )
+
+
+def test_cron_additions_declared_skills_exist():
+    """Any skill a cron job declares must resolve.
+
+    Hermes' scheduler skips a missing skill and runs the job anyway (WARNING
+    only, scheduler.py), so a dangling cron skill reference produces a job that
+    still 'succeeds' while doing less than it claims — exactly how the
+    obsidian-vault-write breakage hid for 47 days. Vacuous today (the repo's
+    cron additions are all script-mode) — it exists as a tripwire for the next
+    agent-mode job somebody adds."""
+    data = json.loads((CONFIG_DIR / "cron_additions.json").read_text())
+    for job in data.get("jobs_to_append", []):
+        declared = list(job.get("skills") or [])
+        if job.get("skill"):
+            declared.append(job["skill"])
+        for name in declared:
+            if name in BUNDLED_SKILLS:
+                continue
+            skill_md = SKILLS_DIR / name / "SKILL.md"
+            assert skill_md.is_file(), (
+                f"Cron job '{job.get('name')}' declares skill '{name}', but "
+                f"{skill_md.relative_to(REPO_ROOT)} does not exist. Hermes will "
+                f"skip the skill and run the job anyway, so this fails silently."
+            )
 
 
 def test_soul_md_warns_against_notes_section_for_food():
