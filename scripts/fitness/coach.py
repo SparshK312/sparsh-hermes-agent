@@ -187,7 +187,12 @@ def run_workout_rescue() -> int:
     today = E.now().date().isoformat()
     # A workout file dated today means he lifted today.
     trained_today = (E.WORKOUTS / f"{today}.md").exists()
-    idle = t.get("days_since_last_lift") or 0
+    # `or 0` used to collapse None -> 0 here, which silenced this nudge permanently
+    # once he passed the evidence window without lifting. days_since_last_lift is now
+    # unbounded (coach_engine.last_lift_days_ago); None means "never logged a workout",
+    # which still warrants the nudge rather than suppressing it.
+    raw_idle = t.get("days_since_last_lift")
+    idle = DAYS if raw_idle is None else raw_idle
     warranted = (not trained_today) and idle >= 2 and t["sessions_done"] < t["planned_per_week"]
     if not warranted:
         return _silent()
@@ -318,7 +323,34 @@ def run_dinner_check() -> int:
 
 # ----------------------------------------------------------------- internship accountability
 INTERN_STATE = E.HOME / ".hermes" / "health" / "internship_state.json"
-WORKLIST = E.VAULT / "06 - Internships" / "Apply Now Worklist - Jun 2026.md"
+
+
+def _find_worklist():
+    """Locate the Apply-Now Worklist, tolerating vault reorganisation.
+
+    This was a hardcoded path to '06 - Internships/Apply Now Worklist - Jun 2026.md'.
+    The 2026-06-26 vault reorg moved the file into '06 - Internships/Job Search/'
+    and fixed the paths in curate.py and fit_pass.py but not this one. _read()
+    returned "" -> _worklist_backlog() returned 0 -> run_internship_check()
+    took its `if not count: return _silent()` branch on EVERY weekday for six
+    weeks. The nudge never once fired and nothing surfaced, because "no backlog"
+    and "cannot find the file" were the same code path.
+
+    Resolution order: known locations first, then a glob so a future move
+    degrades to a warning rather than permanent silence."""
+    base = E.VAULT / "06 - Internships"
+    for rel in ("Job Search/Apply Now Worklist - Jun 2026.md",
+                "Apply Now Worklist - Jun 2026.md"):
+        p = base / rel
+        if p.is_file():
+            return p
+    hits = sorted(base.glob("**/Apply Now Worklist*.md")) if base.is_dir() else []
+    if hits:
+        return hits[0]
+    return base / "Job Search" / "Apply Now Worklist - Jun 2026.md"  # canonical; for the error path
+
+
+WORKLIST = _find_worklist()
 
 
 def _intern_applied_today() -> bool:
@@ -352,8 +384,14 @@ def run_internship_check() -> int:
         return _silent()
     if _intern_applied_today():
         return _silent()
+    # Distinguish "no backlog" from "cannot read the file". Collapsing both into
+    # one silent branch is what hid the 2026-06-26 path breakage for six weeks.
+    if not WORKLIST.is_file():
+        print(f"[coach] WARNING: Apply-Now Worklist not found at {WORKLIST} — "
+              f"internship accountability cannot run.", file=sys.stderr)
+        return _silent()
     count, top = _worklist_backlog()
-    if not count:                              # no backlog / can't read worklist → silent
+    if not count:                              # genuinely empty backlog → silent
         return _silent()
     ok, _why = E.budget_ok("internship-check")
     if not ok and not DRY:

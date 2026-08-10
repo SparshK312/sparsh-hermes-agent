@@ -112,6 +112,25 @@ def _dates(days: int, end: datetime.date | None = None) -> list[str]:
     return [(end - datetime.timedelta(days=i)).isoformat() for i in range(days)]
 
 
+# ---------------------------------------------------------------- last lift (unbounded)
+def last_lift_days_ago() -> int | None:
+    """Days since the most recent workout file, with NO window bound.
+
+    Returns None only when he has never logged a workout at all — which is a
+    genuinely different state from "hasn't lifted in a while" and must not be
+    conflated with it (see build_evidence + coach.run_workout_rescue)."""
+    import glob
+    latest = None
+    for fpath in glob.glob(str(WORKOUTS / "*.md")):
+        try:
+            d = datetime.date.fromisoformat(Path(fpath).stem)
+        except ValueError:
+            continue                      # not a YYYY-MM-DD workout file
+        if latest is None or d > latest:
+            latest = d
+    return None if latest is None else (now().date() - latest).days
+
+
 # ---------------------------------------------------------------- per-lift progression
 def lift_progression(days: int) -> list[dict]:
     """Per-exercise top-set trend over the window: last vs previous session."""
@@ -251,10 +270,13 @@ def build_evidence(days: int = 7) -> dict:
 
     weights.sort()
     wt_trend = round(weights[-1][1] - weights[0][1], 1) if len(weights) >= 2 else None
-    days_since_lift = None
-    if used_dates:
-        last = max(datetime.date.fromisoformat(d) for d in used_dates)
-        days_since_lift = (now().date() - last).days
+    # days_since_last_lift must NOT be bounded by the evidence window. It used to be
+    # derived from used_dates (window-scoped), so it went None the moment he'd been
+    # idle longer than `days` — i.e. it vanished exactly when the number mattered most.
+    # Downstream, `t.get("days_since_last_lift") or 0` then collapsed None -> 0, and the
+    # missed-workout rescue's `idle >= 2` guard could never be true again. It went dark
+    # after 2026-07-16 and never fired. Scan the Workouts dir instead: unbounded lookback.
+    days_since_lift = last_lift_days_ago()
 
     flags = []
     if undereat or (kcals and _avg(kcals) and _avg(kcals) < TARGETS["kcal"] - 250):
