@@ -40,9 +40,11 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 def _default_vault() -> Path:
@@ -236,8 +238,45 @@ def _parse_item(spec: str) -> dict:
     return {"name": name, "kcal": nums[0], "protein_g": nums[1], "carbs_g": nums[2], "fat_g": nums[3]}
 
 
+# A re-logged meal within this many minutes is treated as a duplicate, not a second
+# helping. Sized from the actual failure: 99% of Telegram sessions ended in a forced
+# compression, and the compaction handler re-injected verbatim user messages back into
+# the stream — so the same meal description got processed twice, seconds to minutes
+# apart. Genuine repeats (a second coffee) are hours apart and pass straight through.
+DEDUPE_WINDOW_MIN = 20
+
+
+def _meal_fingerprint(meal_type: str, items: list[dict], macros: dict) -> str:
+    """Content hash of a meal: type + sorted item names + rounded headline macros."""
+    payload = json.dumps({
+        "meal": (meal_type or "").strip().lower(),
+        "items": sorted((i.get("name") or "").strip().lower() for i in items),
+        "kcal": int(round(macros.get("kcal", 0))),
+        "protein": int(round(macros.get("protein_g", 0))),
+    }, sort_keys=True)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def find_recent_duplicate(date: str, fp: str, window_min: int = DEDUPE_WINDOW_MIN):
+    """Return the epoch ts of a same-fingerprint meal logged within the window, else None.
+
+    This is the structural fix for double-logging. Previously nothing made the write
+    idempotent, so the user had to audit the agent's work by hand — "U double logged
+    the dinner, fix it" / "You didn't double log anything right?" / "Don't double log
+    right? Just make sure" / "Wait u double logged so fix that" — four separate
+    occasions across June and July."""
+    path = FOODLOG_DIR / f"{date}.md"
+    if not path.exists():
+        return None
+    now = int(time.time())
+    for m in re.finditer(r"<!--\s*fp:([0-9a-f]+)\s+ts:(\d+)\s*-->", path.read_text(encoding="utf-8")):
+        if m.group(1) == fp and (now - int(m.group(2))) <= window_min * 60:
+            return int(m.group(2))
+    return None
+
+
 def append_food_log(date: str, meal_type: str, time_str: str, items: list[dict],
-                    macros: dict, source: str) -> dict:
+                    macros: dict, source: str, fp: str = "") -> dict:
     """Append a meal section to the Food Log file and recompute its totals.
     Returns the file-level totals after the append."""
     FOODLOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -265,6 +304,10 @@ def append_food_log(date: str, meal_type: str, time_str: str, items: list[dict],
         f"**Macros:** {int(round(macros['kcal']))} kcal · {int(round(macros['protein_g']))}g protein "
         f"· {int(round(macros['carbs_g']))}g carbs · {int(round(macros['fat_g']))}g fat",
         f"**Source:** {source}",
+        # Machine-readable dedupe marker. HTML comment so it renders invisibly in
+        # Obsidian; the re-sum regex below only matches **Macros:** lines, so this
+        # never affects totals.
+        f"<!-- fp:{fp} ts:{int(time.time())} -->" if fp else "",
         "",
     ]
     text = path.read_text(encoding="utf-8").rstrip("\n") + "\n" + "\n".join(section)
@@ -312,7 +355,26 @@ def cmd_food(a) -> dict:
         raise SystemExit("food: need --kcal (with optional --protein/--carbs/--fat) or --item specs")
 
     time_str = a.time or now_time()
-    file_totals = append_food_log(date, a.meal_type, time_str, items, macros, a.source or "estimated")
+
+    # Idempotency gate — nothing is written if this exact meal just landed.
+    fp = _meal_fingerprint(a.meal_type, items, macros)
+    if not getattr(a, "force", False):
+        dup_ts = find_recent_duplicate(date, fp)
+        if dup_ts is not None:
+            mins = max(1, int((time.time() - dup_ts) // 60))
+            cur = read_health_fm(date)
+            return {
+                "ok": True, "cmd": "food", "date": date, "duplicate": True,
+                "meal_type": a.meal_type, "meal_kcal": int(round(macros["kcal"])),
+                "daily_kcal": int(_num(cur.get("kcal", ""))),
+                "daily_protein_g": int(_num(cur.get("protein_g", ""))),
+                "msg": (f"↩︎ Already logged: {a.meal_type} ({int(round(macros['kcal']))} kcal) "
+                        f"went in {mins} min ago — skipped to avoid a double-log. "
+                        f"Pass --force if this really is a second serving."),
+            }
+
+    file_totals = append_food_log(date, a.meal_type, time_str, items, macros,
+                                  a.source or "estimated", fp=fp)
     daily = edit_frontmatter(
         ensure_daily_note(date),
         adds={"kcal": macros["kcal"], "protein_g": macros["protein_g"],
@@ -438,19 +500,26 @@ def cmd_vitamins(a) -> dict:
             "msg": "💊 Vitamins logged."}
 
 
-def cmd_show(a) -> dict:
-    date = _valid_date(a.date)
+def read_health_fm(date: str) -> dict:
+    """Top-level frontmatter of a daily note as {key: str}. {} if the note is absent."""
     note = DAILY_DIR / f"{date}.md"
     if not note.exists():
-        return {"ok": True, "cmd": "show", "date": date, "msg": f"{date}: no daily note yet."}
+        return {}
     out = {}
-    text = note.read_text(encoding="utf-8")
-    lines = text.split("\n")
+    lines = note.read_text(encoding="utf-8").split("\n")
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
     for ln in lines[1:end or 1]:
         if ":" in ln and not ln.startswith((" ", "\t", "#")):
             k, v = ln.split(":", 1)
             out[k.strip()] = v.strip()
+    return out
+
+
+def cmd_show(a) -> dict:
+    date = _valid_date(a.date)
+    if not (DAILY_DIR / f"{date}.md").exists():
+        return {"ok": True, "cmd": "show", "date": date, "msg": f"{date}: no daily note yet."}
+    out = read_health_fm(date)
     return {"ok": True, "cmd": "show", "date": date, "frontmatter": out,
             "msg": f"{date}: " + ", ".join(f"{k}={v}" for k, v in out.items()
                                             if k in (INT_FIELDS | FLOAT1_FIELDS | {"weight", "sleep_hours", "vitamins_taken"}) and v)}
@@ -652,6 +721,9 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--source", default="estimated", help="template:<name> | mcp:food-tracker | pantry | estimated")
     f.add_argument("--coach", action="store_true", help="append a pace/protein nudge to the reply")
     f.add_argument("--no-remember", action="store_true", help="don't cache the items to the pantry")
+    f.add_argument("--force", action="store_true",
+                   help=f"log even if an identical meal landed in the last {DEDUPE_WINDOW_MIN} min "
+                        "(genuine second serving)")
     f.set_defaults(func=cmd_food)
 
     u = sub.add_parser("undo-last-meal", help="remove the last food-log meal + subtract its macros (for corrections)")
