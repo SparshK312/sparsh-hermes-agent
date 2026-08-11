@@ -166,8 +166,11 @@ def update_frontmatter(note_path: Path, updates: dict, prev: dict, protected: se
     changed = 0
     written: dict[str, str] = {}
     for k, v in updates.items():
-        if v is None or v == "":
+        if v is None:
             continue
+        # An empty string here is an EXPLICIT clear (ingest_one only ever adds one for a
+        # stage cell hae_process judged bogus). The FIELD_MAP loop never emits empties,
+        # so this cannot blank a field by accident.
         val = str(v)
         if k in existing:
             current = _field_value(fm[existing[k]])
@@ -243,6 +246,18 @@ def ingest_one(date: str, state: dict) -> tuple[int, str]:
         if field in SLEEP_FIELDS and not has_sleep:
             continue
         updates[field] = val
+
+    # When hae_process judged the stage breakdown bogus (a real total with
+    # core=deep=rem=0), it drops those cells from the CSV. But the loop above skips
+    # empty values, so a note that already received the zeros in an earlier run keeps
+    # them forever — the archive gets corrected and the note stays contradictory, and
+    # the note is the layer coach_engine reads. Blank them explicitly.
+    if has_sleep and str(row.get("sleep_stages_valid", "")).lower() == "false":
+        for col, field in (("sleep_core_h", "sleep_core_h"), ("sleep_deep_h", "sleep_deep_h"),
+                           ("sleep_rem_h", "sleep_rem_h")):
+            if not row.get(col):
+                updates[field] = ""      # explicit clear; see `clears` handling below
+
     if not updates:
         return 0, f"{date}: archive row has no mappable metrics yet"
     stamp = datetime.datetime.now(TZ).isoformat(timespec="seconds")
