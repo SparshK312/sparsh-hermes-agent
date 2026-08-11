@@ -67,4 +67,6 @@ def test_zero2sudo_incident_is_covered():
         "old_string": "| **Google** | app submitted |",
         "new_string": "| **Google** | INTERVIEW REQUEST Jul 30 | expedited interview request |",
     })
-    assert msg is not None and "interview request" in msg
+    # The message quotes the matched text verbatim, so compare case-insensitively —
+    # the real incident wrote it as "INTERVIEW REQUEST".
+    assert msg is not None and "interview request" in msg.lower()

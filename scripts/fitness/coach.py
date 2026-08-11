@@ -180,7 +180,10 @@ def run_tracking_dark() -> int:
     ok, _why = E.budget_ok("tracking-dark")
     if not ok and not DRY:
         return _silent()
-    since = (E.now().date() - datetime.timedelta(days=dark)).strftime("%b %-d")
+    # logging_dark_days returns the offset of the last day that HAS a log, so the dark
+    # stretch begins the day AFTER it. Without the +1 the message named the last day he
+    # actually logged as the first day he didn't.
+    since = (E.now().date() - datetime.timedelta(days=dark - 1)).strftime("%b %-d")
     if dark <= 5:
         msg = (f"📉 *Food tracking has been dark since {since}* ({dark} days). "
                f"I've muted the intake nudges because I genuinely don't know what you've "

@@ -113,11 +113,17 @@ def has_value(d: dict, k: str) -> bool:
     return _f(d, k) is not None
 
 
-def logging_dark_days(max_days: int = 30) -> int:
+def logging_dark_days(max_days: int = 400) -> int:
     """Consecutive days ending TODAY with no food logged at all (0 = logged today).
 
     Lets the nudges tell "he ate nothing" (act on it) from "he isn't tracking"
-    (a different problem, and one that daily calorie alarms actively worsen)."""
+    (a different problem, and one that daily calorie alarms actively worsen).
+
+    The cap was 30, which SATURATED the counter: once a lapse hit 30 days the value
+    never changed again, and since 30 is not a checkpoint and 30 % 14 != 0 the
+    re-engagement nudge fell permanently silent — the exact "quiet becomes abandoned"
+    failure the fortnightly tail exists to prevent. 400 keeps it climbing for over a
+    year; the scan costs ~0.9 ms per 30 days and short-circuits on the first logged day."""
     today = now().date()
     for i in range(max_days):
         d = (today - datetime.timedelta(days=i)).isoformat()

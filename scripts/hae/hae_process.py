@@ -175,7 +175,11 @@ def _export_local_day(stamp_utc: str) -> str:
     return (dt.astimezone(_TZ) if _TZ else dt).date().isoformat()
 
 
-def process_payload(path: Path, days: dict) -> None:
+def process_payload(path: Path, days: dict, seen_sleep: set | None = None) -> None:
+    """`seen_sleep` accumulates the dates whose sleep block this RUN has already
+    written, so the `total > prev` rule applies among this run's records rather than
+    against a value carried in from the CSV (see the comment at the sleep branch)."""
+    seen_sleep = seen_sleep if seen_sleep is not None else set()
     payload = json.loads(Path(path).read_text())
     data = payload.get("data", payload)
     stamp = _export_stamp(path)
@@ -227,14 +231,20 @@ def process_payload(path: Path, days: dict) -> None:
                     stages = [s for s in stages if s is not None]
                     total = sum(stages) if stages else _f(p.get("asleep"))
                 prev = _f(row.get("sleep_total_h"))
-                # Strictly greater, not >=. On a tie the block re-entered and each
-                # stage wrote only `if q is not None`, so a later equal-total record
-                # that OMITS a stage key leaves the earlier record's stage in place —
-                # a row whose total/start/end come from one record and whose `deep`
-                # comes from another. Latent today (observed duplicates are identical)
-                # but it is exactly the kind of mixed-provenance row that is
-                # impossible to debug later.
-                if total is not None and (prev is None or total > prev):
+                # Strictly greater — on a tie the block used to re-enter and each stage
+                # wrote only `if q is not None`, so an equal-total record OMITTING a stage
+                # left the earlier record's value in place: total/start/end from one
+                # record, `deep` from another.
+                #
+                # BUT `prev` is seeded by load_existing() from the CSV, so `>` alone means
+                # a day already at its max never re-enters on a later run — which froze
+                # both the all-zero-stage cleanup and `sleep_stages_valid` at whatever the
+                # first post-change run happened to write. `seen_sleep` distinguishes
+                # "already written THIS run" (apply `>`) from "value carried in from the
+                # CSV" (always reprocess once, so fixes reach existing rows).
+                first_touch_this_run = d not in seen_sleep
+                if total is not None and (first_touch_this_run or prev is None or total > prev):
+                    seen_sleep.add(d)
                     row["sleep_total_h"] = round(total, 2)
                     stages = {}
                     for k, col in (("core", "sleep_core_h"), ("deep", "sleep_deep_h"),
@@ -253,6 +263,13 @@ def process_payload(path: Path, days: dict) -> None:
                     if scored <= 0 and total > 0:
                         for c in ("sleep_core_h", "sleep_deep_h", "sleep_rem_h"):
                             stages.pop(c, None)
+                            # Must also clear it from `row`: load_existing() may have
+                            # already seeded a bogus 0.0 from the CSV, and popping only
+                            # the local dict left that value untouched — so the exact
+                            # contradictory record this guard exists to prevent
+                            # (2026-07-28: total 2.34 with core=deep=rem=0) survived every
+                            # incremental run and was only absent from a clean rebuild.
+                            row.pop(c, None)
                         row["sleep_stages_valid"] = "false"
                     else:
                         row["sleep_stages_valid"] = "true"
@@ -283,9 +300,19 @@ def mark_completeness(days: dict) -> None:
     partial — that is why 2026-08-10 reads 3,838 steps at 13:14 and why 14 of the
     last 20 days understate. Rather than guess a correction, label it, so every
     downstream surface can say "so far today" instead of stating a total."""
+    today = (datetime.datetime.now(_TZ) if _TZ else datetime.datetime.now()).date().isoformat()
     for d, row in days.items():
         local_day = _export_local_day(str(row.get("last_export_utc") or ""))
-        row["day_complete"] = "true" if (local_day and local_day > d) else "false"
+        if local_day:
+            row["day_complete"] = "true" if local_day > d else "false"
+        elif d >= today:
+            row["day_complete"] = "false"        # today, still accumulating
+        else:
+            # No stamp at all. hae_sync prunes raw payloads at 30 days, so ~100 older
+            # rows have none — and calling those "false" claimed 100 long-finished days
+            # were still running. We genuinely cannot tell whether they captured the
+            # full day, so say so rather than assert either way.
+            row["day_complete"] = "unknown"
 
 
 def write_csv(days: dict) -> None:
@@ -308,9 +335,10 @@ def main(argv) -> int:
     days = load_existing()
     before = len(days)
     skipped = 0
+    seen_sleep: set = set()          # dates whose sleep block this run has written
     for f in files:
         try:
-            process_payload(f, days)
+            process_payload(f, days, seen_sleep)
         except Exception as e:  # noqa: BLE001 — one bad payload must not abort the rebuild
             skipped += 1
             print(f"skip {Path(f).name}: {e}", file=sys.stderr)

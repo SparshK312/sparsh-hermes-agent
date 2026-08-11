@@ -27,6 +27,7 @@ Deliberately narrow + fail-open so it can NEVER break logging or normal work:
 from __future__ import annotations
 
 import json
+import re
 
 _BLOCKED_TOOLS = {"patch", "write_file", "execute_code"}
 # Dirs that are 100% vault_log's domain — hand-writes always blocked.
@@ -61,12 +62,31 @@ _DESTRUCTIVE_NET_CHARS = 200
 # someone ELSE has done, they are load-bearing for real decisions, and the agent cannot
 # verify them from a screenshot. Additive edits that don't assert one still pass silently.
 _CLAIM_DIRS = ("00 - Dashboard/Internship Pipeline", "06 - Internships/")
-_CLAIM_MARKERS = (
-    "interview request", "interview invite", "interview invitation", "expedited interview",
-    "offer letter", "received an offer", "offer received", "moving to the next round",
-    "advanced to", "onsite scheduled", "phone screen scheduled", "technical scheduled",
-    "rejected", "rejection", "declined my application",
-)
+
+# Regexes, not bare substrings. Bare "rejected"/"rejection" matched ~20 lines of ordinary
+# prose already in 06 - Internships/ — "unknown params are now rejected on write" (a
+# Perfecti engineering doc), "narrate why you rejected alternatives" (the interview study
+# plan), "auto-reject a rejection-prone 2-page PDF" (the resume playbook). Prompting for
+# those is approval fatigue, which trains the habit of clicking yes.
+#
+# So a rejection only counts when it reads like a STATUS: dated, emoji-flagged, or
+# explicitly about an application. The true positive that must still fire is a table cell
+# like "| Composio | rejected Aug 10 |".
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)"
+_CLAIM_PATTERNS = tuple(re.compile(p, re.I) for p in (
+    r"interview\s+(?:request|invite|invitation)",
+    r"expedited\s+interview",
+    r"(?:offer\s+letter|received\s+an\s+offer|offer\s+received|got\s+an\s+offer)",
+    r"moving\s+to\s+the\s+next\s+round",
+    r"(?:onsite|phone\s+screen|technical)\s+scheduled",
+    # rejection, but only in a status shape
+    rf"reject(?:ed|ion)\b[^|\n]{{0,20}}?(?:{_MONTH}\w*\.?\s*\d{{1,2}}|\d{{4}}-\d{{2}}-\d{{2}})",
+    r"[❌🚫]\s*reject(?:ed|ion)",
+    r"application\s+(?:was\s+)?rejected",
+    r"rejected\s+my\s+application",
+    r"status\s*:\s*rejected",
+    r"declined\s+my\s+application",
+))
 
 _MSG = (
     "🚫 vault-write-guard: don't hand-edit health files (it corrupts totals and lands on "
@@ -120,10 +140,11 @@ def _new_outside_claim(path: str, old: str, new: str) -> str | None:
     for a path in the career dashboards. None otherwise. Pure + testable."""
     if not any(d.lower() in (path or "").lower() for d in _CLAIM_DIRS):
         return None
-    old_l, new_l = (old or "").lower(), (new or "").lower()
-    for marker in _CLAIM_MARKERS:
-        if marker in new_l and marker not in old_l:
-            return marker
+    old_s, new_s = old or "", new or ""
+    for pat in _CLAIM_PATTERNS:
+        m = pat.search(new_s)
+        if m and not pat.search(old_s):
+            return m.group(0).strip()
     return None
 
 

@@ -213,40 +213,127 @@ def _clip(s: str, limit: int) -> str:
     return s[: cut if cut > 0 else limit].rstrip()
 
 
-_RESOLVED_MARKERS = ("✅ resolved", "~~", "✅ done", "— done", "no longer relevant",
+# NOTE: "~~" is deliberately NOT a marker. Striking part of a heading is a normal edit
+# in this vault ("### Sign the ~~extension~~ deferral form by Aug 17"), and treating it
+# as resolution silently dropped live items. Both genuinely-resolved blocks carry an
+# explicit ✅ marker anyway, so nothing is lost.
+_RESOLVED_MARKERS = ("✅ resolved", "✅ dropped", "✅ done", "— done", "no longer relevant",
                      "moot", "cancelled", "canceled", "superseded")
 
+# A line worth keeping in the digest: it names a date or a hard deadline.
+_DATE_RE = re.compile(
+    r"\b(\d{4}-\d{2}-\d{2}"
+    r"|(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{1,2}"
+    r"|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{1,2}"
+    r"|\bdeadline\b|\bdue\b|\bby \d{1,2}\s*(?:am|pm)\b)",
+    re.I,
+)
 
-def _drop_resolved_blocks(section: str) -> str:
-    """Drop '### ...' sub-blocks whose HEADING marks them resolved/struck.
 
-    Hard Deadlines accumulates history at the top — the first ~700 chars are a
-    RESOLVED July term-test block. With a flat 2600-char clip that history
-    displaced the genuinely urgent items further down (the Aug 17 extension
-    signature, the Aug 19 registrar correction, the Aug 22 final), so the one
-    message he reads each morning was spending its budget on settled matters.
-    Only the heading is inspected, so a live item that merely mentions a
-    finished sub-task is kept."""
-    blocks: list[list[str]] = [[]]          # [0] holds any preamble before the first '###'
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+
+
+def _line_date(line: str, today: datetime.date):
+    """The date a line is ABOUT: its earliest UPCOMING date, else its earliest date.
+
+    A plain min() over every date in the line was wrong — these rows cite their history
+    inline ("Tue Aug 4 (action) → Wed Aug 19 (hard deadline)", or the exam row that also
+    mentions "confirmed Aug 3" and "runway Aug 12–21"). min() returned the past
+    reference, so the row was classified as past and the CSC384 final and the Aug 19
+    registrar deadline were both dropped from the brief."""
+    found = []
+    for m in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", line):
+        try:
+            found.append(datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        except ValueError:
+            pass
+    for m in re.finditer(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*(\d{1,2})\b",
+                         line, re.I):
+        try:
+            found.append(datetime.date(today.year, _MONTHS[m.group(1).lower()], int(m.group(2))))
+        except ValueError:
+            pass
+    if not found:
+        return None
+    future = [d for d in found if d >= today]
+    return min(future) if future else min(found)
+
+
+def _trim_line(line: str, limit: int = 170) -> str:
+    """Shorten a kept line to its gist, cutting on a word boundary.
+    For a markdown table row, keep the first two cells (the date and what it is) and
+    drop the trailing notes column, which is where the length lives."""
+    s = line.strip()
+    if s.startswith("|"):
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if len(cells) >= 2:
+            s = f"| {cells[0]} | {cells[1]}"
+    if len(s) <= limit:
+        return s
+    cut = s.rfind(" ", 0, limit)
+    return s[: cut if cut > 40 else limit].rstrip() + "…"
+
+
+def _condense_deadlines(section: str, per_block: int = 14) -> str:
+    """Heading + the few dated lines under it, per block.
+
+    Dropping resolved blocks alone did NOT achieve the goal. Measured against the real
+    Action Items: after pruning, the Aug 19 / Aug 15 / Aug 17 / Aug 22 items sat at
+    offsets 4385-6466, all past the 2600-char clip — one live block's 18 lines of
+    supporting argument consumed the entire budget, and the clip ended up containing
+    NONE of those dates (strictly worse than before for "Aug 22").
+
+    The brief needs the dated headlines, not the reasoning behind them. Keeping each
+    block's heading plus its dated lines fits every block inside the budget."""
+    blocks: list[list[str]] = [[]]
     for line in section.split("\n"):
         if line.startswith("### "):
             blocks.append([line])
         else:
             blocks[-1].append(line)
-    kept = []
+
+    out: list[str] = []
     for b in blocks:
-        heading = b[0] if b and b[0].startswith("### ") else ""
+        if not b:
+            continue
+        heading = b[0] if b[0].startswith("### ") else ""
         if heading and any(mk in heading.lower() for mk in _RESOLVED_MARKERS):
-            continue                        # settled item — drop the whole block
-        kept.append("\n".join(b))
-    return "\n".join(kept).strip()
+            continue                                   # settled — drop the whole block
+        # Prefer UPCOMING dates. These blocks are chronological, so taking the first N
+        # dated lines pulled JULY rows out of a Jul–Aug table and still surfaced none of
+        # the deadlines that matter (Aug 15/17/19/22).
+        cands = [ln for ln in b[1:] if ln.strip() and _DATE_RE.search(ln)]
+        today = datetime.datetime.now(TZ).date()
+        upcoming = []
+        for ln in cands:
+            d = _line_date(ln, today)
+            if d and d >= today:
+                upcoming.append((d, ln))
+        upcoming.sort(key=lambda x: x[0])
+        # ONLY upcoming lines. Topping up with past/undated prose let one block's
+        # 600-char argument paragraphs back in and pushed the later deadlines out of
+        # the clip again. A block with nothing upcoming contributes just its heading,
+        # which is the right amount of signal for a morning brief.
+        # Truncate each line. Some collisions rows carry a 500-char notes column, so 17
+        # kept lines came to 5,492 chars and the 2600 clip then dropped the back half —
+        # which is how Aug 17/19/21 kept falling out even once they were selected. The
+        # brief needs the date and the gist, not the full rationale.
+        body = [_trim_line(ln) for _, ln in upcoming[:per_block]]
+        if heading:
+            out.append(heading)
+        elif not body:
+            continue                                   # preamble with nothing dated
+        out.extend(body)
+    return "\n".join(out).strip()
 
 
 def gather_action_items() -> dict:
     """Hard Deadlines section text + a trimmed 'this week' slice from Action Items."""
     text = _read(ACTION_ITEMS)
     hard = _section(text, "## 🔴 hard deadlines") or _section(text, "## hard deadlines")
-    pruned = _drop_resolved_blocks(hard)
+    pruned = _condense_deadlines(hard)
     # Only accept the pruned version if it kept something — never let a heading-format
     # change silently empty the most important input to the brief.
     if pruned:

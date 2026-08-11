@@ -100,6 +100,20 @@ APPROVE_CASES = [
     ("same wording outside the career dirs passes", "patch",
      {"file_path": "04 - Daily Notes/2026-08-10.md",
       "old_string": "x", "new_string": "got an interview request today"}, False),
+    # ---- Tier 3 false positives found by the adversarial review (real vault prose) ----
+    ("prose: 'params are now rejected on write'", "patch",
+     {"file_path": "06 - Internships/Perfecti/engineering.md",
+      "old_string": "x", "new_string": "unknown params are now rejected on write"}, False),
+    ("prose: 'why you rejected alternatives'", "patch",
+     {"file_path": "06 - Internships/Internship Prep/Technical Interview Study Plan.md",
+      "old_string": "x", "new_string": "narrate the tradeoffs and why you rejected alternatives"}, False),
+    ("prose: 'a rejection-prone 2-page PDF'", "patch",
+     {"file_path": "06 - Internships/Resume System/Resume Playbook.md",
+      "old_string": "x", "new_string": "ATS will auto-reject a rejection-prone 2-page PDF"}, False),
+    ("but a DATED rejection status still asks", "patch",
+     {"file_path": "00 - Dashboard/Internship Pipeline.md",
+      "old_string": "| Composio | onsite done |",
+      "new_string": "| Composio | rejected Aug 10 |"}, True),
 ]
 
 

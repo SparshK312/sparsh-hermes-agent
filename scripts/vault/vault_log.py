@@ -246,13 +246,28 @@ def _parse_item(spec: str) -> dict:
 DEDUPE_WINDOW_MIN = 20
 
 
-def _meal_fingerprint(meal_type: str, items: list[dict], macros: dict) -> str:
-    """Content hash of a meal: type + sorted item names + rounded headline macros."""
+def _meal_fingerprint(meal_type: str, items: list[dict], macros: dict,
+                      explicit_time: str | None = None) -> str:
+    """Content hash of a meal: type + sorted item names + ALL FOUR macros + an
+    explicitly-supplied time.
+
+    Two earlier omissions made this over-match and silently drop real meals:
+      - carbs/fat weren't hashed, so 200kcal/10p/30c/5f collided with 200/10/5/16;
+      - `--time` wasn't hashed, so a retro whole-day recap logging the same shake at
+        10:00 AM and 6:00 PM dropped the second one — and log-food's pitfall 3 tells
+        the agent NOT to retry or self-authorize --force, making it unrecoverable.
+
+    `explicit_time` is hashed ONLY when the caller passed --time. A defaulted
+    now_time() must not enter the hash: a compaction re-injection seconds later would
+    land in a different minute and defeat the whole gate."""
     payload = json.dumps({
         "meal": (meal_type or "").strip().lower(),
         "items": sorted((i.get("name") or "").strip().lower() for i in items),
         "kcal": int(round(macros.get("kcal", 0))),
         "protein": int(round(macros.get("protein_g", 0))),
+        "carbs": int(round(macros.get("carbs_g", 0))),
+        "fat": int(round(macros.get("fat_g", 0))),
+        "time": (explicit_time or "").strip().lower(),
     }, sort_keys=True)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -357,7 +372,8 @@ def cmd_food(a) -> dict:
     time_str = a.time or now_time()
 
     # Idempotency gate — nothing is written if this exact meal just landed.
-    fp = _meal_fingerprint(a.meal_type, items, macros)
+    # `a.time` (not time_str) so a defaulted clock never enters the hash.
+    fp = _meal_fingerprint(a.meal_type, items, macros, explicit_time=a.time)
     if not getattr(a, "force", False):
         dup_ts = find_recent_duplicate(date, fp)
         if dup_ts is not None:
@@ -373,10 +389,21 @@ def cmd_food(a) -> dict:
                         f"Pass --force if this really is a second serving."),
             }
 
+    # PRE-FLIGHT the daily note before touching the Food Log. These are two separate
+    # writes and the Food Log went first, so if the note write then failed (e.g.
+    # frontmatter not starting at line 1 — a real Obsidian/sync artifact) the meal was
+    # in the Food Log but absent from the note. Retrying used to repair that at the
+    # cost of a VISIBLE double entry; with the dedupe gate the retry is now swallowed,
+    # turning a loud fixable failure into a silent permanent divergence — and
+    # coach_engine, nutrition_card and every nudge read the NOTE.
+    # Resolving + validating first means we either write both or neither.
+    note = ensure_daily_note(date)
+    edit_frontmatter(note, adds={})       # raises SystemExit if the frontmatter is unusable
+
     file_totals = append_food_log(date, a.meal_type, time_str, items, macros,
                                   a.source or "estimated", fp=fp)
     daily = edit_frontmatter(
-        ensure_daily_note(date),
+        note,
         adds={"kcal": macros["kcal"], "protein_g": macros["protein_g"],
               "carbs_g": macros["carbs_g"], "fat_g": macros["fat_g"]},
     )

@@ -122,7 +122,8 @@ def _field_value(line: str) -> str:
     return line.split(":", 1)[1].strip() if ":" in line else ""
 
 
-def update_frontmatter(note_path: Path, updates: dict, prev: dict, protected: set) -> tuple[int, dict]:
+def update_frontmatter(note_path: Path, updates: dict, prev: dict, protected: set,
+                       is_today: bool = True, stamp: str = "") -> tuple[int, dict]:
     """Line-targeted frontmatter update that never clobbers a manual edit.
 
     `protected` fields (sleep — the realistic hand-correction surface) are
@@ -173,7 +174,18 @@ def update_frontmatter(note_path: Path, updates: dict, prev: dict, protected: se
             if current == val:
                 written[k] = val          # already correct; HAE still owns it
                 continue
-            if k in protected:
+            # Manual-edit protection. Sleep is always protected. Activity fields
+            # (steps/active_kcal/RHR/HRV/...) are protected on PAST days only — on the
+            # current day they must keep taking the newest archive value so a running
+            # total can climb.
+            #
+            # This used to apply to `protected` alone, which was safe while ingest only
+            # ever touched TODAY. Once it started walking a trailing window, four runs a
+            # day silently reverted any hand-correction to a past day's activity fields
+            # (verified: `steps: 14200  # watch was off my wrist` on 2026-08-08 → back to
+            # 10015.0 on the next sync).
+            enforce = (k in protected) or not is_today
+            if enforce:
                 last = prev.get(k)
                 if last is None and current != "":
                     continue  # pre-existing value HAE never recorded → treat as manual
@@ -186,7 +198,17 @@ def update_frontmatter(note_path: Path, updates: dict, prev: dict, protected: se
             fm.append(f"{k}: {val}")
             written[k] = val
             changed += 1
+    # `hae_synced` is applied ONLY when a real metric changed. It was previously part of
+    # `updates` and always differed, so `changed` was never 0: every run rewrote all 6-7
+    # notes in the window, reported "wrote (N HAE fields)" when nothing real had moved,
+    # and pushed ~24 spurious edits/day of historical notes through bidirectional
+    # Obsidian Sync. Keeping it out of the diff restores the wrote/no-change signal.
     if changed:
+        if stamp:
+            if "hae_synced" in existing:
+                fm[existing["hae_synced"]] = f"hae_synced: {stamp}"
+            else:
+                fm.append(f"hae_synced: {stamp}")
         note_path.write_text("\n".join([lines[0]] + fm + lines[end:]), encoding="utf-8")
     return changed, written
 
@@ -223,13 +245,15 @@ def ingest_one(date: str, state: dict) -> tuple[int, str]:
         updates[field] = val
     if not updates:
         return 0, f"{date}: archive row has no mappable metrics yet"
-    updates["hae_synced"] = datetime.datetime.now(TZ).isoformat(timespec="seconds")
+    stamp = datetime.datetime.now(TZ).isoformat(timespec="seconds")
+    today_s = datetime.datetime.now(TZ).strftime("%Y-%m-%d")
 
     note = DAILY_DIR / f"{date}.md"
     if not note.exists():
         return 0, f"{date}: daily note does not exist ({note.name}); skipping (CSV archive still has it)"
     prev = state.get(date, {})
-    n, written = update_frontmatter(note, updates, prev, SLEEP_FIELDS)
+    n, written = update_frontmatter(note, updates, prev, SLEEP_FIELDS,
+                                    is_today=(date == today_s), stamp=stamp)
     # Remember what HAE now owns for this date, so a later manual edit is detected
     # next run (current value != last-written → skip).
     merged = dict(prev)
