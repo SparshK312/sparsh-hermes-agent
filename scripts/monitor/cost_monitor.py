@@ -32,11 +32,18 @@ ALERT_STATE = os.path.expanduser("~/.hermes/cost_monitor_state.json")
 HERMES = os.path.expanduser("~/.local/bin/hermes")
 TELEGRAM_TARGET = "telegram"  # home channel
 
-# Thresholds (USD). Steady-state is ~$1.60/day, ~$50/mo — these leave headroom
-# while still catching a runaway same-day.
-DAILY_LIMIT = 5.0
-MTD_WARN = 75.0
-MTD_URGENT = 150.0
+# Thresholds (USD). RECALIBRATED 2026-08-10 — the old set (5 / 75 / 150) rested on an
+# estimate of "~$1.60/day, ~$50/mo" that never materialised. Measured: ~$0.18/day and
+# $1.88 month-to-date, with July's full month at $14.83. A runaway therefore had to reach
+# ~28x normal daily spend before the alarm made a sound; the guardrail was disarmed by drift.
+#
+# Anchors: Perfecti employment ended Jul 2026, so this is no longer expensed to Float — it
+# is self-funded, target ~$40/mo with a $50 hard ceiling (Hermes Multi-Model & Dashboard
+# Plan). Daily catches a same-day loop; MTD warns past half the target and escalates just
+# under the ceiling. Raise these if steady-state genuinely rises.
+DAILY_LIMIT = 2.0
+MTD_WARN = 25.0
+MTD_URGENT = 45.0
 
 # Anthropic pricing per MILLION tokens: (input, output, cache_read, cache_write)
 PRICING = {
@@ -146,7 +153,7 @@ def main():
     if daily > DAILY_LIMIT and "spike" not in state["daily"].get(day_key, []):
         if send("⚠️ Hermes daily spend spike",
                 f"Today's estimated Anthropic spend is ${daily:.2f} "
-                f"(alert at ${DAILY_LIMIT:.0f}). Steady-state is ~$1.60/day — "
+                f"(alert at ${DAILY_LIMIT:.0f}). Steady-state is ~$0.20/day — "
                 f"check for a stuck/looping session."):
             state["daily"].setdefault(day_key, []).append("spike")
             fired.append("daily-spike")
@@ -155,14 +162,15 @@ def main():
     if mtd > MTD_URGENT and "urgent" not in state["mtd"].get(mon_key, []):
         if send("🚨 Hermes spend — urgent",
                 f"Month-to-date Anthropic spend is ${mtd:.2f} "
-                f"(urgent at ${MTD_URGENT:.0f}). You're approaching your Float comfort zone."):
+                f"(urgent at ${MTD_URGENT:.0f}). That's at the $50 self-funded ceiling — "
+                f"Float is gone since the Perfecti exit, this is your own card."):
             state["mtd"].setdefault(mon_key, []).append("urgent")
             fired.append("mtd-urgent")
     # Month-to-date warning — once per month
     elif mtd > MTD_WARN and "warn" not in state["mtd"].get(mon_key, []):
         if send("⚠️ Hermes spend — heads up",
                 f"Month-to-date Anthropic spend is ${mtd:.2f} "
-                f"(warning at ${MTD_WARN:.0f}). Still well inside the $1k Float budget."):
+                f"(warning at ${MTD_WARN:.0f}). Past half the ~$40/mo self-funded target."):
             state["mtd"].setdefault(mon_key, []).append("warn")
             fired.append("mtd-warn")
 
