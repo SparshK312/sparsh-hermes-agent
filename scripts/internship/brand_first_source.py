@@ -46,8 +46,16 @@ def _listing_prefilter(title: str, location: str = "") -> bool:
     return True
 
 # cycle labels we surface in the board
-_CYCLE_RE = re.compile(
-    r"(fall 20\d\d|winter 20\d\d|spring 20\d\d|summer 20\d\d)", re.IGNORECASE)
+#
+# 2026-08-18: this used to be forward-order only and only scanned jd[:600], which
+# left 46% of the board with no cycle tag — the one field that matters most now
+# that Fall 2026 is filled. TikTok/ByteDance (a large share of current Summer-2027
+# inventory) write the term BACKWARDS: "ML Engineer Intern - Search Ads - 2027
+# Summer". Adding the reversed pattern and scanning the whole JD recovers 27 of
+# 101 untagged live roles at zero cost.
+_SEASONS = "fall|winter|spring|summer"
+_CYCLE_RE = re.compile(rf"\b({_SEASONS})\s+(20\d\d)\b", re.IGNORECASE)
+_CYCLE_REV_RE = re.compile(rf"\b(20\d\d)\s+({_SEASONS})\b", re.IGNORECASE)
 
 
 def _age_from_date(posted_date: str):
@@ -61,10 +69,21 @@ def _age_from_date(posted_date: str):
 
 
 def _cycle_label(title: str, jd: str) -> str:
-    for src in (title, jd[:600] if jd else ""):
-        m = _CYCLE_RE.search(src or "")
+    """'Summer 2027' from a title or JD, in either word order.
+
+    Title wins over JD (a JD often mentions several terms in boilerplate); within
+    each, forward order wins over reversed. The whole JD is scanned, not just the
+    head — brand boards frequently state the term in a 'Program dates' block far
+    below the fold."""
+    for src in (title or "", jd or ""):
+        if not src:
+            continue
+        m = _CYCLE_RE.search(src)
         if m:
-            return m.group(1).title()
+            return f"{m.group(1).title()} {m.group(2)}"
+        m = _CYCLE_REV_RE.search(src)
+        if m:
+            return f"{m.group(2).title()} {m.group(1)}"
     return ""
 
 
@@ -101,6 +120,18 @@ def _to_record(rec: A.JobRecord, company: str, tier: str) -> dict:
     }
 
 
+# ── boards that FAILED to fetch on the most recent collect() ─────────────────
+# 2026-08-18: _one_board() used to swallow every fetch error and return [], which
+# the orchestrator's stale-check could not distinguish from "this board genuinely
+# has no matching roles" — so a transient ReadTimeout struck every posting from
+# that board, and two consecutive failures (the board runs twice daily) killed the
+# company outright. The runtime log showed 1,755 such failures across 87 runs
+# (NVIDIA x24, Anthropic x19, Anduril x19, OpenAI/Stripe x18 each) and Anduril's
+# live "2027 Software Engineer Intern" req was confirmed false-dead because of it.
+# Recording the failures lets curate.py skip striking those postings.
+FAILED_BOARDS: set[str] = set()
+
+
 async def _one_board(client, board: dict) -> list[dict]:
     if board.get("ats_type") == "manual":
         return []
@@ -110,10 +141,12 @@ async def _one_board(client, board: dict) -> list[dict]:
     except asyncio.TimeoutError:
         print(f"[brand-first] {board['name']} timed out (>{BOARD_TIMEOUT}s) — skipped",
               file=sys.stderr)
+        FAILED_BOARDS.add(board["name"])
         return []
     except Exception as e:  # noqa: BLE001
         print(f"[brand-first] {board['name']} failed: {type(e).__name__}: {e}",
               file=sys.stderr)
+        FAILED_BOARDS.add(board["name"])
         return []
     out = []
     for r in recs:
@@ -129,11 +162,16 @@ async def collect(client=None) -> list[dict]:
     own_client = client is None
     if own_client:
         client = A.make_client()
+    FAILED_BOARDS.clear()          # per-run; curate.py reads it right after
     try:
         results = await asyncio.gather(*[_one_board(client, b) for b in boards()])
     finally:
         if own_client:
             await client.aclose()
+    if FAILED_BOARDS:
+        print(f"[brand-first] {len(FAILED_BOARDS)} board(s) failed this run — their "
+              f"postings are EXEMPT from the stale-check: "
+              f"{', '.join(sorted(FAILED_BOARDS))}", file=sys.stderr)
 
     seen: set[str] = set()
     deduped: list[dict] = []

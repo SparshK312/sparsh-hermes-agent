@@ -365,13 +365,23 @@ NEGATIVE_ROLE_KEYWORDS = [
     "research scientist",
 ]
 
-TARGET_PERIODS_LOWER = ["fall 2026", "winter 2027", "spring 2027", "summer 2027"]
+# 2026-08-18 — retargeted. Fall 2026 is FILLED (Shopify extension, Sep 1 – Dec 18),
+# so it is no longer a target. The remaining PEY rotations are Winter 2027 (Jan–Apr)
+# and Summer 2027 (May–Aug). US employers routinely label Jan–Apr "Spring", so
+# spring 2027 stays. Final year is Fall 2027 – Winter 2028 — he is back in school
+# full-time from Sept 2027, so FALL 2027 AND LATER ARE NOT TAKEABLE.
+TARGET_PERIODS_LOWER = ["winter 2027", "spring 2027", "summer 2027"]
 
-# Periods that are past or currently happening → reject for forward planning
+# Periods outside the takeable window → reject. (Named "PAST" historically; it is
+# really "out of window" — it now carries future terms too.)
 PAST_PERIODS_LOWER = [
     "summer 2026", "spring 2026", "winter 2026", "fall 2025",
     "summer 2025", "spring 2025", "winter 2025", "fall 2024",
     "summer 2024", "spring 2024", "winter 2024",
+    # filled by the Shopify extension
+    "fall 2026",
+    # back in school for the final year — not takeable
+    "fall 2027", "winter 2028", "spring 2028", "summer 2028",
 ]
 
 OFFSEASON_SOURCE_NAMES = {"simplify-offseason", "vansh-offseason"}

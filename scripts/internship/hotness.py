@@ -49,13 +49,67 @@ TIER_A = {
     "snowflake", "github",
 }
 TIER_B = {
-    "rippling", "1password", "cerebras", "tesla", "autodesk", "intel",
+    "rippling", "1password", "cerebras", "autodesk", "intel",
     "unity", "bosch", "cibc", "ciena", "rivian", "rivian vw", "dolby",
     "coveo", "kinaxis",
     # added Jun 20
     "sofi", "zoox", "capital one", "pinterest", "reddit",
+    # added Aug 18 — brands that appear via the wide net with no board wired
+    "ibm", "qualcomm", "amd", "salesforce", "atlassian", "instacart",
+    "lyft", "twilio", "cloudkitchens", "the trade desk", "binance",
 }
 # everything else -> "C"
+
+# ── Aug 18 2026: brands with NO board in company_boards.py that still show up
+#    via the wide net. Anything WITH a board is tiered from that file directly
+#    (see _board_tiers below) so the two lists can no longer drift.
+# S is reserved for FAANG+ and the frontier labs. TikTok/ByteDance are strong ML
+# brands but not that tier, and putting them in S made them flood the top of the
+# queue (20 of the top 30 on 2026-08-18) with near-identical reqs.
+TIER_S |= {"spacex"}
+TIER_A |= {
+    "tiktok", "bytedance",
+    "palantir", "citadel", "citadel securities", "jane street", "two sigma",
+    "jump trading", "hudson river trading", "hrt", "imc", "imc trading",
+    "optiver", "de shaw", "point72", "drw", "block", "square",
+    "sierra", "harvey", "glean", "cognition", "decagon", "elevenlabs",
+    "together ai", "modal", "baseten", "runway", "anduril", "applied intuition",
+}
+
+# ── single source of truth: tiers declared on the boards file win ─────────────
+# The July board expansion added 12 elite companies to company_boards.py and did
+# not touch the hardcoded sets above, so Palantir(S), Roblox/Cloudflare/HRT/
+# Anduril/DoorDash/Dropbox/Discord/Uber(A) and Samsara/Verkada/Nuro/Affirm(B) all
+# silently scored as "C" — 18 of 62 companies mis-tiered, which inverted the top
+# of a brand-first ranking (Ciena outranked Palantir). Reading the declaration
+# directly makes that class of drift impossible. The sets above remain the
+# fallback for companies that appear via the wide net with no board wired.
+def _board_tiers() -> dict[str, str]:
+    try:
+        from company_boards import BOARDS
+    except Exception:  # noqa: BLE001 — never let a tier lookup break scoring
+        return {}
+    return {normalize_company_name(b["name"]): b.get("tier", "C") for b in BOARDS}
+
+
+_BOARD_TIERS: dict[str, str] | None = None
+
+
+def _name_matches(brand: str, nn: str, words: set[str]) -> bool:
+    """Does normalized company `nn` (pre-split into `words`) name `brand`?
+
+    Single-word brands must match a WHOLE WORD — otherwise 'meta' fires on
+    'Nox Metals' and 'intel' on 'Intellivision' (both real false positives
+    caught 2026-08-18 when the board-tier lookup was first added with a plain
+    substring test). Multi-word brands are phrase-matched, which is already
+    specific enough to be safe.
+    """
+    if not brand:
+        return False
+    parts = brand.split()
+    if len(parts) == 1:
+        return parts[0] in words
+    return brand in nn
 
 # PM is accepted here even though internship_scraper rejects it for the daily digest.
 _PM_NEGATIVES = {"product manager", "product management"}
@@ -82,18 +136,30 @@ _SWE_KEYWORDS = ("software", "swe", "sde", "sdet", "backend", "back-end",
 
 def brand_tier(company: str) -> str:
     """Whole-word / phrase match so 'meta' doesn't fire on 'nox METAls' and
-    'intel' doesn't fire on 'INTELlivision'."""
+    'intel' doesn't fire on 'INTELlivision'.
+
+    Resolution order (Aug 18 2026):
+      1. the tier DECLARED in company_boards.py — the single source of truth
+      2. the hardcoded sets above — fallback for wide-net brands with no board
+    """
     nn = normalize_company_name(company)
     if not nn:
         return "C"
+
     words = set(nn.split())
+
+    global _BOARD_TIERS
+    if _BOARD_TIERS is None:
+        _BOARD_TIERS = _board_tiers()
+    if nn in _BOARD_TIERS:                       # exact normalized match
+        return _BOARD_TIERS[nn]
+    for bn, tier in _BOARD_TIERS.items():
+        if _name_matches(bn, nn, words):
+            return tier
+
     for tier, names in (("S", TIER_S), ("A", TIER_A), ("B", TIER_B)):
         for n in names:
-            parts = n.split()
-            if len(parts) == 1:
-                if parts[0] in words:           # single-word brand = whole word
-                    return tier
-            elif n in nn:                        # multi-word brand = phrase match
+            if _name_matches(n, nn, words):
                 return tier
     return "C"
 

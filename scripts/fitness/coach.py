@@ -390,18 +390,20 @@ def _find_worklist():
     weeks. The nudge never once fired and nothing surfaced, because "no backlog"
     and "cannot find the file" were the same code path.
 
-    Resolution order: known locations first, then a glob so a future move
-    degrades to a warning rather than permanent silence."""
+    2026-08-18 — THAT FIX REINTRODUCED THE SAME BUG ONE LEVEL UP. It pinned the
+    *June* filename first, and the June file still exists, so the glob fallback
+    was never reached. Every weekday at 19:00 this read a worklist superseded on
+    Aug 10 and named `Amazon — AWS Data Services SDE Intern` as the top priority:
+    a Fall 2026 req, for a cycle the Shopify extension had already filled.
+
+    Pinning ANY filename is the bug. Resolve to the NEWEST worklist by mtime, so
+    writing a new one is all it takes to retarget the nudge."""
     base = E.VAULT / "06 - Internships"
-    for rel in ("Job Search/Apply Now Worklist - Jun 2026.md",
-                "Apply Now Worklist - Jun 2026.md"):
-        p = base / rel
-        if p.is_file():
-            return p
-    hits = sorted(base.glob("**/Apply Now Worklist*.md")) if base.is_dir() else []
+    hits = sorted((p for p in base.glob("**/Apply Now Worklist*.md") if p.is_file()),
+                  key=lambda p: p.stat().st_mtime, reverse=True) if base.is_dir() else []
     if hits:
         return hits[0]
-    return base / "Job Search" / "Apply Now Worklist - Jun 2026.md"  # canonical; for the error path
+    return base / "Job Search" / "Apply Now Worklist.md"  # canonical; for the error path
 
 
 WORKLIST = _find_worklist()
@@ -416,17 +418,45 @@ def _intern_applied_today() -> bool:
 
 def _worklist_backlog() -> tuple[int, str | None]:
     """(count, top_role) parsed from the Apply-Now Worklist markdown tables. Robust to the
-    other agent's edits — reads whatever rows are present; silent if the file/format is gone."""
-    txt = E.read(WORKLIST, limit=20000)
+    other agent's edits — reads whatever rows are present; silent if the file/format is gone.
+
+    2026-08-18 — column position is NOT stable across worklist rewrites. The old
+    regex assumed `| <number> | Company | Role |`; the Aug worklist's ranked table
+    is `| Fit | Cycle | Company | Role |`, so it would have reported the *cycle*
+    as the company ("Summer 2027 — Roblox"). Locate the Company/Role columns by
+    HEADER NAME per table instead, and fall back to the old shape only when a
+    table has no usable header."""
+    txt = E.read(WORKLIST, limit=40000)
     if not txt:
         return 0, None
-    rows = []
-    for c, r in re.findall(r"^\|\s*\d+[a-z]?\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|", txt, re.M):
-        company = c.replace("*", "").strip()
-        role = r.replace("*", "").strip()
-        if company.lower() in ("company", "") or role.lower() in ("role", ""):
+
+    rows: list[tuple[str, str]] = []
+    ci = ri = None
+    for line in txt.splitlines():
+        s = line.strip()
+        if not s.startswith("|"):
+            ci = ri = None                      # table ended
+            continue
+        cells = [c.strip().replace("*", "") for c in s.strip("|").split("|")]
+        low = [c.lower() for c in cells]
+        if "company" in low and "role" in low:  # header row -> learn the layout
+            ci, ri = low.index("company"), low.index("role")
+            continue
+        if set("".join(low)) <= set("-: "):     # separator row
+            continue
+        if ci is not None and ri is not None and max(ci, ri) < len(cells):
+            company, role = cells[ci], cells[ri]
+        elif len(cells) >= 3 and re.fullmatch(r"\d+[a-z]?", low[0] or ""):
+            company, role = cells[1], cells[2]  # legacy `| n | Company | Role |`
+        else:
+            continue
+        # markdown links -> plain text: "[SWE Intern](https://…)" -> "SWE Intern"
+        role = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", role).strip()
+        company = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", company).strip()
+        if not company or not role or company.lower() == "company":
             continue
         rows.append((company, role))
+
     if not rows:
         return 0, None
     return len(rows), f"{rows[0][0]} — {rows[0][1]}"

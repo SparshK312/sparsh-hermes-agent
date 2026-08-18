@@ -23,7 +23,12 @@ from openpyxl import load_workbook
 from build_curated_xlsx import check_lock, read_back_human, write_board, ID_HEADER
 from curated_store import CuratedStore
 
-STORE_PATH = VAULT / "06 - Internships" / "Internship Pipeline" / "curated_postings.json"
+# 2026-08-18: was ".../Internship Pipeline/curated_postings.json" — the pre-reorg
+# path. The 2026-06-26 vault reorg moved the store to "Job Search/" (curate.py and
+# fit_pass.py were updated, this file was not), so the suite loaded an EMPTY store
+# and asserted out at "need >=3 queue rows" before running a single check. The
+# round-trip-preserve guarantee has therefore been untested for ~8 weeks.
+STORE_PATH = VAULT / "06 - Internships" / "Job Search" / "curated_postings.json"
 
 PASS = 0
 FAIL = 0

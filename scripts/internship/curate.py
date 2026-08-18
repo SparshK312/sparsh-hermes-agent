@@ -156,12 +156,21 @@ sys.path.insert(0, str(VAULT / "Scripts"))
 
 import brand_first_source  # noqa: E402
 import wide_net_source  # noqa: E402
+from company_boards import boards as _boards  # noqa: E402
 from build_curated_xlsx import is_locked, read_back_human, write_board  # noqa: E402
 from curated_store import CuratedStore  # noqa: E402
 from hotness import hotness, role_lane  # noqa: E402
 from internship_scraper import canonical_id, normalize_company_name  # noqa: E402
 
 STALE_STRIKES = 2
+# Wide-net sources are ROLLING WINDOWS — falling off a GitHub README is not
+# evidence a req closed (measured 2026-08-18: 54% of dead wide-net rows were
+# still open on the employer's own ATS). Needs many more strikes than a direct
+# API dropout before we believe it.
+WIDE_STALE_STRIKES = 14          # ~1 week at 2 runs/day
+# A healthy lane-1 harvest is ~68 roles (median over 108 logged runs, min 25).
+# Below this, treat lane 1 as collapsed and exempt its postings from striking.
+LANE1_MIN_HEALTHY = 25
 _ACTIONED = {"applied", "oa", "phone screen", "onsite", "offer", "rejected",
              "networking", "on hold"}
 
@@ -329,19 +338,62 @@ async def refresh(notify: bool = False) -> int:
               f"board (no stale-check, no overwrite).", file=sys.stderr)
         return 0
 
-    # 4) re-score everything (recency decays) + stale-check brand-board dropouts
+    # 4) re-score everything (recency decays) + stale-check dropouts
+    #
+    # 2026-08-18 REWRITE — `dead` used to mean "my source stopped listing it",
+    # which is NOT the same as "the job closed". Two independent false-dead
+    # mechanisms were measured against employers' own ATS APIs:
+    #   • wide-net roll-off: the GitHub/Gmail aggregators are ROLLING WINDOWS and
+    #     drop older entries to stay readable. 54% of dead wide-net rows were
+    #     still open (Palantir x3, IMC Summer 2027, Modal, Binance.US...).
+    #   • brand-board fetch failure: a transient timeout looked identical to an
+    #     empty board. 14% of dead brand-board rows were still open, incl.
+    #     Anduril "2027 Software Engineer Intern".
+    # Fixes, in order of how much they recover:
+    #   (a) postings from a board that ERRORED this run are exempt entirely
+    #   (b) `manual` boards (Google/Meta/Microsoft/Tesla/Apple/Netflix/Uber/
+    #       Rippling) are never auto-dead — lane 1 can't fetch them at all, so a
+    #       disappearance carries no information. They're the top brands.
+    #   (c) wide-net rows need far more strikes, because roll-off is expected
+    #   (d) PER-LANE collapse guard: the old guard only tested the COMBINED
+    #       harvest (<50), so when lane 1 collapsed and lane 2 stayed healthy the
+    #       total cleared the bar and every brand-board posting took a strike.
+    #       That happened in 14 of 108 logged runs (13%) — including lane1=5
+    #       against a healthy median of 68.
+    failed_boards = {normalize_company_name(n)
+                     for n in getattr(brand_first_source, "FAILED_BOARDS", set())}
+    manual_boards = {normalize_company_name(b["name"]) for b in _boards()
+                     if b.get("ats_type") == "manual"}
+
+    lane1_ok = len(lane1) >= LANE1_MIN_HEALTHY
+    if not lane1_ok:
+        print(f"[refresh] ⚠️ lane-1 harvest is anomalously low ({len(lane1)} < "
+              f"{LANE1_MIN_HEALTHY}) — brand-board postings are EXEMPT from the "
+              f"stale-check this run (partial-collapse guard).", file=sys.stderr)
+
     stale = 0
     for cid, rec in store.items():
         m = rec.get("machine", {})
         src = m.get("source", "")
-        harvestable = src == "brand-board" or src.startswith("wide:")
-        if harvestable and cid not in harvested:
+        is_brand = src == "brand-board"
+        is_wide = src.startswith("wide:")
+        nn = normalize_company_name(m.get("company", ""))
+
+        exempt = (
+            nn in failed_boards            # (a) its board errored this run
+            or nn in manual_boards         # (b) no API exists to confirm death
+            or (is_brand and not lane1_ok)  # (d) lane-1 partial collapse
+        )
+        strikes_needed = WIDE_STALE_STRIKES if is_wide else STALE_STRIKES
+
+        if (is_brand or is_wide) and cid not in harvested and not exempt:
             m["fail_count"] = int(m.get("fail_count", 0)) + 1
-            if m["fail_count"] >= STALE_STRIKES:
+            if m["fail_count"] >= strikes_needed and not m.get("dead"):
                 m["dead"] = True
                 stale += 1
         elif cid in harvested:
             m["fail_count"] = 0
+            m["dead"] = False               # reappeared -> it was never dead
         # refresh age + re-score from stored posted_date
         if m.get("company") and m.get("role"):
             age = brand_first_source._age_from_date(m.get("posted_date", ""))
