@@ -172,7 +172,9 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   rm -rf ~/.hermes/scripts/dashboard && cp -r scripts/dashboard ~/.hermes/scripts/dashboard
   # The internship watcher (scraper + sources + frontier-triage). Vendored into the
   # repo (was VPS-only). The cron runs internship_watch.sh -> internship_triage.py
-  # (one GPT-5.5 call, no agent). bs4 + the OpenAI key must be present on the box.
+  # (one openai/gpt-5.5 call via OpenRouter, no agent). bs4 + OPENROUTER_API_KEY
+  # must be present on the box — was the direct OpenAI key until 2026-08-20, when
+  # that key was revoked and all five callers moved to OpenRouter.
   rm -rf ~/.hermes/scripts/internship && cp -r scripts/internship ~/.hermes/scripts/internship
   cp scripts/cron/internship_watch.sh      ~/.hermes/scripts/internship_watch.sh
   chmod +x ~/.hermes/scripts/internship_watch.sh

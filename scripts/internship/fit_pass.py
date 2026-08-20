@@ -58,9 +58,18 @@ OPENAI_URL = "https://openrouter.ai/api/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 VALID_DQ = {"none", "wrong-cycle", "phd-required", "citizenship",
             "clearance", "long-placement", "deadline-passed", "other"}
-_TEMPERATURE_OK = {"gpt-5.4-mini"}   # non-reasoning models that accept temperature=0
-# rough per-MTok pricing (USD) for the cost log — confirm against the live dashboard
+# Non-reasoning models that accept temperature=0. MUST list the OpenRouter-prefixed
+# slug too: FIT_MODEL moved to "openai/gpt-5.4-mini" in the OpenRouter migration, and
+# an unprefixed-only set silently made is_reasoning True — dropping `temperature: 0`
+# and bumping max_tokens 1500 -> 8000. Determinism at temp 0 is the exact property
+# the 2026-06-22 eval certified ("raw mini was flaky"; 7/7 stable, 14/14 recall), and
+# every JD is scored through it. Keep both spellings in sync with FIT_MODEL.
+_TEMPERATURE_OK = {"gpt-5.4-mini", "openai/gpt-5.4-mini"}
+# rough per-MTok pricing (USD) for the cost log — confirm against the live dashboard.
+# Both spellings, same reason as above: an unprefixed-only dict silently fell back to
+# the (1.0, 5.0) default and mis-stated the cost line.
 PRICE = {"gpt-5.4-mini": (0.25, 2.0), "gpt-5.5": (1.0, 8.0),
+         "openai/gpt-5.4-mini": (0.25, 2.0), "openai/gpt-5.5": (1.0, 8.0),
          "claude-haiku-4-5": (1.0, 5.0), "claude-sonnet-4-6": (3.0, 15.0)}
 
 
