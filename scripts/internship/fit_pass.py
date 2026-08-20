@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from applicant_profile import load_profile  # noqa: E402
 
 # ── config (swapping the model is a one-line edit) ────────────────────────────
-FIT_MODEL = "gpt-5.4-mini"          # EMPIRICALLY VALIDATED 2026-06-22 with the fit_rubric.md prompt:
+FIT_MODEL = "openai/gpt-5.4-mini"          # EMPIRICALLY VALIDATED 2026-06-22 with the fit_rubric.md prompt:
 #                                     test_fit_pass.py 7/7 runs STABLE PASS, 14/14 recall, 0 false-pos.
 #                                     The rich rubric made the cheap model consistent (raw mini was flaky).
 #                                     Escalate -> "gpt-5.5" (slow, reasoning) or "claude-..." only if a
@@ -54,7 +54,7 @@ PROMPT_VERSION = "fit-v3.4"        # bump to force re-score on prompt changes (p
 #                                    decision procedure + "does NOT apply" guards + worked examples
 
 ENV_FILE = Path.home() / ".hermes" / ".env"
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_URL = "https://openrouter.ai/api/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 VALID_DQ = {"none", "wrong-cycle", "phd-required", "citizenship",
             "clearance", "long-placement", "deadline-passed", "other"}
@@ -186,7 +186,7 @@ def _call_model(model: str, user_content: str, max_tokens: int = 1500):
     is_reasoning = (not is_claude) and (model not in _TEMPERATURE_OK)
     if is_reasoning:
         max_tokens = max(max_tokens, 8000)
-    key = env("ANTHROPIC_API_KEY" if is_claude else "OPENAI_API_KEY")
+    key = env("ANTHROPIC_API_KEY" if is_claude else "OPENROUTER_API_KEY")
     if not key:
         log(f"no API key for {model}")
         return None
@@ -348,7 +348,7 @@ def run_fit_pass(store, model: str = FIT_MODEL, max_llm: int = MAX_LLM_PER_RUN,
     """Score JD-bearing postings that are new/changed; cache results in the store.
     Never raises — a model failure just leaves those postings unscored (retried next run)."""
     st = FitStats()
-    if not env("ANTHROPIC_API_KEY" if model.startswith("claude") else "OPENAI_API_KEY"):
+    if not env("ANTHROPIC_API_KEY" if model.startswith("claude") else "OPENROUTER_API_KEY"):
         log("no API key — skipping fit pass (board renders without Fit)")
         return st
 

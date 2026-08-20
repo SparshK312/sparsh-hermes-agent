@@ -81,8 +81,8 @@ CHAT_ID = "696500863"  # Sparsh
 WEEKDAY_CUTOFF = datetime.time(9, 0)
 WEEKEND_CUTOFF = datetime.time(11, 0)
 
-OPENAI_MODEL = "gpt-5.4-mini"
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_MODEL = "openai/gpt-5.4-mini"
+OPENAI_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 DRY_RUN = "--dry-run" in sys.argv
 NO_LLM = "--no-llm" in sys.argv
@@ -466,7 +466,7 @@ def _env(key: str) -> str | None:
 
 
 def _openai_key() -> str | None:
-    return _env("OPENAI_API_KEY")
+    return _env("OPENROUTER_API_KEY")
 
 
 def send_message(text: str) -> bool:
@@ -517,7 +517,7 @@ def compose_rich(facts: dict) -> str | None:
         return None
     key = _openai_key()
     if not key:
-        _log("compose_rich: no OPENAI_API_KEY")
+        _log("compose_rich: no OPENROUTER_API_KEY")
         return None
 
     user = json.dumps(facts, ensure_ascii=False, indent=2)

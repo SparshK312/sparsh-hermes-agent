@@ -34,7 +34,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 
-def _wait_for_network(hosts=("boards-api.greenhouse.io", "api.openai.com", "api.telegram.org"),
+def _wait_for_network(hosts=("boards-api.greenhouse.io", "openrouter.ai", "api.telegram.org"),
                       tries=18, delay=5) -> bool:
     """Scheduled runs fire as the Mac wakes, and the network settles UNEVENLY — the job
     boards resolve before OpenAI/Telegram do. Wait (up to ~90s) until ALL critical hosts

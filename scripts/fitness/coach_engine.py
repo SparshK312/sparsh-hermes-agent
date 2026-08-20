@@ -36,8 +36,8 @@ STATE = HOME / ".hermes" / "health" / "coach_state.json"   # message budget / de
 TZ = ZoneInfo("America/Toronto")
 CHAT_ID = "696500863"
 
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-COACH_MODEL = "gpt-5.5"
+OPENAI_URL = "https://openrouter.ai/api/v1/chat/completions"
+COACH_MODEL = "openai/gpt-5.5"
 
 # Locked targets (Profile.md baseline)
 TARGETS = {"kcal": 2400, "protein_g": 140, "water_l": 2.5, "sleep_h": 7.0, "training_days_per_week": 4}
@@ -400,7 +400,7 @@ def context_docs() -> dict:
 
 # ---------------------------------------------------------------- frontier compose (+ structured/validate)
 def compose_text(system: str, user: str, max_tokens: int = 2000) -> str | None:
-    key = env("OPENAI_API_KEY")
+    key = env("OPENROUTER_API_KEY")
     if not key:
         return None
     body = json.dumps({
@@ -423,7 +423,7 @@ def compose_text(system: str, user: str, max_tokens: int = 2000) -> str | None:
 
 def compose_json(system: str, user: str, max_tokens: int = 2000) -> dict | None:
     """Frontier call constrained to a JSON object (response_format json_object)."""
-    key = env("OPENAI_API_KEY")
+    key = env("OPENROUTER_API_KEY")
     if not key:
         return None
     body = json.dumps({

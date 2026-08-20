@@ -10,7 +10,7 @@ runs as a script-mode cron) does not also post stdout.
 
   fitness_report.py [--days N] [--no-send]   (default 7-day window)
 
-Reads TELEGRAM_BOT_TOKEN + OPENAI_API_KEY from ~/.hermes/.env (like the brief gate).
+Reads TELEGRAM_BOT_TOKEN + OPENROUTER_API_KEY from ~/.hermes/.env (like the brief gate).
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ ENV_FILE = HOME / ".hermes" / ".env"
 CHARTS = VAULT / "07 - Health" / "Charts"
 TZ = ZoneInfo("America/Toronto")
 CHAT_ID = "696500863"
-OPENAI_MODEL = "gpt-5.4-mini"
+OPENAI_MODEL = "openai/gpt-5.4-mini"
 
 
 def _env(key: str) -> str | None:
@@ -93,7 +93,7 @@ def _templated_note(f: dict) -> str:
 
 
 def compose_note(f: dict) -> str:
-    key = _env("OPENAI_API_KEY")
+    key = _env("OPENROUTER_API_KEY")
     if not key:
         return _templated_note(f)
     body = json.dumps({
@@ -105,7 +105,7 @@ def compose_note(f: dict) -> str:
     for _ in range(3):
         try:
             req = urllib.request.Request(
-                "https://api.openai.com/v1/chat/completions", data=body,
+                "https://openrouter.ai/api/v1/chat/completions", data=body,
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=45) as r:
                 out = json.loads(r.read())["choices"][0]["message"]["content"].strip()

@@ -39,8 +39,8 @@ from applicant_profile import load_profile  # noqa: E402 — personal profile fr
 
 ENV_FILE = Path.home() / ".hermes" / ".env"
 CHAT_ID = "696500863"
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-MODEL = "gpt-5.5"
+OPENAI_URL = "https://openrouter.ai/api/v1/chat/completions"
+MODEL = "openai/gpt-5.5"
 WAKE_GATE = '{"wakeAgent": false}'
 VALID_VERDICTS = {"apply now", "wait", "consider", "skip"}
 
@@ -184,7 +184,7 @@ SYS_PROMPT = (
 def frontier_triage(new_postings: list) -> tuple[dict, str | None]:
     """One GPT-5.5 call. Returns ({id: {verdict,reason,cover_line}}, digest|None).
     Empty dict + None on any failure (caller falls back to rule verdicts)."""
-    key = env("OPENAI_API_KEY")
+    key = env("OPENROUTER_API_KEY")
     if not key or NO_LLM:
         return {}, None
 
