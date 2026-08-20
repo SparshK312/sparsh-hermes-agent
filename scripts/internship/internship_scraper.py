@@ -452,6 +452,19 @@ def classify_location(location: str) -> tuple[str, str]:
         if n and re.search(rf"\b{re.escape(n)}\b", loc_lower):
             return "reject", f"non-US/Canada (contains '{n}')"
 
+    # 2b) Bare "US" / "U.S." token. MUST run AFTER the negative pass above, and
+    # must NEVER be a COUNTRY_POSITIVE_SUBSTRINGS entry: that list is tested with
+    # a plain `in`, so a bare "us" there admits 124 live rows of garbage —
+    # "Sydney, Australia" x78, "Aarhus, Denmark", "Remote - Cyprus",
+    # "Brussels, Belgium". Positives also short-circuit negatives, so a list entry
+    # would additionally admit "Remote - US/UK" and "London, UK / US Remote".
+    # Placed here, all of those still reject, and 285 genuinely-US rows are
+    # recovered ("Remote - US" x123, "Remote US" x88, "US-Remote", "Virtual US").
+    # Word-boundary verified clean on Aarhus / Belarus / Cyprus / "Main Campus,
+    # Ohio" / "Santa Cruz, CA" / "Bus Terminal" / "Campus - Mumbai".
+    if re.search(r"\bu\.?s\.?\b", loc_lower):
+        return "match", "US token"
+
     # 3) 2-letter state/province codes: comma format ("City, CA") OR Workday's
     # country-prefixed format ("US-CA-...", "CA-ON-..."). The country prefix is
     # required for the hyphen form so a foreign "DE-BW-..." can't false-match.

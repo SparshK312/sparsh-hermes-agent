@@ -305,7 +305,12 @@ async def refresh(notify: bool = False) -> int:
             return a1
         if len(a.get("full_jd", "")) != len(b.get("full_jd", "")):
             return len(a.get("full_jd", "")) > len(b.get("full_jd", ""))
-        return (a.get("age_days") or 999) < (b.get("age_days") or 999)
+        # `or 999` is WRONG here: age_days == 0 is falsy, so a role posted TODAY
+        # scored 999 and LOST dedup to an older duplicate — exactly inverted, and
+        # it penalised precisely the postings most worth applying to first.
+        a_age = a.get("age_days")
+        b_age = b.get("age_days")
+        return (999 if a_age is None else a_age) < (999 if b_age is None else b_age)
 
     best: dict[tuple, dict] = {}
     for r in lane1 + lane2:

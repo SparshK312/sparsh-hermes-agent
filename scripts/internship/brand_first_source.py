@@ -190,7 +190,11 @@ async def collect(client=None) -> list[dict]:
     for rec in deduped:
         key = (rec["company"].strip().lower(), rec["role"].strip().lower())
         cur = best.get(key)
-        if cur is None or (rec.get("age_days") or 999) < (cur.get("age_days") or 999):
+        # `or 999` is WRONG: age_days == 0 is falsy, so a role posted TODAY was
+        # scored 999 and lost "keep the freshest" to an older duplicate.
+        r_age = rec.get("age_days")
+        c_age = cur.get("age_days") if cur else None
+        if cur is None or (999 if r_age is None else r_age) < (999 if c_age is None else c_age):
             best[key] = rec
     return list(best.values())
 

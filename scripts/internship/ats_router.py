@@ -233,6 +233,45 @@ async def _post_json(client: httpx.AsyncClient, url: str, body: dict, headers=No
         return None, r.status_code
 
 
+# ── Greenhouse location repair ────────────────────────────────────────────────
+# Some Greenhouse boards put the WORK MODEL in `location.name` ("Hybrid",
+# "In-Office", "Flexible - Any SpaceX Site") and keep the actual city in
+# `offices[]`. classify_location() then finds no geography and HARD-REJECTS the
+# posting, so it is dropped silently — not logged, not flagged, just absent.
+# Measured 2026-08-20 over 11,529 live postings: cloudflare 299/304 postings,
+# samsara 184/263, affirm 137/201. Both SpaceX 2027 SWE internships were
+# invisible this way.
+#
+# Two traps this implementation exists to avoid:
+#   1. classify_location matches bare "Remote" by EXACT-SET membership, so
+#      appending anything to it destroys the match. Merging only when the string
+#      STARTS with a work-model token, and skipping office values that are
+#      themselves work models, keeps "Remote" intact.
+#   2. A blanket merge admits foreign roles. Positives run before negatives in
+#      classify_location, so an all-foreign office list still rejects, while a
+#      mixed list correctly matches on its US/CA entry.
+# Net over the full corpus: +492 admitted, 1 regression (Verkada
+# "Remote" + "France Remote", which is a correct rejection).
+_WORK_MODEL = re.compile(r"^(hybrid|remote|distributed|flexible|on-?site|in-?office|"
+                         r"anywhere|multiple locations?|various)\b", re.I)
+
+
+def _merge_offices(loc: str, offices) -> str:
+    """Append real geography from offices[] when location.name is a work model."""
+    loc = (loc or "").strip()
+    if not _WORK_MODEL.match(loc):
+        return loc
+    seen, parts = set(), []
+    for o in offices or []:
+        v = ((o or {}).get("location") or (o or {}).get("name") or "").strip()
+        k = v.lower()
+        if v and k not in seen and k != loc.lower() and not _WORK_MODEL.fullmatch(v):
+            seen.add(k)
+            parts.append(v)
+    # Append rather than replace: the work model is real signal downstream.
+    return f"{loc} — {'; '.join(parts)}" if parts else loc
+
+
 # ── per-ATS board fetchers ────────────────────────────────────────────────────
 async def _board_greenhouse(client, board) -> list[JobRecord]:
     token = board["token"]
@@ -244,10 +283,14 @@ async def _board_greenhouse(client, board) -> list[JobRecord]:
     for j in data.get("jobs", []):
         out.append(JobRecord(
             title=j.get("title", ""),
-            location=(j.get("location") or {}).get("name", ""),
+            location=_merge_offices((j.get("location") or {}).get("name", ""), j.get("offices")),
             url=j.get("absolute_url", ""),
             full_jd=clean_fragment(j.get("content", "")),
-            posted_date=_iso_to_date(j.get("updated_at") or j.get("first_published") or ""),
+            # first_published, NOT updated_at: a re-touched req is not a fresh one.
+            # Median gap 49 days, p90 258, max 2,681 across 11,528 live postings —
+            # and age_days<=7 drives both the apply-now verdict and hotness, so
+            # preferring updated_at systematically overstates freshness board-wide.
+            posted_date=_iso_to_date(j.get("first_published") or j.get("updated_at") or ""),
             ats_type="greenhouse",
             req_id=str(j.get("id", "")),
         ))
@@ -265,9 +308,21 @@ async def _board_ashby(client, board) -> list[JobRecord]:
         loc = j.get("location") or ""
         if not loc and j.get("address"):
             loc = (j.get("address") or {}).get("postalAddress", {}).get("addressLocality", "")
+        loc = loc or j.get("locationName", "")
+        # secondaryLocations[] holds additional real geographies (objects, not
+        # strings). Ignoring them means a role labelled "Canada" but ALSO
+        # US-eligible reads Canada-only. 42 live rows are misclassified this way;
+        # Notion and Replit are both Ashby.
+        for sec in j.get("secondaryLocations") or []:
+            sv = ((sec or {}).get("location") or "").strip()
+            if not sv:
+                sv = (((sec or {}).get("address") or {})
+                      .get("postalAddress", {}).get("addressLocality", "") or "").strip()
+            if sv and sv.lower() not in loc.lower():
+                loc = f"{loc}; {sv}" if loc else sv
         out.append(JobRecord(
             title=j.get("title", ""),
-            location=loc or j.get("locationName", ""),
+            location=loc,
             url=j.get("jobUrl") or j.get("applyUrl", ""),
             full_jd=clean_fragment(j.get("descriptionHtml") or j.get("descriptionPlain", "")),
             posted_date=_iso_to_date(j.get("publishedAt") or j.get("updatedAt") or ""),
@@ -583,10 +638,19 @@ async def _single_greenhouse(client, url) -> JobRecord:
         client, f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs/{job_id}")
     if not data:
         return JobRecord(url=url, dead=True, error=f"greenhouse api {code}")
+    # SAME two repairs as _board_greenhouse. This is the path most wide-net
+    # Greenhouse rows take (via fetch_jd_record), so fixing only the board
+    # fetcher leaves the store split-brain: brand-board rows get true ages and
+    # merged locations while wide-net rows keep inflated freshness and
+    # work-model locations. The single-job endpoint returns both `offices` and
+    # `first_published` — verified live on Cloudflare 7902104
+    # (first_published 2026-08-03 vs updated_at 2026-08-06).
     return JobRecord(
-        title=data.get("title", ""), location=(data.get("location") or {}).get("name", ""),
+        title=data.get("title", ""),
+        location=_merge_offices((data.get("location") or {}).get("name", ""), data.get("offices")),
         url=data.get("absolute_url") or url, full_jd=clean_fragment(data.get("content", "")),
-        posted_date=_iso_to_date(data.get("updated_at", "")), req_id=str(data.get("id", "")),
+        posted_date=_iso_to_date(data.get("first_published") or data.get("updated_at") or ""),
+        req_id=str(data.get("id", "")),
     )
 
 
