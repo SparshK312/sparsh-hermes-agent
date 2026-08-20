@@ -35,6 +35,13 @@ BOARDS = [
     {"name": "Anthropic", "tier": "S", "ats_type": "greenhouse", "token": "anthropic"},
     {"name": "OpenAI", "tier": "S", "ats_type": "ashby", "org": "openai"},
     {"name": "Amazon", "tier": "S", "ats_type": "amazon"},
+    # SpaceX was never a tracked board — its roles only ever reached the queue
+    # via the wide net, the lane whose dead-signal is least trustworthy. It is
+    # also the single biggest beneficiary of the work-model location fix: every
+    # posting reads "Flexible - Any SpaceX Site" with the real cities in
+    # offices[], so all 2,166 hard-rejected before that landed.
+    # Verified live 2026-08-20: token "spacex" returns 2,166 postings.
+    {"name": "SpaceX", "tier": "S", "ats_type": "greenhouse", "token": "spacex"},
 
     # ── A tier — fintech unicorns & top startups ───────────────────────────
     {"name": "Stripe", "tier": "A", "ats_type": "greenhouse", "token": "stripe"},
