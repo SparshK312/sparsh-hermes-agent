@@ -1,0 +1,11 @@
+[Unit]
+Description=Alert that the Hermes watchdog itself failed
+Documentation=https://github.com/SparshK312/sparsh-hermes-agent
+
+[Service]
+Type=oneshot
+# Without this, a crashed/killed watchdog is indistinguishable from a healthy
+# system — the documented contract is "silence = healthy", which is only true
+# if a broken watchdog can still speak.
+ExecStart=/usr/local/bin/hermes_watchdog.sh --alert "the watchdog unit itself FAILED (hermes-watchdog.service). Nothing is monitoring the gateway until this is fixed. Check: systemctl status hermes-watchdog.service"
+TimeoutStartSec=60

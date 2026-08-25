@@ -3,13 +3,14 @@ Description=Run the Hermes gateway liveness watchdog every 2 minutes
 Documentation=https://github.com/SparshK312/sparsh-hermes-agent
 
 [Timer]
-# Start checking shortly after boot, then every 2 min.
-OnBootSec=3min
-OnUnitActiveSec=2min
+# OnCalendar, not OnUnitActiveSec: the latter measures from activation, so a
+# run that restarts the gateway (25s verify sleep) pushes every later run out
+# and the period drifts. Wall-clock scheduling keeps the cadence fixed.
+OnCalendar=*:0/2
+# Cover the case where the box booted while the timer was due.
+Persistent=true
 AccuracySec=15s
 Unit=hermes-watchdog.service
-# No RandomizedDelaySec: this is a health probe, jitter buys nothing and only
-# widens the detection window.
 
 [Install]
 WantedBy=timers.target

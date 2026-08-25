@@ -1,11 +1,16 @@
 [Unit]
 Description=Hermes gateway liveness watchdog (external — see hermes_watchdog.sh header)
 Documentation=https://github.com/SparshK312/sparsh-hermes-agent
+# A dead watchdog and a healthy system look identical, so failure must be loud.
+OnFailure=hermes-watchdog-failure.service
 # Deliberately NOT Requires=hermes-gateway.service: the watchdog must keep
 # running (and stay silent) even while the gateway is down or being replaced.
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/hermes_watchdog.sh
-# The script sleeps ~25s after a restart to verify, then notifies.
-TimeoutStartSec=120
+# Must exceed the gateway's own drain budget. hermes-gateway has
+# TimeoutStopSec=210 and restart_drain_timeout=180, so `systemctl restart`
+# can block well past 120s when a cron agent turn is in flight — which would
+# get this unit SIGKILLed mid-restart, before it ever sent the notification.
+TimeoutStartSec=300

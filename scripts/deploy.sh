@@ -164,7 +164,13 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   rm -rf ~/.hermes/scripts/vault && cp -r scripts/vault ~/.hermes/scripts/vault
   # Cost monitor (Anthropic spend guardrail). Pure stdlib python + cron wrapper;
   # reads state.db, Telegram-alerts on daily/MTD spend thresholds. No venv, no agent.
-  rm -rf ~/.hermes/scripts/monitor && cp -r scripts/monitor ~/.hermes/scripts/monitor
+  # The watchdog is NOT deployed by this path — it lives in /usr/local/bin and is
+  # installed by scripts/monitor/install_watchdog.sh. Copying it here would plant a
+  # never-executed decoy for someone to debug at 2am. Exclude it explicitly.
+  rm -rf ~/.hermes/scripts/monitor && mkdir -p ~/.hermes/scripts/monitor
+  find scripts/monitor -maxdepth 1 -type f ! -name 'hermes_watchdog.sh' \
+       ! -name 'hermes-watchdog*' ! -name 'install_watchdog.sh' \
+       -exec cp {} ~/.hermes/scripts/monitor/ \;
   cp scripts/cron/cost_monitor.sh          ~/.hermes/scripts/cost_monitor.sh
   chmod +x ~/.hermes/scripts/cost_monitor.sh
   # Ops+health dashboard (Phase 1). Pure-stdlib read-only web page served over the
