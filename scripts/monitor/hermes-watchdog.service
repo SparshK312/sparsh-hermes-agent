@@ -1,0 +1,11 @@
+[Unit]
+Description=Hermes gateway liveness watchdog (external — see hermes_watchdog.sh header)
+Documentation=https://github.com/SparshK312/sparsh-hermes-agent
+# Deliberately NOT Requires=hermes-gateway.service: the watchdog must keep
+# running (and stay silent) even while the gateway is down or being replaced.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hermes_watchdog.sh
+# The script sleeps ~25s after a restart to verify, then notifies.
+TimeoutStartSec=120

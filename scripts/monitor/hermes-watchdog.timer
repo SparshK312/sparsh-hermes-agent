@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Hermes gateway liveness watchdog every 2 minutes
+Documentation=https://github.com/SparshK312/sparsh-hermes-agent
+
+[Timer]
+# Start checking shortly after boot, then every 2 min.
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=hermes-watchdog.service
+# No RandomizedDelaySec: this is a health probe, jitter buys nothing and only
+# widens the detection window.
+
+[Install]
+WantedBy=timers.target
