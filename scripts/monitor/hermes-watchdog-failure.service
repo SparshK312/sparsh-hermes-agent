@@ -7,5 +7,7 @@ Type=oneshot
 # Without this, a crashed/killed watchdog is indistinguishable from a healthy
 # system — the documented contract is "silence = healthy", which is only true
 # if a broken watchdog can still speak.
-ExecStart=/usr/local/bin/hermes_watchdog.sh --alert "the watchdog unit itself FAILED (hermes-watchdog.service). Nothing is monitoring the gateway until this is fixed. Check: systemctl status hermes-watchdog.service"
+# The script inspects real unit state and composes the message from it, so a
+# manual invocation of this unit cannot claim a failure that did not occur.
+ExecStart=/usr/local/bin/hermes_watchdog.sh --alert "triggered by OnFailure= on hermes-watchdog.service. Check: systemctl status hermes-watchdog.service"
 TimeoutStartSec=60

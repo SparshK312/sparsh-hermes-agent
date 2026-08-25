@@ -140,8 +140,20 @@ alert_throttled() {
 # --- Mode: --alert (used by the OnFailure= unit) ------------------------------
 if [ "${1:-}" = "--alert" ]; then
   shift
-  log "EXTERNAL ALERT: $*"
-  telegram_alert "Hermes watchdog: $*"
+  # Report OBSERVED state, never a canned assertion. This path is reachable by
+  # hand (`systemctl start hermes-watchdog-failure.service`), and a fixed string
+  # saying "the watchdog FAILED" then claims a failure that did not happen.
+  wd_result="$(systemctl show hermes-watchdog.service -p Result --value 2>/dev/null)"
+  wd_timer="$(systemctl is-active hermes-watchdog.timer 2>/dev/null)"
+  gw="$(systemctl is-active "$SERVICE" 2>/dev/null)"
+  if [ "$wd_result" = "success" ] && [ "$wd_timer" = "active" ]; then
+    # Nothing is actually broken — say so plainly instead of alarming him.
+    body="Watchdog alert path was triggered, but nothing looks wrong: last watchdog run=success, timer=${wd_timer}, gateway=${gw}. If you did not run this yourself, investigate. Context: $*"
+  else
+    body="Hermes watchdog problem — last watchdog run=${wd_result:-unknown}, timer=${wd_timer:-unknown}, gateway=${gw:-unknown}. Nothing may be monitoring the gateway. Context: $*"
+  fi
+  log "EXTERNAL ALERT: $body"
+  telegram_alert "$body"
   exit 0
 fi
 
