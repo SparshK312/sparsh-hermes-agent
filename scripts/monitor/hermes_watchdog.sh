@@ -453,6 +453,14 @@ else
   if [ -n "$DEADMAN_URL" ] && [ "$DRY_RUN" != "1" ]; then
     curl -fsS -m 10 -o /dev/null "$DEADMAN_URL" 2>/dev/null \
       || log "deadman ping failed (non-fatal)"
+  elif [ -z "$DEADMAN_URL" ]; then
+    # Refuse to be silently unconfigured. Weekly, not daily: the Mac-side
+    # switch (scripts/monitor/vps_deadman.sh, launchd every 15 min) already
+    # covers this from genuinely uncorrelated hardware, so it is a known and
+    # partially-mitigated gap rather than an incident. It is still only
+    # best-effort — the Mac sleeps and changes networks.
+    ALERT_REPEAT_SECONDS=604800 \
+      alert_throttled "nodeadman" "Hermes watchdog has no DEADMAN_URL set. The Mac dead-man's switch covers this while the Mac is awake and online; a hosted check (healthchecks.io, ~2 min to set up) would cover it always. Set it in /etc/hermes-watchdog.conf."
   fi
   exit 0
 fi
