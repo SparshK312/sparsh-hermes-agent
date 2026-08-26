@@ -176,14 +176,17 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # Ops+health dashboard (Phase 1). Pure-stdlib read-only web page served over the
   # tailnet by hermes-dashboard.service; opens state.db mode=ro, serves vault charts.
   rm -rf ~/.hermes/scripts/dashboard && cp -r scripts/dashboard ~/.hermes/scripts/dashboard
-  # The internship watcher (scraper + sources + frontier-triage). Vendored into the
-  # repo (was VPS-only). The cron runs internship_watch.sh -> internship_triage.py
-  # (one openai/gpt-5.5 call via OpenRouter, no agent). bs4 + OPENROUTER_API_KEY
-  # must be present on the box — was the direct OpenAI key until 2026-08-20, when
-  # that key was revoked and all five callers moved to OpenRouter.
+  # The Curated Board engine (scraper + sources + brand-first harvest + fit pass).
+  # This is the LIVE internship system — do not confuse it with the retired
+  # frontier-triage watcher below.
   rm -rf ~/.hermes/scripts/internship && cp -r scripts/internship ~/.hermes/scripts/internship
-  cp scripts/cron/internship_watch.sh      ~/.hermes/scripts/internship_watch.sh
-  chmod +x ~/.hermes/scripts/internship_watch.sh
+  # RETIRED 2026-08-26: internship_watch.sh -> internship_triage.py, the legacy
+  # frontier watcher. Its cron job (internship-watcher) was disabled and last ran
+  # 2026-06-21; the job record is removed and both files are deleted. Nothing
+  # imports internship_triage — the remaining mentions in fit_pass.py,
+  # applicant_profile.py and internship_scraper.py are comments only (verified).
+  # It was also one of the OpenRouter callers, so retiring it removes one script
+  # from that migration rather than porting a dead one.
   cp scripts/cron/fitness_report.sh        ~/.hermes/scripts/fitness_report.sh
   cp scripts/cron/trends_report.sh         ~/.hermes/scripts/trends_report.sh
   cp scripts/cron/coach.sh                 ~/.hermes/scripts/coach.sh
