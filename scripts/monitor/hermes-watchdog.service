@@ -2,7 +2,7 @@
 Description=Hermes gateway liveness watchdog (external — see hermes_watchdog.sh header)
 Documentation=https://github.com/SparshK312/sparsh-hermes-agent
 # A dead watchdog and a healthy system look identical, so failure must be loud.
-OnFailure=hermes-watchdog-failure.service
+OnFailure=hermes-alert@hermes-watchdog.service
 # Deliberately NOT Requires=hermes-gateway.service: the watchdog must keep
 # running (and stay silent) even while the gateway is down or being replaced.
 

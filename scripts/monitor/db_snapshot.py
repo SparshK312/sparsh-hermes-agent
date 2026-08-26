@@ -27,7 +27,9 @@ Installed by scripts/monitor/install_db_snapshot.sh -> /usr/local/bin.
 
 import gzip
 import os
+import pathlib
 import shutil
+import signal
 import sqlite3
 import sys
 import tempfile
@@ -93,20 +95,31 @@ def snapshot_one(src: Path, stamp: str) -> bool:
             log(f"  ✗ {name}: integrity_check returned {result!r} — DISCARDED")
             return False
 
-        with tmp_db.open("rb") as fin, gzip.open(final, "wb", compresslevel=6) as fout:
+        # Compress to a .part that the prune glob cannot see, then rename.
+        # os.replace is atomic within a filesystem, so a reader never observes a
+        # partial artifact and retention can never count one.
+        part = final.with_suffix(final.suffix + ".part")
+        with tmp_db.open("rb") as fin, gzip.open(part, "wb", compresslevel=6) as fout:
             shutil.copyfileobj(fin, fout)
+        os.replace(part, final)
 
         raw = tmp_db.stat().st_size
         gz = final.stat().st_size
         log(f"  ✓ {name}: {raw/1e6:.1f}MB -> {gz/1e6:.1f}MB gz (integrity ok)")
         return True
-    except Exception as exc:
+    except BaseException as exc:
+        # BaseException, not Exception: SIGTERM is delivered as KeyboardInterrupt
+        # via the handler installed in main(), and Exception would not catch it —
+        # leaving exactly the orphans this block exists to remove.
         log(f"  ✗ {name}: {type(exc).__name__}: {exc}")
-        if final.exists():
-            try:
-                final.unlink()
-            except OSError:
-                pass
+        for stray in (final, final.with_suffix(final.suffix + ".part")):
+            if stray.exists():
+                try:
+                    stray.unlink()
+                except OSError:
+                    pass
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         return False
     finally:
         # The snapshot inherits journal_mode=wal from the source, so opening it
@@ -123,9 +136,20 @@ def snapshot_one(src: Path, stamp: str) -> bool:
 
 
 def prune(name: str) -> None:
-    """Keep the newest KEEP snapshots for this database."""
-    files = sorted(DEST.glob(f"{name}.*.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for old in files[KEEP:]:
+    """Keep the newest KEEP DAYS of snapshots for this database.
+
+    Counting files meant every ad-hoc run consumed a retention slot: two manual
+    runs on install day already held 2 of 7. Grouping by the YYYYMMDD in the
+    stamp makes retention mean days, so testing cannot destroy history.
+    """
+    by_day: dict[str, list[pathlib.Path]] = {}
+    for f in DEST.glob(f"{name}.*.gz"):
+        parts = f.name.split(".")
+        day = next((p[:8] for p in parts if len(p) >= 8 and p[:8].isdigit()), "")
+        by_day.setdefault(day, []).append(f)
+    keep_days = sorted(by_day, reverse=True)[:KEEP]
+    files = [f for day, group in by_day.items() if day not in keep_days for f in group]
+    for old in files:
         try:
             old.unlink()
             log(f"  · pruned {old.name}")
@@ -134,7 +158,25 @@ def prune(name: str) -> None:
 
 
 def main() -> int:
+    # These artifacts contain full session history. 0600, not the login umask.
+    os.umask(0o077)
+    # Turn SIGTERM into an exception so `finally` blocks run and no truncated
+    # artifact or 206MB orphan survives a timeout, reboot, or `systemctl stop`.
+    def _die(signum, _frame):
+        raise KeyboardInterrupt(f"signal {signum}")
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _die)
+        except (ValueError, OSError):
+            pass
     DEST.mkdir(parents=True, exist_ok=True)
+    # Sweep orphans from any previously-killed run before doing anything else.
+    for stray in list(DEST.glob("*.tmp*")) + list(DEST.glob("*.part")):
+        try:
+            stray.unlink()
+            log(f"  · swept orphan {stray.name}")
+        except OSError:
+            pass
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log(f"snapshot start (keep={KEEP}, dest={DEST})")
 
@@ -151,12 +193,22 @@ def main() -> int:
         else:
             failed += 1
 
-    total = sum(f.stat().st_size for f in DEST.glob("*.gz"))
+    total = 0
+    for f in DEST.glob("*.gz"):
+        try:
+            total += f.stat().st_size
+        except OSError:
+            pass  # pruned concurrently; not worth failing the run over
     log(f"snapshot done: {ok} ok, {failed} failed, {missing} absent, "
         f"{total/1e6:.0f}MB retained, {time.monotonic()-started:.1f}s")
 
-    # Non-zero exit drives the systemd OnFailure alert.
-    return 1 if failed else 0
+    # Non-zero exit drives the systemd OnFailure alert. `ok == 0` must be a
+    # failure too: with a wrong HERMES_HOME or renamed DB paths this reported
+    # "0 ok, 0 failed, 6 absent" and exited 0 — a backup job that silently
+    # backs up nothing is worse than one that crashes.
+    if failed or ok == 0:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

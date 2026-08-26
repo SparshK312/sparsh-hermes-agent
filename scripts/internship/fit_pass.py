@@ -76,7 +76,11 @@ VALID_DQ = {"none", "wrong-cycle", "phd-required", "citizenship",
 # and bumping max_tokens 1500 -> 8000. Determinism at temp 0 is the exact property
 # the 2026-06-22 eval certified ("raw mini was flaky"; 7/7 stable, 14/14 recall), and
 # every JD is scored through it. Keep both spellings in sync with FIT_MODEL.
-_TEMPERATURE_OK = {"gpt-5.4-mini", "openai/gpt-5.4-mini"}
+# Models that accept an explicit temperature. Claude models do; the branch above
+# sends temperature: 0 unconditionally for them. Keep FIT_MODEL in this set — a
+# miss is what the guard tests in tests/test_fit_pass_config.py exist to catch.
+_TEMPERATURE_OK = {"gpt-5.4-mini", "openai/gpt-5.4-mini",
+                   "claude-haiku-4-5", "claude-sonnet-4-6"}
 # rough per-MTok pricing (USD) for the cost log — confirm against the live dashboard.
 # Both spellings, same reason as above: an unprefixed-only dict silently fell back to
 # the (1.0, 5.0) default and mis-stated the cost line.
@@ -215,6 +219,11 @@ def _call_model(model: str, user_content: str, max_tokens: int = 1500):
         body = json.dumps({
             "model": model, "max_tokens": max_tokens, "system": SYS_PROMPT,
             "messages": [{"role": "user", "content": user_content}],
+            # Determinism is the property the 2026-06-22 eval certified. The
+            # Claude branch shipped 2026-08-26 WITHOUT this, so the live board
+            # scored at Anthropic's default temperature 1.0 — visible as recall
+            # drifting 18/18, 18/18, 17/18 across three runs of a FIXED fixture.
+            "temperature": 0,
         }).encode()
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01",
                    "content-type": "application/json"}
@@ -241,6 +250,12 @@ def _call_model(model: str, user_content: str, max_tokens: int = 1500):
                 raw = json.loads(r.read())
             text = (raw["content"][0]["text"] if is_claude
                     else raw["choices"][0]["message"]["content"])
+            # A response cut off at max_tokens still returns HTTP 200 with
+            # populated text. Parsing it yields a SHORTER, WRONG answer — here,
+            # a chunk missing postings. Treat it as a failure and retry.
+            if raw.get("stop_reason") == "max_tokens":
+                log(f"truncated at max_tokens ({model}, try {attempt + 1}) — retrying")
+                continue
             usage = raw.get("usage", {})
             return _extract_json(text), usage
         except Exception as e:  # noqa: BLE001
@@ -249,14 +264,23 @@ def _call_model(model: str, user_content: str, max_tokens: int = 1500):
 
 
 def _extract_json(text: str):
-    """Parse JSON, tolerating a code-fence or leading prose (Claude sometimes wraps)."""
+    """Parse a JSON OBJECT, tolerating a code-fence or leading prose.
+
+    Must return a dict or None. `json.loads("[1,2]")` -> list and
+    `json.loads("42")` -> int both survive a bare `is not None` check, and the
+    caller then does `.get("items")` -> AttributeError, which propagates out of
+    score_batch and discards every already-scored chunk in the run.
+    """
+    def _as_dict(value):
+        return value if isinstance(value, dict) else None
+
     try:
-        return json.loads(text)
+        return _as_dict(json.loads(text))
     except Exception:  # noqa: BLE001
         s, e = text.find("{"), text.rfind("}")
         if s != -1 and e != -1:
             try:
-                return json.loads(text[s:e + 1])
+                return _as_dict(json.loads(text[s:e + 1]))
             except Exception:  # noqa: BLE001
                 return None
     return None

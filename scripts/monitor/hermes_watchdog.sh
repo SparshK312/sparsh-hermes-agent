@@ -19,7 +19,12 @@
 # Upstream fixed it after v0.18.2 — hermes-agent #80598 and #90386 add
 # queue-before-disconnect, an outer deadline, best-effort queueing on both
 # CancelledError and Exception, and a stranded-platform check that exits.
-# UPGRADING IS THE REAL FIX. This is a seatbelt for the interim.
+# UPGRADED 2026-08-25: the box now runs v0.20.5 and those fixes ARE present
+# (_queue_retryable_fatal_platform is called before the disconnect await, tagged
+# #80598). So the original justification for restart authority is largely gone.
+# What remains useful is catching states upstream cannot recover from; what
+# remains dangerous is false positives. Hence: `retrying` now alerts instead of
+# restarting, and Check B has no restart authority at all.
 #
 # DESIGN NOTE — the failure mode of this system is GOING QUIET, not acting
 # wrongly. Every path that decides "nothing to do" or "I give up" must still be
@@ -38,6 +43,14 @@
 # nothing.
 
 set -uo pipefail   # NOT -e: a probe that fails must not abort the whole run
+
+# Single-instance. systemd serialises the timer, but a manual invocation can
+# race it — the live log already shows two runs stamped the same second — and
+# both mutate first_bad/restarts unguarded.
+if [ "${_WD_LOCKED:-}" != "1" ] && command -v flock >/dev/null 2>&1; then
+    export _WD_LOCKED=1
+    exec flock -w 30 /var/lock/hermes-watchdog.lock "$0" "$@"
+fi
 
 SERVICE="${SERVICE:-hermes-gateway.service}"
 STATE_FILE="${STATE_FILE:-/home/hermes/.hermes/gateway_state.json}"
@@ -76,7 +89,11 @@ DEADMAN_URL="${DEADMAN_URL:-}"
 # side-effect free: no restart, no alert, no state written, no deadman ping.
 DRY_RUN="${DRY_RUN:-0}"
 
-mkdir -p "$VAR_DIR" 2>/dev/null
+if [ "$DRY_RUN" = "1" ]; then
+  LOG=/dev/stdout          # a dry run must not write the log an operator is tailing
+else
+  mkdir -p "$VAR_DIR" 2>/dev/null
+fi
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S%z')" "$*" >>"$LOG"; }
 
@@ -89,11 +106,20 @@ now_epoch="$(date +%s)"
 read_num() {
   local f="$VAR_DIR/$1" v=""
   [ -f "$f" ] && v="$(cat "$f" 2>/dev/null)"
-  case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
+  # Bound the width: a 23-digit value wraps bash's signed 64-bit arithmetic to a
+  # large negative number, which disarms both the restart and every alert.
+  case "$v" in
+    ''|*[!0-9]*) echo 0 ;;
+    ?????????????*) echo 0 ;;
+    *) echo "$v" ;;
+  esac
 }
 write_num() {
   [ "$DRY_RUN" = "1" ] && return 0
-  echo "${2:-0}" >"$VAR_DIR/$1" 2>/dev/null
+  # Atomic: a partially-written counter reads back as 0, which silently resets
+  # the grace window. Same temp+rename discipline gateway_state.json uses.
+  printf '%s\n' "${2:-0}" >"$VAR_DIR/.$1.tmp" 2>/dev/null && \
+    mv -f "$VAR_DIR/.$1.tmp" "$VAR_DIR/$1" 2>/dev/null
 }
 clear_state() {
   [ "$DRY_RUN" = "1" ] && return 0
@@ -108,8 +134,13 @@ telegram_alert() {
   local msg="$1" tok chat
   [ "$DRY_RUN" = "1" ] && { log "DRY-RUN would alert: $msg"; return 0; }
   [ -r "$ENV_FILE" ] || { log "alert skipped: $ENV_FILE unreadable"; return 1; }
-  tok="$(grep -m1 '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' ')"
-  chat="$(grep -m1 '^TELEGRAM_HOME_CHANNEL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' ')"
+  # Strip surrounding quotes ONLY. The previous `tr -d` also deleted every space,
+  # so `TELEGRAM_HOME_CHANNEL=123 # home` silently became `123#home` and the
+  # alert went nowhere.
+  tok="$(grep -m1 '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- \
+         | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')"
+  chat="$(grep -m1 '^TELEGRAM_HOME_CHANNEL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- \
+          | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')"
   [ -n "$tok" ] && [ -n "$chat" ] || { log "alert skipped: token/channel not found"; return 1; }
   # Strip characters that would break curl's config-file quoting.
   msg="$(printf '%s' "$msg" | tr -d '"\\' | tr '\n' ' ')"
@@ -131,6 +162,9 @@ CURLCFG
 alert_throttled() {
   local key="$1" msg="$2" last
   last="$(read_num "alert_$key")"
+  # Same clock-step hazard: a negative delta never clears the throttle, so NO
+  # alert of any kind would fire until the clock caught up.
+  [ "$last" -gt "$now_epoch" ] && last=0
   if [ $(( now_epoch - last )) -ge "$ALERT_REPEAT_SECONDS" ]; then
     write_num "alert_$key" "$now_epoch"
     telegram_alert "$msg"
@@ -138,6 +172,19 @@ alert_throttled() {
 }
 
 # --- Mode: --alert (used by the OnFailure= unit) ------------------------------
+if [ "${1:-}" = "--alert-unit" ]; then
+  # Report on the unit systemd names, not always the watchdog.
+  failed_unit="${2:-unknown.service}"
+  res="$(systemctl show "$failed_unit" -p Result --value 2>/dev/null)"
+  code="$(systemctl show "$failed_unit" -p ExecMainStatus --value 2>/dev/null)"
+  gw="$(systemctl is-active "$SERVICE" 2>/dev/null)"
+  tail_lines="$(journalctl -u "$failed_unit" -n 6 --no-pager 2>/dev/null | tail -4 | tr '\n' ' ')"
+  body="Hermes: ${failed_unit} FAILED (result=${res:-unknown}, exit=${code:-?}). Gateway is ${gw:-unknown}. Recent: ${tail_lines:-<no journal>}"
+  log "UNIT FAILURE: $body"
+  telegram_alert "$body"
+  exit 0
+fi
+
 if [ "${1:-}" = "--alert" ]; then
   shift
   # Report OBSERVED state, never a canned assertion. This path is reachable by
@@ -184,7 +231,7 @@ main_pid="$(systemctl show "$SERVICE" -p MainPID --value 2>/dev/null)"
 # call sites that both land BEFORE the await that stalls. That is what makes
 # this the check that catches the real bug.
 verdict="$(
-python3 - "$STATE_FILE" "$main_pid" "$WATCH_PLATFORMS" <<'PYEOF'
+python3 - "$STATE_FILE" "$main_pid" "$WATCH_PLATFORMS" 2>>"$LOG" <<'PYEOF'
 import json, sys, datetime
 
 path, main_pid, watch = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -192,6 +239,15 @@ watched = {w.strip().lower() for w in watch.split(",") if w.strip()}
 
 def unknown(msg):
     print("VERDICT UNKNOWN " + msg); sys.exit(0)
+
+def _crash(exc_type, exc, tb):
+    # Any uncaught error must still produce a verdict the shell can classify.
+    # Previously an AttributeError (e.g. `platforms` arriving as a list) exited
+    # non-zero with no stdout, which the shell scored HEALTHY.
+    print(f"VERDICT UNKNOWN probe crashed: {exc_type.__name__}: {exc}")
+    sys.exit(0)
+
+sys.excepthook = _crash
 
 try:
     with open(path) as fh:
@@ -218,7 +274,7 @@ if missing:
     unknown("watched platform(s) absent from state file: " + ",".join(sorted(missing)))
 
 now = datetime.datetime.now(datetime.timezone.utc)
-bad = []
+bad, retrying, operator = [], [], []
 for name, info in platforms.items():
     if name.lower() not in watched:
         continue
@@ -228,7 +284,16 @@ for name, info in platforms.items():
     # "disabled" is an operator decision (revoked relay credential); "paused"
     # is an explicit `/platform pause`, which freezes updated_at BY DESIGN
     # (next_retry=inf) and would otherwise look permanently stale.
-    if st in ("connected", "disabled", "paused"):
+    if st == "connected":
+        continue
+    # Operator states: not faults. Tracked separately below so they cannot be
+    # silent forever.
+    if st in ("disabled", "paused"):
+        operator.append(f"{name}={st}")
+        continue
+    # "retrying" = upstream's reconnect watcher owns this. Alert, never restart.
+    if st == "retrying":
+        retrying.append(f"{name}={st}")
         continue
     raw = info.get("updated_at")
     when = "no timestamp"
@@ -240,11 +305,32 @@ for name, info in platforms.items():
             when = "timestamp unparseable"
     bad.append(f"{name}={st} ({when})")
 
-print("VERDICT BAD " + "; ".join(bad) if bad else "VERDICT OK")
+if bad:
+    print("VERDICT BAD " + "; ".join(bad))
+elif retrying:
+    print("VERDICT RETRYING " + "; ".join(retrying))
+elif operator:
+    print("VERDICT OPERATOR " + "; ".join(operator))
+else:
+    print("VERDICT OK")
 PYEOF
-)"
+)" || verdict=""
 
-verdict_kind="$(printf '%s' "$verdict" | awk '{print $2}')"
+# FAIL CLOSED. Anything that leaves us without a parseable verdict — python3
+# missing or upgraded, ENOMEM, an AppArmor denial, or an upstream change to the
+# state-file shape — previously fell through to the "healthy" branch: cleared
+# state, pinged the deadman GREEN, logged nothing, exited 0. That is precisely
+# the going-quiet failure this script exists to prevent, and it failed GREEN.
+# Upstream already namespaced platform keys in this release line, so schema
+# drift is not hypothetical.
+verdict_kind="$(printf '%s' "${verdict:-}" | awk '{print $2}')"
+case "${verdict_kind:-}" in
+  OK|BAD|UNKNOWN|RETRYING|OPERATOR) ;;
+  *)
+    verdict="VERDICT UNKNOWN probe produced no parseable verdict: $(printf '%s' "${verdict:-<empty>}" | tr '\n' ' ' | cut -c1-160)"
+    verdict_kind="UNKNOWN"
+    ;;
+esac
 verdict_detail="$(printf '%s' "$verdict" | cut -d' ' -f3-)"
 
 # --- Check B: Telegram socket presence — OBSERVATION ONLY, NEVER RESTARTS -----
@@ -294,6 +380,33 @@ if [ "$verdict_kind" = "UNKNOWN" ]; then
 fi
 clear_state first_unknown
 
+if [ "$verdict_kind" = "RETRYING" ]; then
+  # Upstream is actively reconnecting. Never restart — but never go silent
+  # either: if it is STILL retrying an hour later, that is worth knowing.
+  first_bad="$(read_num first_bad)"
+  [ "$first_bad" -eq 0 ] && { first_bad="$now_epoch"; write_num first_bad "$now_epoch"; }
+  for_secs=$(( now_epoch - first_bad )); [ "$for_secs" -lt 0 ] && for_secs=0
+  log "retrying: $verdict_detail (${for_secs}s) — upstream reconnect watcher owns this, not restarting"
+  if [ "$for_secs" -ge "$ALERT_REPEAT_SECONDS" ]; then
+    alert_throttled "retrying" "Hermes has been reconnecting for ${for_secs}s: ${verdict_detail}. Not restarting (upstream's reconnect watcher owns retryable failures). Worth a look if this persists."
+  fi
+  exit 0
+fi
+
+if [ "$verdict_kind" = "OPERATOR" ]; then
+  # /platform pause|disable is reachable from chat and from agent tool calls.
+  # After it, Hermes is deaf and every monitoring surface reads healthy. Do not
+  # restart (that would fight a deliberate choice) and do NOT ping the deadman.
+  first_bad="$(read_num first_bad)"
+  [ "$first_bad" -eq 0 ] && { first_bad="$now_epoch"; write_num first_bad "$now_epoch"; }
+  for_secs=$(( now_epoch - first_bad )); [ "$for_secs" -lt 0 ] && for_secs=0
+  log "operator-disabled: $verdict_detail (${for_secs}s) — not restarting, deadman NOT pinged"
+  if [ "$for_secs" -ge "$ALERT_REPEAT_SECONDS" ]; then
+    alert_throttled "operator" "Hermes platform is ${verdict_detail} and has been for ${for_secs}s — you are not reachable there. Resume with /platform resume, or this stays silent indefinitely."
+  fi
+  exit 0
+fi
+
 if [ "$verdict_kind" = "BAD" ]; then
   # Measure OUR OWN observed duration, not the age of the last state write.
   # The reconnect watcher's backoff cap (300s) is shorter than GRACE (600s) and
@@ -302,6 +415,13 @@ if [ "$verdict_kind" = "BAD" ]; then
   first_bad="$(read_num first_bad)"
   [ "$first_bad" -eq 0 ] && { first_bad="$now_epoch"; write_num first_bad "$now_epoch"; }
   bad_for=$(( now_epoch - first_bad ))
+  # An NTP step correction, VM snapshot restore or host migration can move the
+  # clock backwards, making this negative — which never reaches GRACE_SECONDS,
+  # so the restart is disarmed indefinitely. Re-anchor instead.
+  if [ "$bad_for" -lt 0 ]; then
+    log "clock moved backwards (bad_for=${bad_for}s); re-anchoring the bad-since marker"
+    first_bad="$now_epoch"; write_num first_bad "$now_epoch"; bad_for=0
+  fi
   if [ "$bad_for" -ge "$GRACE_SECONDS" ]; then
     reason="$verdict_detail — non-connected for ${bad_for}s"
   else
@@ -321,6 +441,15 @@ else
   # Health-gated dead-man's switch: ping ONLY when green, so silence upstream
   # means unhealthy, dead watchdog, or dead box — all three of which the
   # on-box checks structurally cannot report.
+  # One throttled green line per hour, so the log can distinguish "healthy" from
+  # "not running at all". journald has the Starting/Finished pairs, but nobody
+  # reads those during an incident.
+  hb="$(read_num heartbeat)"
+  [ "$hb" -gt "$now_epoch" ] && hb=0
+  if [ $(( now_epoch - hb )) -ge 3600 ]; then
+    write_num heartbeat "$now_epoch"
+    log "ok: $WATCH_PLATFORMS connected (telegram_sockets=$tg_sockets)"
+  fi
   if [ -n "$DEADMAN_URL" ] && [ "$DRY_RUN" != "1" ]; then
     curl -fsS -m 10 -o /dev/null "$DEADMAN_URL" 2>/dev/null \
       || log "deadman ping failed (non-fatal)"

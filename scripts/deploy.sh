@@ -168,9 +168,13 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # installed by scripts/monitor/install_watchdog.sh. Copying it here would plant a
   # never-executed decoy for someone to debug at 2am. Exclude it explicitly.
   rm -rf ~/.hermes/scripts/monitor && mkdir -p ~/.hermes/scripts/monitor
-  find scripts/monitor -maxdepth 1 -type f ! -name 'hermes_watchdog.sh' \
-       ! -name 'hermes-watchdog*' ! -name 'install_watchdog.sh' \
-       -exec cp {} ~/.hermes/scripts/monitor/ \;
+  # ALLOWLIST, not a denylist. The previous exclusion listed the watchdog files
+  # by name; db_snapshot.py was added to this directory a day later, was not
+  # excluded, and became exactly the "never-executed decoy" the comment warns
+  # about. Anything that runs from /usr/local/bin must NOT be mirrored here.
+  for _f in cost_monitor.py; do
+    [ -f "scripts/monitor/$_f" ] && cp "scripts/monitor/$_f" ~/.hermes/scripts/monitor/
+  done
   cp scripts/cron/cost_monitor.sh          ~/.hermes/scripts/cost_monitor.sh
   chmod +x ~/.hermes/scripts/cost_monitor.sh
   # Ops+health dashboard (Phase 1). Pure-stdlib read-only web page served over the

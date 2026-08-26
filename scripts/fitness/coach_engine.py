@@ -425,13 +425,19 @@ def _extract_json(text: str) -> dict | None:
     in ```json fences or a sentence. Same tolerance fit_pass.py already relies
     on for its Claude branch.
     """
+    def _as_dict(value):
+        # json.loads("[1,2]") -> list and json.loads("42") -> int both survive a
+        # bare `is not None`, and coach.py then calls .get() on them ->
+        # AttributeError, which skips the deterministic templated fallback.
+        return value if isinstance(value, dict) else None
+
     try:
-        return json.loads(text)
+        return _as_dict(json.loads(text))
     except Exception:  # noqa: BLE001
         start, end = text.find("{"), text.rfind("}")
         if start != -1 and end != -1:
             try:
-                return json.loads(text[start:end + 1])
+                return _as_dict(json.loads(text[start:end + 1]))
             except Exception:  # noqa: BLE001
                 return None
     return None
@@ -447,7 +453,14 @@ def compose_text(system: str, user: str, max_tokens: int = 2000) -> str | None:
             req = urllib.request.Request(ANTHROPIC_URL, data=body,
                                          headers=_anthropic_headers(key))
             with urllib.request.urlopen(req, timeout=60) as r:
-                out = json.loads(r.read())["content"][0]["text"].strip()
+                raw = json.loads(r.read())
+            # THE exposed truncation case: a reply cut off at max_tokens is still
+            # valid TEXT, so a mid-sentence message would go straight to Telegram
+            # with nothing to detect it. Fail instead and let the caller's
+            # deterministic template take over.
+            if raw.get("stop_reason") == "max_tokens":
+                continue
+            out = raw["content"][0]["text"].strip()
             if out:
                 return out
         except Exception:  # noqa: BLE001
@@ -473,8 +486,10 @@ def compose_json(system: str, user: str, max_tokens: int = 2000) -> dict | None:
             req = urllib.request.Request(ANTHROPIC_URL, data=body,
                                          headers=_anthropic_headers(key))
             with urllib.request.urlopen(req, timeout=60) as r:
-                raw = json.loads(r.read())["content"][0]["text"]
-            parsed = _extract_json(raw)
+                payload = json.loads(r.read())
+            if payload.get("stop_reason") == "max_tokens":
+                continue
+            parsed = _extract_json(payload["content"][0]["text"])
             if parsed is not None:
                 return parsed
         except Exception:  # noqa: BLE001

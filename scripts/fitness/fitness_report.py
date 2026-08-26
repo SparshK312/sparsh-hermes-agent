@@ -116,7 +116,12 @@ def compose_note(f: dict) -> str:
                 headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                          "content-type": "application/json"})
             with urllib.request.urlopen(req, timeout=45) as r:
-                out = json.loads(r.read())["content"][0]["text"].strip()
+                raw = json.loads(r.read())
+            # Cut off at max_tokens still returns HTTP 200 with valid-looking
+            # text; sending it would be a mid-sentence note. Fall back instead.
+            if raw.get("stop_reason") == "max_tokens":
+                continue
+            out = raw["content"][0]["text"].strip()
             if out:
                 return out
         except Exception:  # noqa: BLE001

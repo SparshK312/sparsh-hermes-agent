@@ -541,6 +541,12 @@ def compose_rich(facts: dict) -> str | None:
                          "content-type": "application/json"})
             with urllib.request.urlopen(req, timeout=45) as resp:
                 data = json.loads(resp.read())
+            # Cut off at max_tokens still returns HTTP 200 with valid-looking
+            # text; a mid-sentence brief would be sent with nothing to catch it.
+            if data.get("stop_reason") == "max_tokens":
+                last_err = "truncated at max_tokens"
+                _log(f"compose_rich: attempt {attempt} truncated at max_tokens")
+                continue
             out = data["content"][0]["text"].strip()
             if out:
                 _log(f"compose_rich: ok (attempt {attempt}, {len(out)} chars)")

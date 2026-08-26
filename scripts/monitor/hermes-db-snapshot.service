@@ -3,7 +3,7 @@ Description=Consistent SQLite snapshots of the Hermes databases
 Documentation=https://github.com/SparshK312/sparsh-hermes-agent
 # Bounds the consequence of the SQLite 3.50.4 WAL-reset exposure that
 # `hermes doctor` reports against state.db and four smaller DBs.
-OnFailure=hermes-watchdog-failure.service
+OnFailure=hermes-alert@hermes-db-snapshot.service
 
 [Service]
 Type=oneshot

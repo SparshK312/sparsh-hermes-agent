@@ -51,17 +51,51 @@ def test_fit_model_has_a_price_entry():
     )
 
 
-def test_openai_callers_go_through_openrouter():
-    """The direct OpenAI key was revoked 2026-08-20 — nothing may call OpenAI directly."""
-    assert "openrouter.ai" in fit_pass.OPENAI_URL, (
-        f"OPENAI_URL={fit_pass.OPENAI_URL!r} is not OpenRouter; the direct "
-        "OpenAI key is revoked and this path would 401."
+def test_live_path_is_anthropic():
+    """The live scoring path must be Anthropic.
+
+    Replaces test_openai_callers_go_through_openrouter, which asserted
+    "openrouter.ai" in OPENAI_URL. Both keys are now gone (the direct OpenAI key
+    was revoked 2026-08-20; the OpenRouter key was deleted at the provider
+    2026-08-26), so that assertion had inverted into an ANCHOR: it required the
+    dead branch to stay, meaning the correct cleanup would break the suite.
+    """
+    assert fit_pass.FIT_MODEL.startswith("claude"), (
+        f"FIT_MODEL={fit_pass.FIT_MODEL!r} is not a Claude model, but both the "
+        "OpenAI and OpenRouter keys are gone — this path cannot authenticate."
+    )
+    assert "api.anthropic.com" in fit_pass.ANTHROPIC_URL
+
+
+def test_claude_branch_actually_sends_temperature_zero():
+    """Reproduce the real request body rather than trusting the lookup set.
+
+    The 2026-08-26 migration added a Claude branch that omitted `temperature`
+    entirely, so the board scored at Anthropic's default 1.0. _TEMPERATURE_OK
+    caught it only by proxy; this asserts the property directly.
+    """
+    import inspect
+    src = inspect.getsource(fit_pass._call_model)
+    claude_branch = src.split("if is_claude:", 1)[1].split("else:", 1)[0]
+    assert '"temperature": 0' in claude_branch, (
+        "The Claude request body does not send temperature: 0 — determinism is "
+        "the property the fit-rubric eval certified."
     )
 
 
-@pytest.mark.parametrize("name", ["fit_pass.py", "internship_triage.py"])
+# internship_triage.py was RETIRED 2026-08-26 (commit 477da66) — parametrising
+# over a deleted file makes this guard fail for the wrong reason. Guard whatever
+# is actually present instead, so the check survives future additions/removals.
+@pytest.mark.parametrize("name", ["fit_pass.py", "curate.py", "curated_store.py"])
 def test_no_direct_openai_endpoint_remains(name):
     """Repo-wide guard: the revoked key's endpoint must not reappear."""
-    src = (SCRIPTS / name).read_text()
+    path = SCRIPTS / name
+    if not path.exists():
+        pytest.skip(f"{name} is not present in this checkout")
+    src = path.read_text()
     assert "api.openai.com" not in src, f"{name} still references api.openai.com"
     assert "OPENAI_API_KEY" not in src, f"{name} still reads the revoked OPENAI_API_KEY"
+    assert "OPENROUTER_API_KEY" not in src or name == "fit_pass.py", (
+        f"{name} reads OPENROUTER_API_KEY, which was deleted at the provider "
+        "2026-08-26 and can never authenticate again"
+    )
