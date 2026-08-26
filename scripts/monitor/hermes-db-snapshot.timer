@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily Hermes database snapshots
+Documentation=https://github.com/SparshK312/sparsh-hermes-agent
+
+[Timer]
+# 04:20 local — after the 21:40 hae-sync and well before the 06:50 daily-note
+# prefill, so it never contends with a job that writes these DBs.
+OnCalendar=*-*-* 04:20:00
+Persistent=true
+AccuracySec=5min
+RandomizedDelaySec=10min
+Unit=hermes-db-snapshot.service
+
+[Install]
+WantedBy=timers.target

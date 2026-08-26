@@ -1,0 +1,17 @@
+[Unit]
+Description=Consistent SQLite snapshots of the Hermes databases
+Documentation=https://github.com/SparshK312/sparsh-hermes-agent
+# Bounds the consequence of the SQLite 3.50.4 WAL-reset exposure that
+# `hermes doctor` reports against state.db and four smaller DBs.
+OnFailure=hermes-watchdog-failure.service
+
+[Service]
+Type=oneshot
+User=hermes
+Group=hermes
+Environment=HOME=/home/hermes
+ExecStart=/usr/bin/python3 /usr/local/bin/db_snapshot.py
+# state.db is ~197 MB; backup + integrity_check + gzip needs room to breathe.
+TimeoutStartSec=900
+Nice=10
+IOSchedulingClass=idle
