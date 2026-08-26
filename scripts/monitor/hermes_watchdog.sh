@@ -57,12 +57,6 @@ STATE_FILE="${STATE_FILE:-/home/hermes/.hermes/gateway_state.json}"
 ENV_FILE="${ENV_FILE:-/home/hermes/.hermes/.env}"
 LOG="${LOG:-/var/log/hermes-watchdog.log}"
 VAR_DIR="${VAR_DIR:-/var/lib/hermes-watchdog}"
-CONF_FILE="${CONF_FILE:-/etc/hermes-watchdog.conf}"
-
-# Optional operator config (currently just DEADMAN_URL). Kept out of the repo
-# because it holds a per-install secret URL.
-# shellcheck disable=SC1090
-[ -r "$CONF_FILE" ] && . "$CONF_FILE"
 
 # --- Tunables -----------------------------------------------------------------
 # Only these platforms can trigger a restart. Restarting the whole gateway
@@ -82,11 +76,8 @@ UNKNOWN_ALERT_SECONDS="${UNKNOWN_ALERT_SECONDS:-3600}"
 # Minimum gap between repeats of the same non-restart alert, so a stuck
 # condition notifies hourly rather than every 2 minutes.
 ALERT_REPEAT_SECONDS="${ALERT_REPEAT_SECONDS:-3600}"
-# Health-gated dead-man's switch. Pinged ONLY on a green run, so the absence of
-# pings means "unhealthy OR dead OR box gone" — see CONF_FILE for setup.
-DEADMAN_URL="${DEADMAN_URL:-}"
 # DRY_RUN=1 evaluates every check and logs the decision it WOULD take. It is
-# side-effect free: no restart, no alert, no state written, no deadman ping.
+# side-effect free: no restart, no alert, no state written.
 DRY_RUN="${DRY_RUN:-0}"
 
 if [ "$DRY_RUN" = "1" ]; then
@@ -127,9 +118,13 @@ clear_state() {
 }
 
 # --- Alerting -----------------------------------------------------------------
-# Two channels on purpose. The Telegram channel is CORRELATED with the failure
-# being reported (if Telegram or the network is the problem, the alert about it
-# silently fails), so it can never be the only one.
+# NOTE: this channel is CORRELATED with the failure it reports — if Telegram or
+# the network is the problem, the alert silently fails. That is accepted
+# deliberately: the uncorrelated alternatives (a hosted dead-man's switch, or a
+# second machine polling this one) guard "the whole box is gone", which is both
+# rare here and self-announcing — every brief and nudge stops at once. The
+# failure that actually hid for four days was the opposite: outbound kept
+# working while inbound was dead, and Check A catches that.
 telegram_alert() {
   local msg="$1" tok chat
   [ "$DRY_RUN" = "1" ] && { log "DRY-RUN would alert: $msg"; return 0; }
@@ -153,7 +148,7 @@ data-urlencode = "chat_id=${chat}"
 data-urlencode = "text=${msg}"
 CURLCFG
   then log "alerted home channel"; return 0
-  else log "ALERT DELIVERY FAILED (this is why the dead-man's switch exists)"; return 1
+  else log "ALERT DELIVERY FAILED — this alert did not reach him"; return 1
   fi
 }
 
@@ -167,6 +162,10 @@ alert_throttled() {
   [ "$last" -gt "$now_epoch" ] && last=0
   if [ $(( now_epoch - last )) -ge "$ALERT_REPEAT_SECONDS" ]; then
     write_num "alert_$key" "$now_epoch"
+    # Log WHAT is being sent before sending it. Previously the only trace was
+    # "alerted home channel" with no key and no text, so a message that landed
+    # on his phone could not be traced back to a cause from the log at all.
+    log "ALERT[$key]: $(printf '%s' "$msg" | cut -c1-180)"
     telegram_alert "$msg"
   fi
 }
@@ -319,7 +318,7 @@ PYEOF
 # FAIL CLOSED. Anything that leaves us without a parseable verdict — python3
 # missing or upgraded, ENOMEM, an AppArmor denial, or an upstream change to the
 # state-file shape — previously fell through to the "healthy" branch: cleared
-# state, pinged the deadman GREEN, logged nothing, exited 0. That is precisely
+# state, logged nothing, and exited 0 — scored HEALTHY. That is precisely
 # the going-quiet failure this script exists to prevent, and it failed GREEN.
 # Upstream already namespaced platform keys in this release line, so schema
 # drift is not hypothetical.
@@ -333,36 +332,12 @@ case "${verdict_kind:-}" in
 esac
 verdict_detail="$(printf '%s' "$verdict" | cut -d' ' -f3-)"
 
-# --- Check B: Telegram socket presence — OBSERVATION ONLY, NEVER RESTARTS -----
-# Demoted from restart authority after two independent findings:
-#   1. The old hardcoded prefixes were STRING prefixes, not CIDRs. `149.154.`
-#      also covers Techwareca and Net By Net; `91.108.`/`95.161.` are largely
-#      eTelecom. Any ordinary outbound HTTPS during an agent turn could match
-#      and silently reset the strike counter.
-#   2. Telegram announces prefixes absent from the old list, and its own
-#      published cidr.txt was last modified in 2021. A re-IP would have
-#      restarted a HEALTHY service, three times, then gone silent.
-# Resolving the name at check time has no list to rot. Kept as a log line
-# because it is useful forensics; it is not trustworthy enough to act on, and
-# a half-open socket stays ESTABLISHED for up to tcp_keepalive_time (7200s)
-# anyway, so its absence is meaningful but its presence proves little.
-tg_sockets=-1
-if [ -n "$main_pid" ] && [ "$main_pid" -gt 0 ] 2>/dev/null && command -v ss >/dev/null 2>&1; then
-  tg_ips="$( { getent ahosts api.telegram.org 2>/dev/null | awk '{print $1}'
-               printf '149.154.166.110\n149.154.167.220\n'; } | sort -u )"
-  if [ -n "$tg_ips" ]; then
-    tg_sockets="$(
-      ss -tnH 2>/dev/null -p \
-        | grep -F "pid=${main_pid}," \
-        | awk '$1=="ESTAB"{print $5}' \
-        | sed -E 's/^\[([^]]*)\]:[0-9]+$/\1/; t; s/:[0-9]+$//' \
-        | grep -Fxc -f <(printf '%s\n' "$tg_ips")
-    )"
-    [ -z "$tg_sockets" ] && tg_sockets=0
-  fi
-fi
-
 # --- Decide -------------------------------------------------------------------
+# Check B (Telegram socket presence) was REMOVED 2026-08-26: it was log-only,
+# and it false-positived on a healthy gateway because Telegram rotates its DNS
+# records, so a long-lived connection sits on an address the current lookup no
+# longer returns. An unreliable line nobody trusts during an incident is worse
+# than no line. Check A catches the failure that actually happened.
 reason=""
 
 if [ "$verdict_kind" = "UNKNOWN" ]; then
@@ -373,7 +348,7 @@ if [ "$verdict_kind" = "UNKNOWN" ]; then
   [ "$first_unknown" -eq 0 ] && { first_unknown="$now_epoch"; write_num first_unknown "$now_epoch"; }
   unknown_for=$(( now_epoch - first_unknown ))
   alert_throttled "unknown" "Hermes watchdog cannot evaluate the gateway (${unknown_for}s and counting): ${verdict_detail}. Check A is effectively DISABLED until this is fixed."
-  log "UNKNOWN for ${unknown_for}s: $verdict_detail (telegram_sockets=$tg_sockets)"
+  log "UNKNOWN for ${unknown_for}s: $verdict_detail"
   clear_state first_bad
   # Deliberately no restart: we do not know anything is wrong.
   exit 0
@@ -396,11 +371,11 @@ fi
 if [ "$verdict_kind" = "OPERATOR" ]; then
   # /platform pause|disable is reachable from chat and from agent tool calls.
   # After it, Hermes is deaf and every monitoring surface reads healthy. Do not
-  # restart (that would fight a deliberate choice) and do NOT ping the deadman.
+  # restart — that would fight a deliberate choice.
   first_bad="$(read_num first_bad)"
   [ "$first_bad" -eq 0 ] && { first_bad="$now_epoch"; write_num first_bad "$now_epoch"; }
   for_secs=$(( now_epoch - first_bad )); [ "$for_secs" -lt 0 ] && for_secs=0
-  log "operator-disabled: $verdict_detail (${for_secs}s) — not restarting, deadman NOT pinged"
+  log "operator-disabled: $verdict_detail (${for_secs}s) — not restarting"
   if [ "$for_secs" -ge "$ALERT_REPEAT_SECONDS" ]; then
     alert_throttled "operator" "Hermes platform is ${verdict_detail} and has been for ${for_secs}s — you are not reachable there. Resume with /platform resume, or this stays silent indefinitely."
   fi
@@ -434,13 +409,6 @@ else
     log "ok: all watched platforms connected again; clearing bad-since marker"
   fi
   clear_state first_bad
-  if [ "$tg_sockets" = "0" ]; then
-    # Observation only — this alone never restarts anything.
-    log "note: state says connected but 0 sockets matched api.telegram.org (forensics only, no action)"
-  fi
-  # Health-gated dead-man's switch: ping ONLY when green, so silence upstream
-  # means unhealthy, dead watchdog, or dead box — all three of which the
-  # on-box checks structurally cannot report.
   # One throttled green line per hour, so the log can distinguish "healthy" from
   # "not running at all". journald has the Starting/Finished pairs, but nobody
   # reads those during an incident.
@@ -448,19 +416,7 @@ else
   [ "$hb" -gt "$now_epoch" ] && hb=0
   if [ $(( now_epoch - hb )) -ge 3600 ]; then
     write_num heartbeat "$now_epoch"
-    log "ok: $WATCH_PLATFORMS connected (telegram_sockets=$tg_sockets)"
-  fi
-  if [ -n "$DEADMAN_URL" ] && [ "$DRY_RUN" != "1" ]; then
-    curl -fsS -m 10 -o /dev/null "$DEADMAN_URL" 2>/dev/null \
-      || log "deadman ping failed (non-fatal)"
-  elif [ -z "$DEADMAN_URL" ]; then
-    # Refuse to be silently unconfigured. Weekly, not daily: the Mac-side
-    # switch (scripts/monitor/vps_deadman.sh, launchd every 15 min) already
-    # covers this from genuinely uncorrelated hardware, so it is a known and
-    # partially-mitigated gap rather than an incident. It is still only
-    # best-effort — the Mac sleeps and changes networks.
-    ALERT_REPEAT_SECONDS=604800 \
-      alert_throttled "nodeadman" "Hermes watchdog has no DEADMAN_URL set. The Mac dead-man's switch covers this while the Mac is awake and online; a hosted check (healthchecks.io, ~2 min to set up) would cover it always. Set it in /etc/hermes-watchdog.conf."
+    log "ok: $WATCH_PLATFORMS connected"
   fi
   exit 0
 fi

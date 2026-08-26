@@ -27,7 +27,6 @@ scp -q -i "$VPS_SSH_KEY" \
   "$SRC/hermes-watchdog.service" \
   "$SRC/hermes-alert@.service" \
   "$SRC/hermes-watchdog.timer" \
-  "$SRC/hermes-watchdog.conf.example" \
   "$VPS_ROOT_HOST:/tmp/"
 
 ssh -i "$VPS_SSH_KEY" "$VPS_ROOT_HOST" '
@@ -36,10 +35,7 @@ ssh -i "$VPS_SSH_KEY" "$VPS_ROOT_HOST" '
   install -m 0644 -o root -g root /tmp/hermes-watchdog.service         /etc/systemd/system/hermes-watchdog.service
   install -m 0644 -o root -g root "/tmp/hermes-alert@.service" "/etc/systemd/system/hermes-alert@.service"
   install -m 0644 -o root -g root /tmp/hermes-watchdog.timer           /etc/systemd/system/hermes-watchdog.timer
-  # Operator config holds a per-install secret (DEADMAN_URL); never overwrite an
-  # existing one, only seed it the first time.
-  [ -f /etc/hermes-watchdog.conf ] || install -m 0600 -o root -g root /tmp/hermes-watchdog.conf.example /etc/hermes-watchdog.conf
-  rm -f /tmp/hermes_watchdog.sh /tmp/hermes-watchdog*.service "/tmp/hermes-alert@.service" /tmp/hermes-watchdog.timer /tmp/hermes-watchdog.conf.example
+  rm -f /tmp/hermes_watchdog.sh /tmp/hermes-watchdog*.service "/tmp/hermes-alert@.service" /tmp/hermes-watchdog.timer
   mkdir -p /var/lib/hermes-watchdog
   touch /var/log/hermes-watchdog.log
   chmod 0644 /var/log/hermes-watchdog.log
