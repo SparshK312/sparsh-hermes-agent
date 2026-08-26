@@ -36,8 +36,10 @@ STATE = HOME / ".hermes" / "health" / "coach_state.json"   # message budget / de
 TZ = ZoneInfo("America/Toronto")
 CHAT_ID = "696500863"
 
-OPENAI_URL = "https://openrouter.ai/api/v1/chat/completions"
-COACH_MODEL = "openai/gpt-5.5"
+# Migrated off OpenRouter 2026-08-26 — one vendor (Anthropic). gpt-5.5 was the
+# judgment tier here, so this maps to Sonnet rather than Haiku.
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+COACH_MODEL = "claude-sonnet-4-6"
 
 # Locked targets (Profile.md baseline)
 TARGETS = {"kcal": 2400, "protein_g": 140, "water_l": 2.5, "sleep_h": 7.0, "training_days_per_week": 4}
@@ -399,21 +401,53 @@ def context_docs() -> dict:
 
 
 # ---------------------------------------------------------------- frontier compose (+ structured/validate)
+def _anthropic_body(system: str, user: str, max_tokens: int) -> bytes:
+    """Anthropic takes `system` as a top-level field, not a message role, and
+    budgets with max_tokens rather than max_completion_tokens."""
+    return json.dumps({
+        "model": COACH_MODEL,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+    }).encode("utf-8")
+
+
+def _anthropic_headers(key: str) -> dict:
+    return {"x-api-key": key, "anthropic-version": "2023-06-01",
+            "content-type": "application/json"}
+
+
+def _extract_json(text: str) -> dict | None:
+    """Parse JSON, tolerating a code fence or leading prose.
+
+    The OpenAI path used response_format={"type":"json_object"} to guarantee a
+    bare object. Anthropic has no equivalent, so the model may wrap the object
+    in ```json fences or a sentence. Same tolerance fit_pass.py already relies
+    on for its Claude branch.
+    """
+    try:
+        return json.loads(text)
+    except Exception:  # noqa: BLE001
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end != -1:
+            try:
+                return json.loads(text[start:end + 1])
+            except Exception:  # noqa: BLE001
+                return None
+    return None
+
+
 def compose_text(system: str, user: str, max_tokens: int = 2000) -> str | None:
-    key = env("OPENROUTER_API_KEY")
+    key = env("ANTHROPIC_API_KEY")
     if not key:
         return None
-    body = json.dumps({
-        "model": COACH_MODEL,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "max_completion_tokens": max_tokens,
-    }).encode("utf-8")
+    body = _anthropic_body(system, user, max_tokens)
     for _ in range(3):
         try:
-            req = urllib.request.Request(OPENAI_URL, data=body, headers={
-                "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+            req = urllib.request.Request(ANTHROPIC_URL, data=body,
+                                         headers=_anthropic_headers(key))
             with urllib.request.urlopen(req, timeout=60) as r:
-                out = json.loads(r.read())["choices"][0]["message"]["content"].strip()
+                out = json.loads(r.read())["content"][0]["text"].strip()
             if out:
                 return out
         except Exception:  # noqa: BLE001
@@ -422,23 +456,27 @@ def compose_text(system: str, user: str, max_tokens: int = 2000) -> str | None:
 
 
 def compose_json(system: str, user: str, max_tokens: int = 2000) -> dict | None:
-    """Frontier call constrained to a JSON object (response_format json_object)."""
-    key = env("OPENROUTER_API_KEY")
+    """Frontier call expected to return a JSON object.
+
+    Anthropic has no response_format equivalent, so the object is requested in
+    the system prompt and parsed with fence tolerance instead of guaranteed by
+    the API. A miss returns None, which every caller already handles.
+    """
+    key = env("ANTHROPIC_API_KEY")
     if not key:
         return None
-    body = json.dumps({
-        "model": COACH_MODEL,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "response_format": {"type": "json_object"},
-        "max_completion_tokens": max_tokens,
-    }).encode("utf-8")
+    system_json = system.rstrip() + (
+        "\n\nReturn ONLY a single valid JSON object. No prose, no code fences.")
+    body = _anthropic_body(system_json, user, max_tokens)
     for _ in range(3):
         try:
-            req = urllib.request.Request(OPENAI_URL, data=body, headers={
-                "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+            req = urllib.request.Request(ANTHROPIC_URL, data=body,
+                                         headers=_anthropic_headers(key))
             with urllib.request.urlopen(req, timeout=60) as r:
-                raw = json.loads(r.read())["choices"][0]["message"]["content"]
-            return json.loads(raw)
+                raw = json.loads(r.read())["content"][0]["text"]
+            parsed = _extract_json(raw)
+            if parsed is not None:
+                return parsed
         except Exception:  # noqa: BLE001
             continue
     return None

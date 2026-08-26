@@ -34,11 +34,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from applicant_profile import load_profile  # noqa: E402
 
 # ── config (swapping the model is a one-line edit) ────────────────────────────
-FIT_MODEL = "openai/gpt-5.4-mini"          # EMPIRICALLY VALIDATED 2026-06-22 with the fit_rubric.md prompt:
+FIT_MODEL = "claude-sonnet-4-6"       # Migrated off OpenRouter 2026-08-26 (one vendor).
+#                                     RE-VALIDATED on that migration, 3 consecutive runs:
+#                                     3/3 OVERALL PASS, 0 false-positive disqualifiers in all
+#                                     three, recall 18/18, 18/18, 17/18 with hard-gate miss=none.
+#                                     ~$0.125 per 26-case eval (~$0.005/role).
+#                                     ❌ claude-haiku-4-5 FAILED the gate: perfect recall but a
+#                                     false-positive disqualifier ('strong5' wrongly flagged
+#                                     long-placement) — i.e. it silently drops good roles.
+#                                     Prior: "openai/gpt-5.4-mini", EMPIRICALLY VALIDATED 2026-06-22 —
 #                                     test_fit_pass.py 7/7 runs STABLE PASS, 14/14 recall, 0 false-pos.
 #                                     The rich rubric made the cheap model consistent (raw mini was flaky).
-#                                     Escalate -> "gpt-5.5" (slow, reasoning) or "claude-..." only if a
-#                                     future eval fails. gpt-5.5 needs max_tokens headroom (handled below).
+#                                     ANY model change here MUST be re-validated against that same gate
+#                                     before it ships — this scores the live job board.
+#                                     Escalate -> "claude-sonnet-4-6" only if a future eval fails.
 # JD truncation: eligibility/requirements live at the TOP, but application DEADLINES
 # and legal text live at the BOTTOM. Pure-head truncation misses deadlines, so we keep
 # the head AND the tail of long JDs (~900 tok total).
@@ -54,6 +63,9 @@ PROMPT_VERSION = "fit-v3.4"        # bump to force re-score on prompt changes (p
 #                                    decision procedure + "does NOT apply" guards + worked examples
 
 ENV_FILE = Path.home() / ".hermes" / ".env"
+# Legacy escalation path. The OpenRouter key was REMOVED 2026-08-26, so a
+# non-claude --model now fails fast with "no API key for <model>" rather than
+# silently working. Kept only so the eval harness can still name a model.
 OPENAI_URL = "https://openrouter.ai/api/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 VALID_DQ = {"none", "wrong-cycle", "phd-required", "citizenship",

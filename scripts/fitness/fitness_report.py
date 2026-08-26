@@ -10,7 +10,7 @@ runs as a script-mode cron) does not also post stdout.
 
   fitness_report.py [--days N] [--no-send]   (default 7-day window)
 
-Reads TELEGRAM_BOT_TOKEN + OPENROUTER_API_KEY from ~/.hermes/.env (like the brief gate).
+Reads TELEGRAM_BOT_TOKEN + ANTHROPIC_API_KEY from ~/.hermes/.env (like the brief gate).
 """
 from __future__ import annotations
 
@@ -32,7 +32,10 @@ ENV_FILE = HOME / ".hermes" / ".env"
 CHARTS = VAULT / "07 - Health" / "Charts"
 TZ = ZoneInfo("America/Toronto")
 CHAT_ID = "696500863"
-OPENAI_MODEL = "openai/gpt-5.4-mini"
+# Migrated off OpenRouter 2026-08-26 — one vendor (Anthropic), and the OpenRouter
+# key that lived in plaintext on the Mac is no longer needed by anything.
+ANTHROPIC_MODEL = "claude-haiku-4-5"
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
 
 def _env(key: str) -> str | None:
@@ -93,22 +96,27 @@ def _templated_note(f: dict) -> str:
 
 
 def compose_note(f: dict) -> str:
-    key = _env("OPENROUTER_API_KEY")
+    key = _env("ANTHROPIC_API_KEY")
     if not key:
         return _templated_note(f)
+    # Anthropic takes the system prompt as a top-level field, not a message role,
+    # and uses max_tokens (not max_completion_tokens). Response text is at
+    # content[0].text rather than choices[0].message.content.
     body = json.dumps({
-        "model": OPENAI_MODEL,
-        "messages": [{"role": "system", "content": COACH_SYSTEM},
-                     {"role": "user", "content": "Weekly analysis:\n" + json.dumps(f, indent=2)}],
-        "max_completion_tokens": 1200,
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": 1200,
+        "system": COACH_SYSTEM,
+        "messages": [{"role": "user",
+                      "content": "Weekly analysis:\n" + json.dumps(f, indent=2)}],
     }).encode()
     for _ in range(3):
         try:
             req = urllib.request.Request(
-                "https://openrouter.ai/api/v1/chat/completions", data=body,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+                ANTHROPIC_URL, data=body,
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"})
             with urllib.request.urlopen(req, timeout=45) as r:
-                out = json.loads(r.read())["choices"][0]["message"]["content"].strip()
+                out = json.loads(r.read())["content"][0]["text"].strip()
             if out:
                 return out
         except Exception:  # noqa: BLE001

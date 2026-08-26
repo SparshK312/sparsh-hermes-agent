@@ -81,8 +81,9 @@ CHAT_ID = "696500863"  # Sparsh
 WEEKDAY_CUTOFF = datetime.time(9, 0)
 WEEKEND_CUTOFF = datetime.time(11, 0)
 
-OPENAI_MODEL = "openai/gpt-5.4-mini"
-OPENAI_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Migrated off OpenRouter 2026-08-26 — one vendor (Anthropic).
+ANTHROPIC_MODEL = "claude-haiku-4-5"
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
 DRY_RUN = "--dry-run" in sys.argv
 NO_LLM = "--no-llm" in sys.argv
@@ -465,8 +466,8 @@ def _env(key: str) -> str | None:
     return None
 
 
-def _openai_key() -> str | None:
-    return _env("OPENROUTER_API_KEY")
+def _anthropic_key() -> str | None:
+    return _env("ANTHROPIC_API_KEY")
 
 
 def send_message(text: str) -> bool:
@@ -515,31 +516,32 @@ SYSTEM_PROMPT = (
 def compose_rich(facts: dict) -> str | None:
     if NO_LLM:
         return None
-    key = _openai_key()
+    key = _anthropic_key()
     if not key:
-        _log("compose_rich: no OPENROUTER_API_KEY")
+        _log("compose_rich: no ANTHROPIC_API_KEY")
         return None
 
     user = json.dumps(facts, ensure_ascii=False, indent=2)
+    # Anthropic: system is a top-level field (not a message role), the token
+    # budget is max_tokens, and the reply text is content[0].text.
     body = json.dumps({
-        "model": OPENAI_MODEL,
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                     {"role": "user", "content": f"Compose today's brief from these facts:\n{user}"}],
-        # gpt-5-class: uses max_completion_tokens (not max_tokens), and reserves
-        # tokens for reasoning before output — keep this generous so the brief isn't
-        # starved. temperature is omitted (these models only accept the default).
-        "max_completion_tokens": 2000,
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": 2000,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user",
+                      "content": f"Compose today's brief from these facts:\n{user}"}],
     }).encode("utf-8")
 
     last_err = None
     for attempt in range(1, 4):
         try:
             req = urllib.request.Request(
-                OPENAI_URL, data=body,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+                ANTHROPIC_URL, data=body,
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"})
             with urllib.request.urlopen(req, timeout=45) as resp:
                 data = json.loads(resp.read())
-            out = data["choices"][0]["message"]["content"].strip()
+            out = data["content"][0]["text"].strip()
             if out:
                 _log(f"compose_rich: ok (attempt {attempt}, {len(out)} chars)")
                 return out
