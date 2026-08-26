@@ -173,7 +173,7 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # excluded, and became exactly the "never-executed decoy" the comment warns
   # about. Anything that runs from /usr/local/bin must NOT be mirrored here.
   for _f in cost_monitor.py; do
-    [ -f "scripts/monitor/$_f" ] && cp "scripts/monitor/$_f" ~/.hermes/scripts/monitor/
+    [ -f "scripts/monitor/\$_f" ] && cp "scripts/monitor/\$_f" ~/.hermes/scripts/monitor/
   done
   cp scripts/cron/cost_monitor.sh          ~/.hermes/scripts/cost_monitor.sh
   chmod +x ~/.hermes/scripts/cost_monitor.sh
