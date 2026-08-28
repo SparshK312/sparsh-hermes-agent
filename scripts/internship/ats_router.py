@@ -692,6 +692,62 @@ async def _single_lever(client, url) -> JobRecord:
     )
 
 
+# ── schema.org JobPosting ────────────────────────────────────────────────────
+# Found 2026-08-28 after two Netflix roles sat at #1 and #2 on the board with fit 82
+# and 85 — scored, it turned out, on the page's CSS THEME CONFIG. The generic text
+# extractor had grabbed a `{"themeOptions": {"customFonts": ...}}` island, truncated it
+# at 12,000 chars, and stored that as the job description. Both roles are PhD-ONLY; the
+# model never saw the word "PhD" because the requirement was never in the data.
+#
+# The real description was sitting in a <script type="application/ld+json"> JobPosting
+# block the whole time. That is a schema.org standard Google requires for job-search
+# indexing, so most career sites emit it — which makes this a general win, not a
+# Netflix patch. Try it FIRST on any page, before falling back to prose extraction.
+_LDJSON_RE = re.compile(
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
+
+
+def _ldjson_jobposting(html_text: str) -> tuple[str, str, str] | None:
+    """(title, description, iso_date) from a schema.org JobPosting, or None."""
+    for blk in _LDJSON_RE.findall(html_text or ""):
+        try:
+            data = json.loads(blk.strip())
+        except Exception:  # noqa: BLE001
+            continue
+        # may be a single object, a list, or an @graph wrapper
+        cands = data if isinstance(data, list) else [data]
+        if isinstance(data, dict) and isinstance(data.get("@graph"), list):
+            cands = data["@graph"]
+        for d in cands:
+            if not isinstance(d, dict):
+                continue
+            t = d.get("@type")
+            types = t if isinstance(t, list) else [t]
+            if "JobPosting" not in types:
+                continue
+            desc = clean_fragment(d.get("description") or "")
+            if len(desc) < 400:
+                continue
+            return (str(d.get("title") or ""), desc,
+                    _iso_to_date(str(d.get("datePosted") or "")))
+    return None
+
+
+def _looks_like_config_blob(text: str) -> bool:
+    """True when 'text' is a JSON/config island rather than prose.
+
+    The guard that would have caught the Netflix bug at write time. A job description
+    is sentences; a theme config is quoted keys. Never store the latter as a JD.
+    """
+    s = (text or "").lstrip()
+    if not s:
+        return False
+    if s[:1] in "{[":
+        return True
+    head = s[:4000]
+    return len(re.findall(r'"[A-Za-z_][\w\-]*":', head)) > 25
+
+
 # ── TLS-fingerprint fallback ─────────────────────────────────────────────────
 # Some ATS edges (iCIMS behind AWS WAF, several company career sites) block on the
 # TLS/JA3 fingerprint, NOT on headers or the User-Agent. Proof, 2026-08-28: the same
@@ -812,12 +868,16 @@ async def _single_manual(client, url, ats) -> JobRecord:
     pages like Amazon/SmartRecruiters/Taleo); otherwise leave JD empty for the
     user to click through."""
     try:
-        text, code = "", 0
+        text, code, title, posted = "", 0, "", ""
         try:
             r = await client.get(url, headers={"User-Agent": UA}, follow_redirects=True)
             code = r.status_code
             if code == 200:
-                text = clean_full_page(r.text, url)
+                ld = _ldjson_jobposting(r.text)
+                if ld:
+                    title, text, posted = ld
+                else:
+                    text = clean_full_page(r.text, url)
         except Exception:  # noqa: BLE001 - fall through to the impersonating client
             pass
         # Retry through a real-Chrome TLS fingerprint when we were blocked OR got junk.
@@ -825,8 +885,12 @@ async def _single_manual(client, url, ats) -> JobRecord:
         if code != 200 or not text or is_junk(text):
             c2, body = await _impersonate_get(url)
             if c2 == 200 and body:
+                ld = _ldjson_jobposting(body)
+                if ld:
+                    return JobRecord(url=url, ats_type=ats, title=ld[0],
+                                     full_jd=ld[1][:MAX_JD_CHARS], posted_date=ld[2])
                 t2 = clean_full_page(body, url)
-                if t2 and not is_junk(t2):
+                if t2 and not is_junk(t2) and not _looks_like_config_blob(t2):
                     return JobRecord(url=url, ats_type=ats, full_jd=t2[:MAX_JD_CHARS])
                 text, code = t2 or text, c2
             elif c2:
@@ -836,7 +900,11 @@ async def _single_manual(client, url, ats) -> JobRecord:
                              error=f"http {code}")
         if not text or is_junk(text):
             return JobRecord(url=url, ats_type=ats, error="needs render / manual")
-        return JobRecord(url=url, ats_type=ats, full_jd=text[:MAX_JD_CHARS])
+        if _looks_like_config_blob(text):
+            # Better to show 👀 than to score a role on its stylesheet.
+            return JobRecord(url=url, ats_type=ats, error="extracted config blob, not a JD")
+        return JobRecord(url=url, ats_type=ats, title=title,
+                         full_jd=text[:MAX_JD_CHARS], posted_date=posted)
     except Exception as e:  # noqa: BLE001
         return JobRecord(url=url, ats_type=ats, error=f"{type(e).__name__}: {e}")
 

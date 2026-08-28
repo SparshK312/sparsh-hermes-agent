@@ -13,6 +13,10 @@ priority_override) are never touched — the sheet owns those.
   --limit N  cap the number attempted
   --browser  after the cheap rungs, retry the residue through a real browser
              (rung 3, ~5s/page — see browser_fetch.py). Off by default.
+  --repair   ALSO re-fetch rows whose stored "JD" is actually a config blob.
+             Two Netflix roles sat at #1 and #2 on the board with fit 82 and 85
+             scored on the page's CSS theme JSON; both are PhD-only and the model
+             never saw the word because it was never in the data.
 """
 from __future__ import annotations
 
@@ -38,10 +42,21 @@ async def main() -> int:
 
     doc = json.loads(STORE.read_text())
     ps = doc["postings"]
+    repair = "--repair" in sys.argv
     todo = [(cid, v["machine"]) for cid, v in ps.items()
             if not v["machine"].get("dead")
             and not (v["machine"].get("full_jd") or "").strip()
             and (v["machine"].get("url") or "").strip()]
+    if repair:
+        poisoned = [(cid, v["machine"]) for cid, v in ps.items()
+                    if not v["machine"].get("dead")
+                    and (v["machine"].get("url") or "").strip()
+                    and A._looks_like_config_blob(v["machine"].get("full_jd") or "")]
+        if poisoned:
+            print(f"[backfill] --repair: {len(poisoned)} row(s) hold a config blob, not a JD")
+            for _, m in poisoned:
+                m["full_jd"] = ""          # clear so the normal path re-fetches it
+            todo += poisoned
     if limit:
         todo = todo[:limit]
     print(f"[backfill] {len(todo)} live rows with no JD{' (dry run)' if dry else ''}")

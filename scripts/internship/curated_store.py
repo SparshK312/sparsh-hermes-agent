@@ -86,9 +86,35 @@ class CuratedStore:
         return e
 
     # ── mutation ─────────────────────────────────────────────────────────────
+    # Fields where an empty harvest result must never clobber something we already
+    # hold. A blank here means "this fetch did not get it", not "this value is gone".
+    _NEVER_BLANK = ("full_jd", "role", "title", "location", "url", "posted_date",
+                    "cycle", "company")
+
     def upsert_machine(self, cid: str, fields: dict) -> None:
-        """Merge machine fields. NEVER touches human fields."""
-        self.entry(cid)["machine"].update(fields)
+        """Merge machine fields. NEVER touches human fields.
+
+        🔴 A blind dict.update() here was silently destroying data (found 2026-08-28).
+        Tesla answers automation with 403, so every refresh called fetch_jd_record,
+        got an empty record back, and wrote `full_jd: ""` straight over a job
+        description that had been pasted in by hand minutes earlier. The same bug
+        means ANY transient fetch failure erases a good JD — which is a large part of
+        why rows sat unscoreable in the first place.
+
+        Rule: a blank never overwrites a non-blank, and a hand-pasted JD outranks any
+        scraper result outright.
+        """
+        m = self.entry(cid)["machine"]
+        manual_jd = m.get("jd_source") == "manual-paste"
+        for k, v in fields.items():
+            blank = v is None or (isinstance(v, str) and not v.strip())
+            if blank and k in self._NEVER_BLANK and m.get(k):
+                continue
+            if k == "full_jd" and manual_jd:
+                # only replace a hand-pasted JD with something at least as substantial
+                if len(str(v or "")) < len(str(m.get("full_jd") or "")):
+                    continue
+            m[k] = v
 
     def set_human(self, cid: str, fields: dict) -> None:
         """Set human fields (from xlsx read-back). Only known keys; blanks ignored
