@@ -9,8 +9,10 @@ by fit_pass, which renders it as 👀 "AI couldn't read this" on the board.
 Only MACHINE fields are written. Human fields (status / applied_date / notes /
 priority_override) are never touched — the sheet owns those.
 
-  --dry     probe only, change nothing (default is to write)
-  --limit N cap the number attempted
+  --dry      probe only, change nothing (default is to write)
+  --limit N  cap the number attempted
+  --browser  after the cheap rungs, retry the residue through a real browser
+             (rung 3, ~5s/page — see browser_fetch.py). Off by default.
 """
 from __future__ import annotations
 
@@ -86,6 +88,29 @@ async def main() -> int:
                 ps[cid]["machine"]["dead_reason"] = f"jd-backfill {date.today().isoformat()}: {err[:80]}"
         else:
             failed += 1
+
+    # ── rung 3: a real browser, only for what rungs 1-2 could not read ──────────
+    if "--browser" in sys.argv:
+        residue = [(cid, m) for cid, m, rec, err in results
+                   if rec is not None and not rec.dead
+                   and len((rec.full_jd or "").strip()) < MIN_USABLE]
+        if residue:
+            from browser_fetch import fetch_rendered
+            print(f"[backfill] rung 3: rendering {len(residue)} page(s) in a browser…")
+            rendered = await fetch_rendered([m["url"] for _, m in residue])
+            for cid, m in residue:
+                txt = rendered.get(m["url"], "")
+                if len(txt) >= MIN_USABLE:
+                    recovered += 1
+                    failed -= 1
+                    by_ats[(m.get("ats_type") or "?") + "+browser"] += 1
+                    if not dry:
+                        mm = ps[cid]["machine"]
+                        mm["full_jd"] = txt[:12_000]
+                        mm.pop("fit_score", None)
+                        mm.pop("fit_why", None)
+                        mm.pop("fit_disqualifier", None)
+            print(f"[backfill] rung 3 recovered {len([1 for _, m in residue if len(rendered.get(m['url'],''))>=MIN_USABLE])}")
 
     print(f"[backfill] recovered {recovered} · marked dead {dead} · still failing {failed}")
     if by_ats:
