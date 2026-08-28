@@ -109,9 +109,29 @@ def canonical_id(url: str) -> str:
     ('host.com/path?cleaned_query'), so old entries continue to dedupe."""
     canon = canonicalize_url(url)
     parsed = urlparse(canon)
-    base = f"{parsed.netloc}{parsed.path}"
-    if parsed.query:
-        base += "?" + parsed.query
+    path = parsed.path
+
+    # Collapse APPLICATION-FORM urls onto the posting they belong to. Ashby
+    # serves the form at "<posting>/application?embed=true" and Greenhouse at
+    # "<board>/embed/job_app"; capturing one of those while applying minted a
+    # SECOND canonical id for a job already in the store. That is not
+    # theoretical — Notion "Software Engineer Intern - Winter 2027" sat in the
+    # tracker twice, both marked Applied 2026-08-18 with identical notes,
+    # inflating the applied count (found 2026-08-27).
+    for suffix in ("/application", "/apply"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)]
+            break
+
+    query = parsed.query
+    if query:
+        # `embed` is a rendering flag, never part of a posting's identity.
+        query = "&".join(kv for kv in query.split("&")
+                         if not kv.split("=", 1)[0].lower() == "embed")
+
+    base = f"{parsed.netloc}{path}"
+    if query:
+        base += "?" + query
     return base
 
 
