@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -84,6 +85,20 @@ _TEMPERATURE_OK = {"gpt-5.4-mini", "openai/gpt-5.4-mini",
 # rough per-MTok pricing (USD) for the cost log — confirm against the live dashboard.
 # Both spellings, same reason as above: an unprefixed-only dict silently fell back to
 # the (1.0, 5.0) default and mis-stated the cost line.
+# Retry backoff. DNS gets the longer ladder: on a scheduled wake-run the name
+# service is often still coming up, and it resolves on its own within ~30s.
+_NET_BACKOFF = (2, 6)
+_DNS_BACKOFF = (8, 20)
+
+
+def _is_dns_error(exc) -> bool:
+    """True for 'nodename nor servname provided' / getaddrinfo-class failures."""
+    text = f"{exc}".lower()
+    return any(k in text for k in
+               ("nodename nor servname", "name or service not known",
+                "temporary failure in name resolution", "getaddrinfo"))
+
+
 PRICE = {"gpt-5.4-mini": (0.25, 2.0), "gpt-5.5": (1.0, 8.0),
          "openai/gpt-5.4-mini": (0.25, 2.0), "openai/gpt-5.5": (1.0, 8.0),
          "claude-haiku-4-5": (1.0, 5.0), "claude-sonnet-4-6": (3.0, 15.0)}
@@ -217,7 +232,20 @@ def _call_model(model: str, user_content: str, max_tokens: int = 1500):
         return None
     if is_claude:
         body = json.dumps({
-            "model": model, "max_tokens": max_tokens, "system": SYS_PROMPT,
+            "model": model, "max_tokens": max_tokens,
+            # PROMPT CACHING. SYS_PROMPT is ~2,220 tokens (8,868 chars) resent
+            # IDENTICALLY on every chunk call — roughly a third of all input
+            # tokens for the run. As a cached block the first call pays 1.25x to
+            # write it and every later call in the 5-minute window reads it at
+            # 0.1x. A run makes up to 24 chunk calls (MAX_LLM_PER_RUN=120 at 5
+            # postings each), so all but the first are near-free on this block.
+            # Anthropic requires >=1024 tokens to cache for Sonnet; this clears it.
+            # Zero behaviour change: same bytes, same order, same model.
+            "system": [{
+                "type": "text",
+                "text": SYS_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }],
             "messages": [{"role": "user", "content": user_content}],
             # Determinism is the property the 2026-06-22 eval certified. The
             # Claude branch shipped 2026-08-26 WITHOUT this, so the live board
@@ -243,7 +271,18 @@ def _call_model(model: str, user_content: str, max_tokens: int = 1500):
         body = json.dumps(payload).encode()
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         url = OPENAI_URL
+    _last_err = None
     for attempt in range(3):
+        # Back off between attempts. The previous loop retried immediately, so a
+        # transient fault burned all three tries inside a second — which is how
+        # the 2026-08-27 18:00 wake-run lost 81 postings to DNS that was merely
+        # SETTLING, not down. _wait_for_network guards the START of a run; the
+        # fit pass then runs for minutes, and macOS resolution can go stale again
+        # after a wake. DNS faults get a longer wait because that is the one
+        # failure that reliably fixes itself.
+        if attempt:
+            time.sleep(_DNS_BACKOFF[attempt - 1] if _is_dns_error(_last_err)
+                       else _NET_BACKOFF[attempt - 1])
         try:
             req = urllib.request.Request(url, data=body, headers=headers)
             with urllib.request.urlopen(req, timeout=60) as r:
@@ -257,8 +296,15 @@ def _call_model(model: str, user_content: str, max_tokens: int = 1500):
                 log(f"truncated at max_tokens ({model}, try {attempt + 1}) — retrying")
                 continue
             usage = raw.get("usage", {})
+            # Anthropic reports cache activity in separate counters. Fold them into
+            # the shape the cost line already reads so the saving shows up in the
+            # log instead of having to be inferred.
+            if usage:
+                usage.setdefault("cache_creation_input_tokens", 0)
+                usage.setdefault("cache_read_input_tokens", 0)
             return _extract_json(text), usage
         except Exception as e:  # noqa: BLE001
+            _last_err = e
             log(f"call failed ({model}, try {attempt + 1}): {e}")
     return None, {}
 
@@ -309,7 +355,8 @@ def _validate_item(it: dict, valid_ids: set) -> dict | None:
 def score_batch(items: list[dict], model: str = FIT_MODEL) -> tuple[dict, dict]:
     """items: [{id,company,title,location,cycle,jd}]. Returns ({id: fit_result}, usage_totals).
     Chunks, calls the model, validates per item. JDs are already truncated by the caller."""
-    out, usage_tot = {}, {"prompt_tokens": 0, "completion_tokens": 0}
+    out, usage_tot = {}, {"prompt_tokens": 0, "completion_tokens": 0,
+                          "cache_write_tokens": 0, "cache_read_tokens": 0}
     for i in range(0, len(items), CHUNK_SIZE):
         chunk = items[i:i + CHUNK_SIZE]
         valid_ids = {it["id"] for it in chunk}
@@ -323,6 +370,12 @@ def score_batch(items: list[dict], model: str = FIT_MODEL) -> tuple[dict, dict]:
         parsed, usage = _call_model(model, user)
         usage_tot["prompt_tokens"] += usage.get("prompt_tokens", usage.get("input_tokens", 0))
         usage_tot["completion_tokens"] += usage.get("completion_tokens", usage.get("output_tokens", 0))
+        # With prompt caching, the cached system block does NOT appear in
+        # input_tokens — it moves to these counters. Not accumulating them would
+        # make the cost line report a large FAKE saving while cache writes
+        # actually cost 1.25x.
+        usage_tot["cache_write_tokens"] += usage.get("cache_creation_input_tokens", 0)
+        usage_tot["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
         if not parsed:
             continue
         jd_by_id = {it["id"]: it.get("jd", "") for it in chunk}
@@ -340,8 +393,56 @@ def score_batch(items: list[dict], model: str = FIT_MODEL) -> tuple[dict, dict]:
 
 
 def _cost(model: str, usage: dict) -> float:
+    """Cost in USD, including Anthropic's cache tiers.
+
+    Cache writes bill at 1.25x the input rate and reads at 0.1x. Those tokens are
+    reported in their own counters and are absent from input_tokens, so a cost
+    function that reads only prompt_tokens would understate a cached run badly —
+    reporting a saving larger than the real one.
+    """
     pin, pout = PRICE.get(model, (1.0, 5.0))
-    return usage.get("prompt_tokens", 0) / 1e6 * pin + usage.get("completion_tokens", 0) / 1e6 * pout
+    return (usage.get("prompt_tokens", 0) / 1e6 * pin
+            + usage.get("completion_tokens", 0) / 1e6 * pout
+            + usage.get("cache_write_tokens", 0) / 1e6 * pin * 1.25
+            + usage.get("cache_read_tokens", 0) / 1e6 * pin * 0.10)
+
+
+def _append_spend_ledger(model: str, st, usage: dict) -> None:
+    """Append this run's spend to a CSV in the vault.
+
+    The board runs on the MAC as a standalone direct API call, so none of its
+    spend reaches the VPS `state.db` that the dashboard and cost_monitor read.
+    That blind spot was material: on 2026-08-27 the dashboard showed $1.54 for a
+    period in which roughly $4 had actually been spent, because the board's own
+    cost never left this machine.
+
+    CSV, not JSON: Obsidian Sync is configured to skip `.json`, so a JSON ledger
+    would never reach the VPS. Append-only and best-effort — a failure here must
+    never break a board refresh.
+    """
+    try:
+        from datetime import datetime as _dt
+        # NOT `Path(os.environ.get(...)) or default` — Path("") is Path(".") and
+        # is TRUTHY, so an unset HERMES_VAULT silently wrote the ledger into the
+        # current working directory instead of the vault.
+        env_vault = os.environ.get("HERMES_VAULT", "").strip()
+        vault = Path(env_vault) if env_vault else (
+            Path.home() / "Documents" / "School Vault - UofT")
+        path = vault / "09 - Systems" / "Hermes" / "board-spend.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new = not path.exists()
+        with path.open("a", encoding="utf-8") as fh:
+            if new:
+                fh.write("timestamp,model,scored,cached,errors,cost_usd,"
+                         "prompt_tokens,completion_tokens,cache_write,cache_read\n")
+            fh.write(",".join(str(x) for x in (
+                _dt.now().astimezone().isoformat(timespec="seconds"),
+                model, st.scored, st.cached, st.errors, f"{st.cost:.6f}",
+                usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                usage.get("cache_write_tokens", 0), usage.get("cache_read_tokens", 0),
+            )) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        log(f"spend ledger write failed (non-fatal): {exc}")
 
 
 # ── public: run over the store with caching ────────────────────────────────────
@@ -419,7 +520,8 @@ def run_fit_pass(store, model: str = FIT_MODEL, max_llm: int = MAX_LLM_PER_RUN,
         st.scored = len(todo)
         return st
 
-    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    usage = {"prompt_tokens": 0, "completion_tokens": 0,
+             "cache_write_tokens": 0, "cache_read_tokens": 0}
     if todo:
         items = [{"id": cid, "company": m.get("company", ""), "title": m.get("role", ""),
                   "location": m.get("location", ""), "cycle": m.get("cycle", ""),
@@ -445,7 +547,9 @@ def run_fit_pass(store, model: str = FIT_MODEL, max_llm: int = MAX_LLM_PER_RUN,
     st.cost = _cost(model, usage)
     log(f"{model}: scored {st.scored}, cached {st.cached}, no-JD {st.no_jd}, "
         f"errors {st.errors} · ~${st.cost:.4f} "
-        f"({usage.get('prompt_tokens',0)}+{usage.get('completion_tokens',0)} tok)")
+        f"({usage.get('prompt_tokens',0)}+{usage.get('completion_tokens',0)} tok, "
+        f"cache w{usage.get('cache_write_tokens',0)}/r{usage.get('cache_read_tokens',0)})")
+    _append_spend_ledger(model, st, usage)
     return st
 
 

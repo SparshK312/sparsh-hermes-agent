@@ -107,6 +107,39 @@ def _num(v):
 # ----------------------------------------------------------------------------
 # agent-ops tiles
 # ----------------------------------------------------------------------------
+BOARD_SPEND_CSV = VAULT / "09 - Systems" / "Hermes" / "board-spend.csv"
+
+
+def _board_spend(since_ts: float) -> float:
+    """Mac-side Curated Board spend since a timestamp.
+
+    The board runs on the Mac as a standalone direct API call, so none of its
+    cost reaches this VPS state.db. Without this the dashboard understated real
+    spend badly — on 2026-08-27 it showed $1.54 for a window in which about $4
+    had been spent. fit_pass appends to this CSV; it reaches us over Obsidian
+    Sync (CSV, not JSON — sync skips .json).
+    """
+    total = 0.0
+    try:
+        import csv as _csv
+        with BOARD_SPEND_CSV.open(newline="", encoding="utf-8") as fh:
+            for row in _csv.DictReader(fh):
+                try:
+                    ts = datetime.datetime.fromisoformat(row["timestamp"]).timestamp()
+                except Exception:
+                    continue
+                if ts >= since_ts:
+                    try:
+                        total += float(row.get("cost_usd") or 0)
+                    except ValueError:
+                        pass
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return total
+
+
 def tile_spend() -> str:
     con = db_ro()
     try:
@@ -127,16 +160,19 @@ def tile_spend() -> str:
             return total
 
         today, mtd, last30 = spend(sod), spend(som), spend(d30)
+        b_today, b_mtd, b_last30 = _board_spend(sod), _board_spend(som), _board_spend(d30)
     finally:
         con.close()
-    pct = min(100, int(mtd / MONTHLY_CEILING * 100)) if MONTHLY_CEILING else 0
+    combined_mtd = mtd + b_mtd
+    pct = min(100, int(combined_mtd / MONTHLY_CEILING * 100)) if MONTHLY_CEILING else 0
     bar_color = "#e5534b" if pct >= 90 else "#d9a441" if pct >= 70 else "#57ab5a"
     return _card("💸 Spend", f"""
       <div class="stat-row">
-        <div class="stat"><div class="big">${today:.2f}</div><div class="lbl">today</div></div>
-        <div class="stat"><div class="big">${mtd:.2f}</div><div class="lbl">month-to-date</div></div>
-        <div class="stat"><div class="big">${last30:.2f}</div><div class="lbl">last 30d</div></div>
+        <div class="stat"><div class="big">${today + b_today:.2f}</div><div class="lbl">today (all)</div></div>
+        <div class="stat"><div class="big">${mtd + b_mtd:.2f}</div><div class="lbl">month-to-date</div></div>
+        <div class="stat"><div class="big">${last30 + b_last30:.2f}</div><div class="lbl">last 30d</div></div>
       </div>
+      <div class="lbl">gateway ${mtd:.2f} · board (Mac) ${b_mtd:.2f} — MTD split</div>
       <div class="meter"><div class="fill" style="width:{pct}%;background:{bar_color}"></div></div>
       <div class="lbl">MTD vs ${MONTHLY_CEILING:.0f} ceiling · {pct}%</div>""")
 
