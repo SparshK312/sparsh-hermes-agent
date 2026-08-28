@@ -589,6 +589,12 @@ async def fetch_jd_record(client, url: str) -> JobRecord:
             rec = await _single_ashby(client, url)
         elif ats == "lever":
             rec = await _single_lever(client, url)
+        elif ats == "workable":
+            rec = await _single_workable(client, url)
+        elif ats == "smartrecruiters":
+            rec = await _single_smartrecruiters(client, url)
+        elif ats == "icims":
+            rec = await _single_icims(client, url)
         else:
             rec = await _single_manual(client, url, ats)
     except Exception as e:  # noqa: BLE001
@@ -686,18 +692,151 @@ async def _single_lever(client, url) -> JobRecord:
     )
 
 
+# ── TLS-fingerprint fallback ─────────────────────────────────────────────────
+# Some ATS edges (iCIMS behind AWS WAF, several company career sites) block on the
+# TLS/JA3 fingerprint, NOT on headers or the User-Agent. Proof, 2026-08-28: the same
+# iCIMS URL returns 200 to curl and 405 "Human Verification" to httpx with byte-identical
+# headers. curl_cffi replays a real Chrome ClientHello and gets through.
+#
+# It is a FALLBACK, never the default: httpx is faster, async, and already works for
+# every ATS with a JSON API. This only runs when the normal path came back blocked or junk.
+# ⚠️ It is also not magic — Tesla sits behind Akamai Bot Manager and returns a JS
+# challenge page (2.5 KB, `sec-if-cpt-container`) with a 200, which no TLS trick solves.
+# That needs a real browser.
+_IMPERSONATE = "chrome124"
+
+
+async def _impersonate_get(url: str, timeout: int = 25) -> tuple[int, str]:
+    """Blocking curl_cffi GET pushed to a thread so the async harvest is never stalled."""
+    try:
+        from curl_cffi import requests as _cr
+    except ImportError:
+        return 0, ""
+
+    def _go():
+        r = _cr.get(url, impersonate=_IMPERSONATE, timeout=timeout,
+                    headers={"Accept-Language": "en-US,en;q=0.9"})
+        return r.status_code, r.text
+    try:
+        return await asyncio.to_thread(_go)
+    except Exception:  # noqa: BLE001
+        return 0, ""
+
+
+async def _single_workable(client, url) -> JobRecord:
+    """apply.workable.com/{account}/j/{shortcode} -> the public per-job API.
+
+    The board fetcher uses the *widget* endpoint, which only covers accounts we
+    already track. A wide-net row is a bare posting URL, so it needs the per-job
+    endpoint. Verified 2026-08-28: the page HTML is a 7.6 KB JS shell with no JD,
+    while /api/v1/accounts/{a}/jobs/{c} returns description + requirements +
+    benefits (~4.6 KB of real text). No browser required.
+    """
+    parts = [x for x in urlparse(url).path.split("/") if x]
+    if len(parts) < 3 or parts[1] != "j":
+        return await _single_manual(client, url, "workable")
+    account, shortcode = parts[0], parts[2]
+    data, code = await _get_json(
+        client, f"https://apply.workable.com/api/v1/accounts/{account}/jobs/{shortcode}")
+    if not data:
+        return JobRecord(url=url, dead=code in (404, 410), error=f"workable api {code}")
+    loc = data.get("location") or {}
+    loc_str = ", ".join(x for x in [loc.get("city"), loc.get("region"),
+                                    loc.get("country")] if x) if isinstance(loc, dict) else str(loc)
+    jd = " ".join(clean_fragment(data.get(k) or "")
+                  for k in ("description", "requirements", "benefits"))
+    return JobRecord(
+        title=data.get("title", ""), location=loc_str, url=url,
+        full_jd=jd.strip()[:MAX_JD_CHARS],
+        posted_date=_iso_to_date(data.get("published") or data.get("created_at") or ""),
+        req_id=str(data.get("shortcode") or data.get("id", "")),
+    )
+
+
+async def _single_smartrecruiters(client, url) -> JobRecord:
+    """jobs.smartrecruiters.com/{Company}/{postingId}-{slug} -> the public API.
+
+    The posting id is the numeric prefix of the last path segment. Same section
+    concatenation as the board fetcher so both paths produce identical JD text.
+    """
+    parts = [x for x in urlparse(url).path.split("/") if x]
+    if len(parts) < 2:
+        return await _single_manual(client, url, "smartrecruiters")
+    company, last = parts[0], parts[-1]
+    m = re.match(r"(\d+)", last)
+    if not m:
+        return await _single_manual(client, url, "smartrecruiters")
+    pid = m.group(1)
+    data, code = await _get_json(
+        client, f"https://api.smartrecruiters.com/v1/companies/{company}/postings/{pid}")
+    if not data:
+        return JobRecord(url=url, dead=code in (404, 410), error=f"smartrecruiters api {code}")
+    secs = (data.get("jobAd") or {}).get("sections") or {}
+    jd = " ".join(clean_fragment((secs.get(k) or {}).get("text", ""))
+                  for k in ("companyDescription", "jobDescription",
+                            "qualifications", "additionalInformation"))
+    return JobRecord(
+        title=data.get("name", ""), location=_sr_loc(data), url=url,
+        full_jd=jd.strip()[:MAX_JD_CHARS],
+        posted_date=_iso_to_date(data.get("releasedDate", "")), req_id=pid,
+    )
+
+
+async def _single_icims(client, url) -> JobRecord:
+    """iCIMS serves the JD inside an iframe, so a plain GET of the posting URL
+    returns a 92 KB shell of chrome and scripts with none of the description in it.
+
+    `?in_iframe=1` renders the same posting WITHOUT the outer frame — verified
+    2026-08-28: 36 KB containing Overview / Responsibilities / Qualifications /
+    Requirements. This is a URL parameter, not a browser. 10 live roles were
+    unscoreable purely for want of it.
+    """
+    sep = "&" if urlparse(url).query else "?"
+    framed = f"{url}{sep}in_iframe=1"
+    try:
+        # httpx is reliably WAF-blocked here (405 "Human Verification"), so skip it.
+        code, body = await _impersonate_get(framed)
+        if code != 200 or not body:
+            return JobRecord(url=url, ats_type="icims", dead=code in (404, 410),
+                             error=f"icims http {code}")
+        text = clean_full_page(body, url)
+        if is_junk(text):
+            return JobRecord(url=url, ats_type="icims", error="icims iframe still junk")
+        return JobRecord(url=url, ats_type="icims", full_jd=text[:MAX_JD_CHARS])
+    except Exception as e:  # noqa: BLE001
+        return JobRecord(url=url, ats_type="icims", error=f"{type(e).__name__}: {e}")
+
+
 async def _single_manual(client, url, ats) -> JobRecord:
     """No usable API — try a plain GET + trafilatura (works on server-rendered
     pages like Amazon/SmartRecruiters/Taleo); otherwise leave JD empty for the
     user to click through."""
     try:
-        r = await client.get(url, headers={"User-Agent": UA}, follow_redirects=True)
-        if r.status_code != 200:
-            return JobRecord(url=url, ats_type=ats, dead=True, error=f"http {r.status_code}")
-        text = clean_full_page(r.text, url)
-        if is_junk(text):
+        text, code = "", 0
+        try:
+            r = await client.get(url, headers={"User-Agent": UA}, follow_redirects=True)
+            code = r.status_code
+            if code == 200:
+                text = clean_full_page(r.text, url)
+        except Exception:  # noqa: BLE001 - fall through to the impersonating client
+            pass
+        # Retry through a real-Chrome TLS fingerprint when we were blocked OR got junk.
+        # 403/405/429 are the block codes; junk means we got a challenge/cookie wall.
+        if code != 200 or not text or is_junk(text):
+            c2, body = await _impersonate_get(url)
+            if c2 == 200 and body:
+                t2 = clean_full_page(body, url)
+                if t2 and not is_junk(t2):
+                    return JobRecord(url=url, ats_type=ats, full_jd=t2[:MAX_JD_CHARS])
+                text, code = t2 or text, c2
+            elif c2:
+                code = code or c2
+        if code not in (200, 0) and not text:
+            return JobRecord(url=url, ats_type=ats, dead=code in (404, 410),
+                             error=f"http {code}")
+        if not text or is_junk(text):
             return JobRecord(url=url, ats_type=ats, error="needs render / manual")
-        return JobRecord(url=url, ats_type=ats, full_jd=text)
+        return JobRecord(url=url, ats_type=ats, full_jd=text[:MAX_JD_CHARS])
     except Exception as e:  # noqa: BLE001
         return JobRecord(url=url, ats_type=ats, error=f"{type(e).__name__}: {e}")
 
