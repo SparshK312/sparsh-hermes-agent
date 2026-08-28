@@ -151,6 +151,13 @@ XLSX_PATH = Path(os.environ.get("CURATED_XLSX",
                  VAULT / "06 - Internships" / "Job Search" / "Curated Board.xlsx"))
 OLD_TRACKER = VAULT / "06 - Internships" / "Job Search" / "Legacy" / "Application Tracker.xlsx"
 
+# Google Sheets mirror — the phone-accessible copy, and during the transition the
+# SECOND artifact rather than a replacement (the xlsx stays the fallback and the
+# diffable one). CURATED_GSHEET=0 turns it off; CURATED_GSHEET_ID points elsewhere.
+GSHEET_ID = os.environ.get("CURATED_GSHEET_ID",
+                           "1Kkle7QoKsBMXihoslWjIoMDqKFznwxxA4Y_OgiqJpWI")
+GSHEET_ON = os.environ.get("CURATED_GSHEET", "1").lower() not in ("0", "false", "no")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(VAULT / "Scripts"))
 
@@ -158,6 +165,11 @@ import brand_first_source  # noqa: E402
 import wide_net_source  # noqa: E402
 from company_boards import boards as _boards  # noqa: E402
 from build_curated_xlsx import is_locked, read_back_human, write_board  # noqa: E402
+try:
+    import build_curated_gsheet as gsheet  # noqa: E402
+except Exception as _e:                    # noqa: BLE001 - never fail the refresh on import
+    gsheet = None
+    print(f"[refresh] Google Sheets mirror unavailable: {_e}", file=sys.stderr)
 from curated_store import CuratedStore  # noqa: E402
 from hotness import hotness, role_lane  # noqa: E402
 from internship_scraper import canonical_id, normalize_company_name  # noqa: E402
@@ -277,6 +289,23 @@ async def refresh(notify: bool = False) -> int:
             store.add_orphan(cid, human)
     if back:
         print(f"[refresh] merged manual edits on {len(back)} rows", file=sys.stderr)
+
+    # …and from the Google Sheet, which is where edits made on his phone land. The
+    # Sheet wins on conflict: it is the surface he actually touches now, and the xlsx
+    # can hold a stale value from before an edit was made away from the laptop.
+    if gsheet is not None and GSHEET_ON:
+        try:
+            g_back = gsheet.read_back_human(GSHEET_ID)
+            for cid, human in g_back.items():
+                if cid in store.postings:
+                    store.set_human(cid, human)
+                else:
+                    store.add_orphan(cid, human)
+            if g_back:
+                print(f"[refresh] merged Sheet edits on {len(g_back)} rows", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️  [refresh] could not read the Google Sheet: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
 
     # 2) one-time history seed
     seeded = import_old_tracker_history(store)
@@ -430,6 +459,36 @@ async def refresh(notify: bool = False) -> int:
               f"{counts['applications']} applications, {counts.get('reviewed', 0)} reviewed/skipped "
               f"({len(harvested)} live brand-board roles, {stale} newly stale)")
         print(f"   {XLSX_PATH}")
+
+    # 5b) the Google Sheet. Isolated on purpose: a network blip, an expired OAuth or a
+    # Sheets outage must never cost us the store save or the xlsx above. It fails LOUD
+    # (a visible warning) rather than silently, because a board that has quietly stopped
+    # updating looks exactly like a board with nothing new on it.
+    if gsheet is not None and GSHEET_ON:
+        try:
+            res = gsheet.write_board(store.postings, GSHEET_ID, gen)
+            late = res.get("human") or {}
+            changed = 0
+            for cid, human in late.items():          # edits typed during the harvest
+                if cid not in store.postings:
+                    continue
+                # Compare FIELD BY FIELD. read_back_human returns only the non-empty
+                # cells, so comparing whole dicts against the store's full human record
+                # reports every row as changed on every run.
+                cur = (store.get(cid) or {}).get("human") or {}
+                if any((cur.get(k) or "") != v for k, v in human.items()):
+                    store.set_human(cid, human)
+                    changed += 1
+            if changed:
+                store.save(gen)
+            c = res["counts"]
+            print(f"   Google Sheet updated — {c[gsheet.TAB_QUEUE]} queue, "
+                  f"{c[gsheet.TAB_APPS]} applications, {c[gsheet.TAB_REVIEWED]} reviewed"
+                  + (f" (+{changed} late edits merged)" if changed else ""))
+        except Exception as e:  # noqa: BLE001
+            print(f"\n⚠️  GOOGLE SHEET NOT UPDATED — {type(e).__name__}: {e}\n"
+                  f"    The xlsx and the store are fine. The Sheet is now STALE.",
+                  file=sys.stderr)
 
     # 6) notify (only when scheduled, only on genuinely-new postings, never on the
     #    first-ever run; silent otherwise — matches the other crons' discipline)
