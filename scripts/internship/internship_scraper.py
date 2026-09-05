@@ -375,6 +375,18 @@ NEGATIVE_ROLE_KEYWORDS = [
     # Writing
     "copywriter", "content writer", "writer intern", "journalist",
     # Non-tech engineering disciplines
+    # Silicon / EE intern titles, added 2026-09-05. The list already carried
+    # mechanical/thermal/civil/aerospace but NOTHING for hardware, so once the
+    # tier-S/A fallback started surfacing unclassifiable titles, NVIDIA alone
+    # flooded 8 pools (ASIC Design, VLSI, Mixed Signal, DFT, Circuit Design,
+    # Hardware Verification, Computer Architecture). He has no hardware evidence
+    # and skipped NVIDIA comp-arch/systems on the truth gate in August.
+    # NOTE: multi-word anchors on purpose -- NEGATIVE_ROLE_KEYWORDS uses plain
+    # substring matching, so a bare "asic" would fire on "bASIC".
+    "hardware verification", "design verification", "hardware asic", "asic design",
+    "circuit design", "physical design", "mixed signal", "design for test",
+    "hardware design", "hardware engineer", "electrical engineer", "vlsi",
+    "silicon design", "analog design", "computer architecture",
     "thermal engineer", "mechanical engineer", "chemical engineer",
     "civil engineer", "structural engineer", "aerospace engineer",
     # Other non-tech
