@@ -381,6 +381,8 @@ def gather_facts(today: str, yesterday: str) -> dict:
         "yesterday_activity": activity,
         "schedule": gather_schedule(today),
         "tasks": gather_tasks(today),
+        "inbox": gather_inbox(),
+        "board": gather_board(),
         "hard_deadlines": ai["hard_deadlines"],
         "this_week": ai["this_week"],
     }
@@ -496,6 +498,41 @@ def send_message(text: str) -> bool:
     return False
 
 
+# ── inbox + board facts ──────────────────────────────────────────────────────
+# Added 2026-09-04. The brief was composing from schedule + tasks + sleep only, so it
+# was confidently stale: it listed "Figma → Point72 → NVIDIA ×2 → SpaceX" on Sep 3 AND
+# Sep 4 when Figma and SpaceX had been applied on Aug 29, and it never mentioned that a
+# TikTok CodeSignal OA had landed — the single most important thing in the inbox that
+# week. The model was fine; it was being handed a to-do list scraped from a daily note.
+TRIAGE_JSON = Path.home() / ".hermes" / "health" / "email_triage.json"
+
+
+def gather_inbox() -> list:
+    """Today's email triage, already classified by the 06:40 job."""
+    try:
+        d = json.loads(TRIAGE_JSON.read_text())
+    except Exception:  # noqa: BLE001
+        return []
+    items = d.get("items") or []
+    out = []
+    for it in items:
+        out.append({k: it.get(k) for k in
+                    ("category", "company", "summary", "action", "urgency",
+                     "status_change", "matched_application") if it.get(k)})
+    return out
+
+
+def gather_board() -> dict:
+    """Live job board — what is open, what is new, what he has ALREADY applied to."""
+    try:
+        sys.path.insert(0, str(Path.home() / ".hermes" / "scripts" / "internship"))
+        from board_facts import board_facts
+        return board_facts()
+    except Exception as e:  # noqa: BLE001 - a brief without a board section is fine
+        _log(f"gather_board failed: {type(e).__name__}: {e}")
+        return {}
+
+
 SYSTEM_PROMPT = (
     "You compose Sparsh's terse morning brief for Telegram (plain markdown: *bold*, "
     "_italic_, bullets render). Sections, SKIPPING any that are empty:\n"
@@ -505,11 +542,23 @@ SYSTEM_PROMPT = (
     "coaching line ONLY if sleep is notably low or a clear trend.\n"
     "3. Today — events from the Schedule (time + short title). Skip if none.\n"
     "4. Due today — today's Tasks. Skip if none.\n"
-    "5. This week — 2-4 most time-sensitive items from Hard Deadlines / the plan, with explicit dates.\n"
-    "6. Closing one-liner: the single highest-leverage focus, or an urgent flag.\n"
+    "5. 📬 Inbox — ONLY if `inbox` is non-empty. Lead with anything urgency=high or a "
+    "status_change (an OA, an interview invite, a rejection). Say what actually happened "
+    "in a sentence and what it means, then the action. This is NEWS, not a checklist — if "
+    "an assessment invite arrived, that leads the whole brief, not a 'review practice' line.\n"
+    "6. 🎯 Apply today — ONLY if `board` is non-empty. Name 2-4 SPECIFIC roles from "
+    "board.top_targets (company + short role + fit). Prefer board.new_last_2_days when it "
+    "has anything — newly-opened roles at good companies are the whole point of applying "
+    "early. 🔴 NEVER suggest a company in board.applied_recent or board.live_pipeline; "
+    "those are already done and suggesting them destroys trust in the brief. If "
+    "board.applied_last_7_days is 0, say so plainly in one line.\n"
+    "7. This week — 2-4 most time-sensitive items from Hard Deadlines / the plan, with explicit dates.\n"
+    "8. Closing one-liner: the single highest-leverage focus, or an urgent flag.\n"
     "STYLE: terse, no padding, bullets not paragraphs, no 'In summary' / 'Hope this helps'. "
     "Scale length to content (quiet day 80-150 words; packed day up to ~400). Use ONLY the facts "
-    "given; never invent events or deadlines."
+    "given; never invent events or deadlines. ⚠️ The Tasks list can be days old and is NOT "
+    "authoritative about the job search — `board` is. If a task says to apply somewhere that "
+    "`board` shows as already applied, DROP it silently and use a real target instead."
 )
 
 

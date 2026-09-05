@@ -462,20 +462,61 @@ def _worklist_backlog() -> tuple[int, str | None]:
     return len(rows), f"{rows[0][0]} — {rows[0][1]}"
 
 
+def _board_targets():
+    """Live board facts, or None. See scripts/internship/board_facts.py."""
+    try:
+        sys.path.insert(0, str(Path.home() / ".hermes" / "scripts" / "internship"))
+        from board_facts import board_facts
+        return board_facts(top_n=5) or None
+    except Exception as e:  # noqa: BLE001
+        print(f"[coach] board_facts unavailable: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+
 def run_internship_check() -> int:
-    """Weekday-evening accountability — fires ONLY if nothing applied today AND a backlog exists."""
+    """Weekday-evening accountability — fires ONLY if nothing applied today AND a backlog exists.
+
+    🔴 READS THE BOARD, NOT THE MARKDOWN WORKLIST (changed 2026-09-04). It used to parse
+    `Apply Now Worklist - *.md`, and on 2026-09-03 that made it recommend *"top of the
+    list: ⭐ Cohere"* — a role applied to on 2026-06-23. The worklist file was last
+    modified Aug 26; the board knew. Suggesting a company he already applied to is the
+    fastest way to make him stop reading the nudge.
+
+    The worklist stays as a fallback only for when the Sheet is unreachable.
+    """
     if E.now().weekday() >= 5:                 # Sat/Sun off
         return _silent()
     if _intern_applied_today():
         return _silent()
-    # Distinguish "no backlog" from "cannot read the file". Collapsing both into
-    # one silent branch is what hid the 2026-06-26 path breakage for six weeks.
+
+    board = _board_targets()
+    if board and board.get("top_targets"):
+        # Prefer something newly opened — applying early is the entire thesis.
+        pool = board.get("new_last_2_days") or board["top_targets"]
+        pick = pool[0]
+        count = board.get("open_roles_total", len(pool))
+        fit = f", fit {pick['fit']}" if pick.get("fit") is not None else ""
+        fresh = " *(opened in the last 2 days)*" if pool is board.get("new_last_2_days") else ""
+        wk = board.get("applied_last_7_days", 0)
+        pace = (f" You're at *{wk} this week*." if wk else
+                " *Nothing applied in the last 7 days.*")
+        ok, _why = E.budget_ok("internship-check")
+        if not ok and not DRY:
+            return _silent()
+        msg = (f"📋 *No application logged today.* {count} open roles on the board.{pace}\n\n"
+               f"Best one to knock out now: *{pick['company']} — {pick['role']}*{fit}{fresh}\n\n"
+               f"Reply 'applied: {pick['company']}' and I'll mark it.")
+        return _emit(msg, "internship-check")
+
+    # ── fallback: the old worklist path, only when the board is unreachable ──
     if not WORKLIST.is_file():
-        print(f"[coach] WARNING: Apply-Now Worklist not found at {WORKLIST} — "
+        print(f"[coach] WARNING: board unreachable AND no worklist at {WORKLIST} — "
               f"internship accountability cannot run.", file=sys.stderr)
         return _silent()
+    print("[coach] WARNING: board unreachable, falling back to the markdown worklist "
+          "(may name already-applied roles)", file=sys.stderr)
     count, top = _worklist_backlog()
-    if not count:                              # genuinely empty backlog → silent
+    if not count:
         return _silent()
     ok, _why = E.budget_ok("internship-check")
     if not ok and not DRY:
