@@ -233,6 +233,14 @@ Return ONLY a JSON object, no prose and no code fence:
    "matched_application": "<the company+role from his tracked list this concerns, or empty>",
    "status_change": "Rejected" | "OA" | "Interview" | "Offer" | "Ghosted" | "",
    "summary": "<one sentence, plain, factual, no hype>",
+   "calendar": {            // OMIT ENTIRELY unless the email fixes a real date/time
+     "title": "<short calendar title>",
+     "start": "<YYYY-MM-DDTHH:MM local, or YYYY-MM-DD for all-day>",
+     "end":   "<same format, or omit for a 1h default>",
+     "location": "<if the email states one>",
+     "certainty": "stated" | "derived",
+     "why": "<the exact phrase in the email that fixes the date>"
+   },
    "action": "<what he should do, or empty if nothing>",
    "urgency": "high" | "normal" | "low"}
 ]}
@@ -255,6 +263,15 @@ RULES
 - Be accurate about rejections. "We've decided not to move forward" is a rejection. A
   confirmation that an application was received is NOT an update — skip it.
 - Never invent a company or an application that is not in the email.
+- 📅 CALENDAR. Add a `calendar` block ONLY when the email pins down a real date or
+  deadline he would want blocked out: an appointment, an interview slot, an assessment
+  expiry, a flight, a hard submission cutoff. Set certainty "stated" when the email
+  gives the date outright ("Wednesday, September 9 at 9:00 a.m."), and "derived" when
+  you had to compute it ("you have 5 days to complete" → count from the email's date,
+  and say so in `why`). ⚠️ NOTHING IS EVER AUTO-ADDED — these are PROPOSALS Sparsh
+  confirms, so a wrong guess costs a question, not a bad calendar entry. Omit the block
+  entirely for marketing "sale ends Sunday", newsletters, or anything without a date
+  that binds HIM.
 - Write like a person, not a press release. No emoji, no exclamation marks.
 - If two emails contradict each other, say so rather than reporting both flatly."""
 
@@ -392,6 +409,11 @@ def render(items: list[dict]) -> str:
             out.append(f"    - ▶️ {it['action'].strip()}")
         if it.get("matched_application"):
             out.append(f"    - board row: {it['matched_application']}")
+        cal = it.get("calendar") or {}
+        if cal.get("title") and cal.get("start"):
+            mark = "" if cal.get("certainty") == "stated" else " *(date derived — check it)*"
+            out.append(f"    - 📅 calendar? **{cal['title']}** — {cal['start']}"
+                       f"{' @ ' + cal['location'] if cal.get('location') else ''}{mark}")
     out.append("")
     return "\n".join(out)
 
