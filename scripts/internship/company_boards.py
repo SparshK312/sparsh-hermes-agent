@@ -45,6 +45,12 @@ BOARDS = [
 
     # ── A tier — fintech unicorns & top startups ───────────────────────────
     {"name": "Stripe", "tier": "A", "ats_type": "greenhouse", "token": "stripe"},
+    # Added 2026-09-05. PayPal had NO board at all (63 configured, PayPal not among
+    # them), which is why the "Sep 5 batch: … PayPal …" line in Action Items pointed at
+    # a company with zero rows in a 353-row queue. Its SWE Intern req appeared in the
+    # SWElist digest of 2026-09-05 and was invisible here. Workday, verified live.
+    {"name": "PayPal", "tier": "B", "ats_type": "workday",
+     "host": "paypal.wd1.myworkdayjobs.com", "site": "jobs"},
     {"name": "Databricks", "tier": "A", "ats_type": "greenhouse", "token": "databricks"},
     {"name": "Scale AI", "tier": "A", "ats_type": "greenhouse", "token": "scaleai"},
     {"name": "Vercel", "tier": "A", "ats_type": "greenhouse", "token": "vercel"},

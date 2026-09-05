@@ -145,6 +145,21 @@ _SWE_KEYWORDS = ("software", "swe", "sde", "sdet", "backend", "back-end",
 _SA_KEYWORDS = ("solutions architect", "solution architect", "cloud architect",
                 "cloud support engineer")
 
+# Titles that ARE engineering but name no technology in the title. Same silent-drop
+# defect as _SA_KEYWORDS: "Technology Co-op" (Susquehanna) and "Quantitative
+# Researcher Intern" (Man Group) reached role_lane() with no SWE/AI-ML/Data/PM token
+# and were rejected, so neither ever appeared on the board. Both companies are tier C,
+# so the tier-S/A fallback in brand_first_source._accept() does not rescue them.
+# Mapped to "Other" (score 40) deliberately: they surface for review but rank below
+# anything in his actual lane.
+_GENERIC_TECH_KEYWORDS = ("technology co-op", "technology intern", "technology analyst",
+                          "quantitative developer", "quantitative research",
+                          "quantitative researcher", "quantitative trader",
+                          # Replit names its flagship early-career programme "Cohort 0".
+                          # Classified here as well as passing _INTERN_RE so it does not
+                          # depend on the tier-S/A fallback to survive.
+                          "cohort")
+
 
 def brand_tier(company: str) -> str:
     """Whole-word / phrase match so 'meta' doesn't fire on 'nox METAls' and
@@ -180,6 +195,19 @@ def brand_score(company: str) -> int:
     return BRAND_SCORE[brand_tier(company)]
 
 
+def is_hard_negative(title: str) -> bool:
+    """True when the title is non-engineering noise (HR/finance/warehouse-ops/etc).
+
+    Exposed so callers that deliberately BYPASS role_lane() -- currently the tier-S/A
+    fallback in brand_first_source._accept() -- can still reject known junk. Without
+    this the fallback surfaced Amazon's ~10 Area Manager and Loss Prevention intern
+    reqs, because those carry no engineering token AND no hard-negative token that
+    role_lane happened to test before returning None.
+    """
+    t = (title or "").lower()
+    return any(neg in t for neg in _HARD_NEGATIVES)
+
+
 def role_lane(title: str) -> str | None:
     """Return display lane ('AI/ML'|'Data'|'SWE'|'PM'|'Other') or None to reject.
 
@@ -202,6 +230,8 @@ def role_lane(title: str) -> str | None:
     if any(k in t for k in _SWE_KEYWORDS):
         return "SWE"
     if any(k in t for k in _SA_KEYWORDS):
+        return "Other"
+    if any(k in t for k in _GENERIC_TECH_KEYWORDS):
         return "Other"
     # no software/ML/PM/Data signal in the title -> not our lane (reject the
     # bank/admin/finance co-op noise that otherwise leaked as "Other")

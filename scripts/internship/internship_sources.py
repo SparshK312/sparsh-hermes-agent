@@ -20,6 +20,24 @@ Coverage notes (verified 2026-05-16):
 """
 
 SOURCES = [
+    # ── MAIN-SEASON lists, added 2026-09-05 ──────────────────────────────────
+    # Both aggregators were wired to their OFF-SEASON readmes only, so the main
+    # Summer-2027 lists were never read and Summer-2027 coverage depended entirely
+    # on the 63 lane-1 brand boards. Verified live 2026-09-05: the SimplifyJobs repo
+    # was renamed Summer2026 -> Summer2027 (the old URL redirects to the same file)
+    # and its main README now carries 1,186 Summer-2027 roles; vanshb03's main README
+    # carries ~267. MAX_AGE_DAYS still caps intake to the last 14 days, so this does
+    # not dump the backlog in one run.
+    {
+        "name": "simplify-main",
+        "url": "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/README.md",
+        "format": "html_table",
+    },
+    {
+        "name": "vansh-main",
+        "url": "https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/dev/README.md",
+        "format": "markdown_table",
+    },
     {
         "name": "simplify-offseason",
         "url": "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README-Off-Season.md",

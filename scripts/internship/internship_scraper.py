@@ -357,7 +357,14 @@ NEGATIVE_ROLE_KEYWORDS = [
     "sales intern", "sales co-op", "business development",
     "finance intern", "finance co-op", "accounting", "audit intern",
     "tax intern", "private placement", "portfolio analyst",
-    "supply chain", "procurement", "operations intern",
+    "supply chain", "procurement",
+    # Warehouse / field-ops intern titles, added 2026-09-05. These carry no
+    # engineering token so role_lane() already returned None for them, but the new
+    # tier-S/A fallback in brand_first_source._accept() would otherwise surface every
+    # one of them. Amazon alone had ~10 live in the 2027 intern set.
+    "area manager", "area maintenance", "loss prevention", "health and safety",
+    "pathways operations", "maintenance manager", "reservoir engineer",
+    "power delivery", "operations intern",
     "consulting intern", "consultant",
     # Design / Product (Sparsh wants engineering not PM/design)
     "design intern", "graphic design", "industrial design",

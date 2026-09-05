@@ -59,7 +59,17 @@ WORKDAY_MAX_PAGES = 5          # per search term (boards sort full-time first; s
 WORKDAY_SEARCH_TERMS = ["intern", "co-op", "university", "student"]
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-JSON_HEADERS = {"Accept": "application/json", "User-Agent": UA}
+# 🔴 Accept-Encoding is pinned to gzip/deflate ON PURPOSE — do not drop `br` back in.
+# httpx advertises brotli automatically whenever brotli/brotlicffi is importable. The
+# VPS venv has brotlicffi; the Mac does not, which is why this failed in production and
+# passed locally for weeks. On LARGE Ashby payloads the brotli streaming decoder dies
+# with "brotli: decoder process called with data when 'can_accept_more_data()' is False".
+# Measured on the VPS 2026-09-05: openai (13.5 MB, 779 jobs) and snowflake (4.9 MB, 376
+# jobs) both FAILED; replit (1.1 MB) and 1password (1.8 MB) passed. With gzip pinned,
+# all four return 200. OpenAI is a tier-S board and had been dark for 21 consecutive
+# hot-watch polls with the error going only to a log nobody reads.
+JSON_HEADERS = {"Accept": "application/json", "User-Agent": UA,
+                "Accept-Encoding": "gzip, deflate"}
 
 _JUNK_RE = re.compile(
     r"(enable javascript|please (enable|turn on) javascript|"
@@ -542,8 +552,15 @@ _BOARD_FETCHERS = {
 
 # ── public API ────────────────────────────────────────────────────────────────
 # word-boundary match so "intern" doesn't fire on "INTERNal"/"INTERNational"
+# "cohort" added 2026-09-05: Replit names its flagship early-career programme
+# "Cohort 0" — no intern/co-op token anywhere in the title, so it failed HERE, one
+# gate earlier than role_lane(), and never reached the board despite Replit being a
+# configured tier-A Ashby board that fetches fine. Anchored with \b and paired with
+# a digit/roman-ish qualifier is unnecessary: _SENIOR_RE still disqualifies senior
+# titles, and "cohort" essentially only appears in early-career programme names.
 _INTERN_RE = re.compile(
-    r"\b(intern(ship)?s?|co-?op|new\s+grad(uate)?|university\s+grad|student)\b", re.I)
+    r"\b(intern(ship)?s?|co-?op|new\s+grad(uate)?|university\s+grad|student|cohort)\b",
+    re.I)
 # seniority/full-time markers that disqualify an "intern"-ish title
 _SENIOR_RE = re.compile(r"\b(senior|sr\.?|staff|principal|director|vp|head\s+of)\b", re.I)
 

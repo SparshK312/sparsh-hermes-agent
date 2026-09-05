@@ -16,12 +16,13 @@ weights company name heavily). Role/location/period gating reused from the scrap
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from pathlib import Path
 
 import ats_router as A
 from brand_first_source import _age_from_date, _cycle_label
-from hotness import brand_tier, role_lane
+from hotness import brand_tier, normalize_company_name, role_lane
 from internship_scraper import (
     SOURCES,
     canonical_id,
@@ -80,12 +81,26 @@ def _gather_postings() -> list:
 
     _TIER_RANK = {"S": 0, "A": 1, "B": 2, "C": 3}
     seen: set[str] = set()
+    # Secondary dedup key, added 2026-09-05. canonical_id is URL-ONLY, so the SAME job
+    # reached through two aggregators mints two ids and lands as two rows: the
+    # SimplifyJobs repo yields the employer's greenhouse/workday URL, while the SWElist
+    # newsletter yields a simplify.jobs/p/<uuid> rewrite of the identical role.
+    # Measured on the 2026-09-05 digest: 12 of 20 sampled companies appear in BOTH.
+    # `github` is iterated before `gmail` on purpose, so the surviving row is the one
+    # carrying a real ATS URL, a location and a posted date.
+    seen_ct: set[tuple[str, str]] = set()
     cand = []
     for p in github + gmail:
         cid = p.canonical_id or canonical_id(p.url)
         if not cid or cid in seen:
             continue
+        ct = (normalize_company_name(p.company or ""),
+              re.sub(r"\s+", " ", (p.title or "").lower()).strip())
+        if all(ct) and ct in seen_ct:
+            continue
         seen.add(cid)
+        if all(ct):
+            seen_ct.add(ct)
         tier = brand_tier(p.company)
         if not KEEP_NONBRAND and tier == "C":             # brand-only mode
             continue

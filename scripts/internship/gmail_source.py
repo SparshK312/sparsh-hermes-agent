@@ -38,6 +38,7 @@ SINCE_DAYS = 12
 SENDERS = {
     "hi@interninsider.me": "interninsider",
     "jobs-noreply@linkedin.com": "linkedin",
+    "noreply@swelist.com": "swelist",
 }
 
 # InternInsider line:  * _[Role](url)_ @ **Company** – Location
@@ -77,13 +78,42 @@ def parse_interninsider(text: str, edt: datetime) -> list:
     ]
 
 
+# SWElist line:  <p class="internship"><strong>Company:</strong> <a href="url">Role</a></p>
+# Sent daily by noreply@swelist.com. Added 2026-09-05 after the 9/5 digest (70 roles)
+# was measured against the live board: 18 of 26 sampled were missing entirely.
+#
+# ⚠️ KNOWN LIMITATION, recorded so nobody "fixes" it by trusting these rows too much:
+# every link is a simplify.jobs/p/<uuid> REWRITE, not the employer's ATS URL. It
+# resolves to a simplify.jobs page, so ats_router cannot JD-enrich it and the row lands
+# with no JD (renders as the board's "👀 click to verify"), no location and no real
+# posted date. SWElist is a rendering of the SimplifyJobs repo, which IS wired directly
+# as the `simplify-main` source with real ATS URLs, locations and dates — so most of
+# this content arrives better via that path. This parser exists to catch the residue
+# (measured 2026-09-05: Man Group, Brave, Garner Health, Fervo Energy were in the
+# digest but not the repo feed). The (company, title) dedup in wide_net_source keeps
+# the overlap from minting duplicate rows.
+RE_SWE = re.compile(
+    r'<p class="internship">\s*<strong>(?P<company>[^<:]+):?\s*</strong>\s*'
+    r'<a href="(?P<url>[^"]+)"[^>]*>(?P<role>[^<]+)</a>',
+    re.IGNORECASE,
+)
+
+
+def parse_swelist(text: str, edt: datetime) -> list:
+    return [
+        _mk_posting(m["role"], m["url"], m["company"], "", "swelist", edt)
+        for m in RE_SWE.finditer(text)
+    ]
+
+
 def parse_linkedin(text: str, edt: datetime) -> list:
     # LinkedIn text/plain alerts are sparse and use redirect URLs; left as a
     # conservative no-op so we never emit junk. InternInsider carries the value.
     return []
 
 
-PARSERS = {"interninsider": parse_interninsider, "linkedin": parse_linkedin}
+PARSERS = {"interninsider": parse_interninsider, "linkedin": parse_linkedin,
+           "swelist": parse_swelist}
 
 
 def _plain_text(msg) -> str:

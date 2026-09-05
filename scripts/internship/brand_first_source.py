@@ -22,7 +22,7 @@ from datetime import date
 
 import ats_router as A
 from company_boards import boards
-from hotness import role_lane
+from hotness import is_hard_negative, role_lane
 from internship_scraper import (
     COUNTRY_NEGATIVE_SUBSTRINGS,
     canonical_id,
@@ -87,12 +87,24 @@ def _cycle_label(title: str, jd: str) -> str:
     return ""
 
 
-def _accept(rec: A.JobRecord) -> bool:
+def _accept(rec: A.JobRecord, tier: str = "C") -> bool:
     # intern / co-op / new-grad only (board pulls return full-time roles too)
     if not A.default_intern_filter(rec.title):
         return False
+    # 🔴 A tier-S/A board is a company he has DELIBERATELY targeted. If an intern req
+    # there carries a title role_lane() cannot classify, dropping it silently is the
+    # wrong default — that is exactly how Replit's "Cohort 0" (their flagship intern
+    # programme, on a configured tier-A Ashby board that fetches fine) stayed invisible,
+    # and how "Solutions Architect Intern" would have. At tier S/A the role surfaces as
+    # lane "Other" for a human to judge; at tier B/C the lane filter still does its real
+    # job of keeping bank/admin/finance co-op noise out of the queue.
     if role_lane(rec.title) is None:
-        return False
+        if (tier or "C").upper() not in ("S", "A"):
+            return False
+        # ...and even at tier S/A, known non-engineering noise stays out. The fallback
+        # bypasses role_lane entirely, so it must re-apply the hard-negative list itself.
+        if is_hard_negative(rec.title):
+            return False
     if classify_location(rec.location)[0] == "reject":
         return False
     # period: title + the JD head (brand boards rarely put the term in the title)
@@ -152,7 +164,7 @@ async def _one_board(client, board: dict) -> list[dict]:
     for r in recs:
         if not r.title or not r.url:
             continue
-        if _accept(r):
+        if _accept(r, board.get("tier", "C")):
             out.append(_to_record(r, board["name"], board.get("tier", "C")))
     return out
 
