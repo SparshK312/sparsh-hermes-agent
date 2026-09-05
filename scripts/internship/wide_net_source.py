@@ -38,6 +38,8 @@ import gmail_source
 # not just recognized brands. Brand still wins ranking via hotness; C-tier is
 # clearly labelled in the Tier column and sinks to the bottom of the queue.
 KEEP_NONBRAND = True
+# See brand_first_source.REJECT_NON_NA_LOCATIONS for the rationale (2026-09-05).
+REJECT_NON_NA_LOCATIONS = False
 JD_TIMEOUT = 12
 MAX_ENRICH = 160                  # cap JD fetches; brand-first so the cap keeps brands
 
@@ -117,7 +119,7 @@ def _gather_postings() -> list:
             continue
         if role_lane(p.title) is None:
             continue
-        if classify_location(p.location)[0] == "reject":
+        if REJECT_NON_NA_LOCATIONS and classify_location(p.location)[0] == "reject":
             continue
         if classify_period(p.title, p.terms, p.source)[0] == "reject":
             continue

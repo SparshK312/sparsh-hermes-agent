@@ -87,6 +87,18 @@ def _cycle_label(title: str, jd: str) -> str:
     return ""
 
 
+# ── Location policy ──────────────────────────────────────────────────────────
+# Sparsh, 2026-09-05: "dont reject based on location, its ok to keep applying."
+# The US and Canada remain the primary market, but a role outside them is no longer
+# DROPPED — it is kept, ranked, and shown with its real location so he can judge the
+# work-authorization question himself. fit_rubric.md was changed in the same pass so a
+# non-US/CA location lowers the fit score instead of producing a disqualifier.
+# Measured on the VPS before shipping: this takes lane-1 from 135 to 183 accepted rows
+# (+36%), mostly London/Dublin/Berlin/Beijing/Seoul — a manageable widening, not a flood.
+# Flip back to True to restore the old behaviour.
+REJECT_NON_NA_LOCATIONS = False
+
+
 def _accept(rec: A.JobRecord, tier: str = "C") -> bool:
     # intern / co-op / new-grad only (board pulls return full-time roles too)
     if not A.default_intern_filter(rec.title):
@@ -106,7 +118,7 @@ def _accept(rec: A.JobRecord, tier: str = "C") -> bool:
     # not to push them onto the board.
     if role_lane(rec.title) is None:
         return False
-    if classify_location(rec.location)[0] == "reject":
+    if REJECT_NON_NA_LOCATIONS and classify_location(rec.location)[0] == "reject":
         return False
     # period: title + the JD head (brand boards rarely put the term in the title)
     bag_terms = _cycle_label(rec.title, rec.full_jd)
