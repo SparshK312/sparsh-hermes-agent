@@ -133,6 +133,18 @@ _SWE_KEYWORDS = ("software", "swe", "sde", "sdet", "backend", "back-end",
                  "distributed systems", "web developer", "mobile developer", "ios ",
                  "android", "api ", "sdk")
 
+# AWS/cloud field-technical roles. Not SWE, and deliberately NOT scored as such.
+# They exist here for one reason: role_lane() returned None for every "Solutions
+# Architect Intern" variant, so brand_first_source.py:94 dropped them before they
+# reached the board OR hot_watch — such a req could open and ping nothing, and the
+# silence would read as "nothing opened yet", which is the worst kind of failure
+# for a watcher whose entire job is to break silence.
+# Mapped to the existing "Other" lane on purpose: adding a new lane value would
+# change the Sheet's Lane dropdown vocabulary, and an out-of-vocabulary value
+# renders as broken.
+_SA_KEYWORDS = ("solutions architect", "solution architect", "cloud architect",
+                "cloud support engineer")
+
 
 def brand_tier(company: str) -> str:
     """Whole-word / phrase match so 'meta' doesn't fire on 'nox METAls' and
@@ -189,6 +201,8 @@ def role_lane(title: str) -> str | None:
         return "Data"
     if any(k in t for k in _SWE_KEYWORDS):
         return "SWE"
+    if any(k in t for k in _SA_KEYWORDS):
+        return "Other"
     # no software/ML/PM/Data signal in the title -> not our lane (reject the
     # bank/admin/finance co-op noise that otherwise leaked as "Other")
     return None
