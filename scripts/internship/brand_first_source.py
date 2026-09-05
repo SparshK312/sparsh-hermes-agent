@@ -22,7 +22,7 @@ from datetime import date
 
 import ats_router as A
 from company_boards import boards
-from hotness import is_hard_negative, role_lane
+from hotness import role_lane
 from internship_scraper import (
     COUNTRY_NEGATIVE_SUBSTRINGS,
     canonical_id,
@@ -91,20 +91,21 @@ def _accept(rec: A.JobRecord, tier: str = "C") -> bool:
     # intern / co-op / new-grad only (board pulls return full-time roles too)
     if not A.default_intern_filter(rec.title):
         return False
-    # 🔴 A tier-S/A board is a company he has DELIBERATELY targeted. If an intern req
-    # there carries a title role_lane() cannot classify, dropping it silently is the
-    # wrong default — that is exactly how Replit's "Cohort 0" (their flagship intern
-    # programme, on a configured tier-A Ashby board that fetches fine) stayed invisible,
-    # and how "Solutions Architect Intern" would have. At tier S/A the role surfaces as
-    # lane "Other" for a human to judge; at tier B/C the lane filter still does its real
-    # job of keeping bank/admin/finance co-op noise out of the queue.
+    # ⛔ REMOVED 2026-09-05, same day it was added — a tier-S/A "surface anything
+    # role_lane() cannot classify" fallback. The intent was that a novel title at a
+    # deliberately-targeted company should never vanish silently (that is how Replit's
+    # "Cohort 0" stayed invisible). MEASURED on the VPS with hot_watch --dry-run before
+    # any cron fired: it took the alert from 0 to 47 new roles, almost all of them
+    # NVIDIA silicon pools and SpaceX "New Graduate Engineer" reqs. Adding hardware
+    # hard-negatives cut it to 38 and the tail kept going (asic engineer, GNC,
+    # civil/structural...). It was endless whack-a-mole against a list that is supposed
+    # to be an ALLOW-list. Its one unique win, "Cohort 0", is now covered explicitly by
+    # "cohort" in _INTERN_RE + _GENERIC_TECH_KEYWORDS, so the fallback bought nothing.
+    # 📌 The underlying concern is real and still open: an unclassifiable title at a
+    # tier-S/A company is dropped with no trace. The fix is to LOG those for review,
+    # not to push them onto the board.
     if role_lane(rec.title) is None:
-        if (tier or "C").upper() not in ("S", "A"):
-            return False
-        # ...and even at tier S/A, known non-engineering noise stays out. The fallback
-        # bypasses role_lane entirely, so it must re-apply the hard-negative list itself.
-        if is_hard_negative(rec.title):
-            return False
+        return False
     if classify_location(rec.location)[0] == "reject":
         return False
     # period: title + the JD head (brand boards rarely put the term in the title)
