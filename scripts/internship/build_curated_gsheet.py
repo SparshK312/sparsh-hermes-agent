@@ -96,6 +96,55 @@ def _composio_bin() -> str:
         "Install: curl -fsSL https://composio.dev/install | bash")
 
 
+# ── native Google transport (the VPS) ────────────────────────────────────────
+# The board moved to the VPS on 2026-09-04, and composio is a Mac-only install. The VPS
+# does not need it: its `google_token.json` already carries the `spreadsheets` scope and
+# the Sheets API is enabled, so it can talk to the API directly. Using the native path
+# there also keeps the Gmail-capable Composio key OFF the always-on box.
+#
+#   VPS  -> google-api-python-client with the existing token
+#   Mac  -> composio proxy (no Google credentials locally)
+_GOOGLE_API_DIR = Path.home() / ".hermes/skills/productivity/google-workspace/scripts"
+
+
+def _native_creds():
+    """Credentials if this machine has them (the VPS), else None (the Mac)."""
+    if not (Path.home() / ".hermes" / "google_token.json").is_file():
+        return None
+    try:
+        import sys as _sys
+        if str(_GOOGLE_API_DIR) not in _sys.path:
+            _sys.path.insert(0, str(_GOOGLE_API_DIR))
+        import google_api as _g
+        return _g.get_credentials()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _sheets_native(method: str, url: str, body: dict | None, timeout: int) -> dict:
+    """Same contract as _sheets(): parsed JSON, or raise SheetsError."""
+    import google.auth.transport.requests as _gart
+    creds = _native_creds()
+    if creds is None:
+        raise SheetsError("no native Google credentials")
+    session = _gart.AuthorizedSession(creds)
+    r = session.request(method.upper(), url, json=body, timeout=timeout)
+    try:
+        data = r.json()
+    except Exception:  # noqa: BLE001
+        raise SheetsError(f"{method} {url[-60:]} -> non-JSON (HTTP {r.status_code}): "
+                          f"{r.text[:200]}") from None
+    if isinstance(data, dict) and "error" in data:
+        err = data["error"]
+        if isinstance(err, dict):
+            raise SheetsError(f"{method} -> Sheets API {err.get('code')} "
+                              f"{err.get('status','')}: {err.get('message','')}".strip())
+        raise SheetsError(f"{method} -> {err}")
+    if r.status_code >= 400:
+        raise SheetsError(f"{method} -> HTTP {r.status_code}: {r.text[:200]}")
+    return data
+
+
 def _sheets(method: str, path: str, body: dict | None = None, *,
             sheet_id: str, timeout: int = 120) -> dict:
     """Every Sheets HTTP call goes through here. Returns the parsed JSON body.
@@ -109,6 +158,9 @@ def _sheets(method: str, path: str, body: dict | None = None, *,
     healthy when its probe dies. We therefore inspect the BODY, always.
     """
     url = f"{_API}/{sheet_id}{path}"
+    # Native first where credentials exist (the VPS); composio elsewhere (the Mac).
+    if _native_creds() is not None:
+        return _sheets_native(method, url, body, timeout)
     cmd = [_composio_bin(), "proxy", url, "--toolkit", "googlesheets"]
     if method.upper() != "GET":
         cmd += ["-X", method.upper()]
