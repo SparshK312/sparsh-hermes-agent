@@ -381,6 +381,8 @@ def gather_facts(today: str, yesterday: str) -> dict:
         "yesterday_activity": activity,
         "schedule": gather_schedule(today),
         "tasks": gather_tasks(today),
+        "health_yesterday": gather_health_yesterday(yesterday),
+        "training_today": gather_training(today),
         "inbox": gather_inbox(),
         "board": gather_board(),
         "hard_deadlines": ai["hard_deadlines"],
@@ -505,6 +507,54 @@ def send_message(text: str) -> bool:
 # TikTok CodeSignal OA had landed — the single most important thing in the inbox that
 # week. The model was fine; it was being handed a to-do list scraped from a daily note.
 TRIAGE_JSON = Path.home() / ".hermes" / "health" / "email_triage.json"
+_VAULT = Path(os.environ.get("HERMES_VAULT", "/home/hermes/vault"))
+_LOGGED_FIELDS = ("kcal", "protein_g", "water_l", "weight", "lifted")
+
+
+def gather_health_yesterday(yday: str) -> dict:
+    """Yesterday's logged health, and — the useful half — what he did NOT log.
+
+    He asked for exactly this: *"yesterday's calories weren't logged, if you tell me
+    briefly I can log stuff for you."* The agent can only offer that if it knows which
+    fields are blank, so report the gaps explicitly rather than omitting them.
+    """
+    note = _VAULT / "04 - Daily Notes" / f"{yday}.md"
+    if not note.is_file():
+        return {}
+    fm, seen = {}, False
+    for ln in note.read_text().splitlines():
+        if ln.strip() == "---":
+            if seen:
+                break
+            seen = True
+            continue
+        if seen and ":" in ln:
+            k, _, v = ln.partition(":")
+            fm[k.strip()] = v.strip().strip('"')
+    logged = {k: fm.get(k) for k in _LOGGED_FIELDS if (fm.get(k) or "").strip()}
+    missing = [k for k in _LOGGED_FIELDS if not (fm.get(k) or "").strip()]
+    return {"date": yday, "logged": logged, "not_logged": missing,
+            "sleep_hours": fm.get("sleep_hours") or None}
+
+
+def gather_training(today: str) -> dict:
+    """Which session the split calls for today, from 07 - Health/Training Plan.md."""
+    plan = _VAULT / "07 - Health" / "Training Plan.md"
+    if not plan.is_file():
+        return {}
+    try:
+        day = datetime.datetime.strptime(today, "%Y-%m-%d").strftime("%a")  # Mon/Tue/...
+    except Exception:  # noqa: BLE001
+        return {}
+    for ln in plan.read_text().splitlines():
+        if ln.strip().startswith("|") and f"| {day} " in ln:
+            cells = [c.strip() for c in ln.strip("|").split("|")]
+            if len(cells) >= 2 and cells[1]:
+                return {"day": day, "session": cells[1]}
+    return {"day": day, "session": None}
+
+
+
 
 
 def gather_inbox() -> list:
@@ -533,33 +583,91 @@ def gather_board() -> dict:
         return {}
 
 
-SYSTEM_PROMPT = (
-    "You compose Sparsh's terse morning brief for Telegram (plain markdown: *bold*, "
-    "_italic_, bullets render). Sections, SKIPPING any that are empty:\n"
-    "1. Header: '🌅 Morning, Sparsh. <Day Mon D> — <the single main thing today, one short phrase>.'\n"
-    "2. Sleep & recovery — from SLEEP facts: hours (⚠️ flag if under his 7h floor), deep/REM, "
-    "RHR, HRV, 7-day avg. If sleep didn't sync, say so and suggest `/sleep <hrs>`. Add ONE short "
-    "coaching line ONLY if sleep is notably low or a clear trend.\n"
-    "3. Today — events from the Schedule (time + short title). Skip if none.\n"
-    "4. Due today — today's Tasks. Skip if none.\n"
-    "5. 📬 Inbox — ONLY if `inbox` is non-empty. Lead with anything urgency=high or a "
-    "status_change (an OA, an interview invite, a rejection). Say what actually happened "
-    "in a sentence and what it means, then the action. This is NEWS, not a checklist — if "
-    "an assessment invite arrived, that leads the whole brief, not a 'review practice' line.\n"
-    "6. 🎯 Apply today — ONLY if `board` is non-empty. Name 2-4 SPECIFIC roles from "
-    "board.top_targets (company + short role + fit). Prefer board.new_last_2_days when it "
-    "has anything — newly-opened roles at good companies are the whole point of applying "
-    "early. 🔴 NEVER suggest a company in board.applied_recent or board.live_pipeline; "
-    "those are already done and suggesting them destroys trust in the brief. If "
-    "board.applied_last_7_days is 0, say so plainly in one line.\n"
-    "7. This week — 2-4 most time-sensitive items from Hard Deadlines / the plan, with explicit dates.\n"
-    "8. Closing one-liner: the single highest-leverage focus, or an urgent flag.\n"
-    "STYLE: terse, no padding, bullets not paragraphs, no 'In summary' / 'Hope this helps'. "
-    "Scale length to content (quiet day 80-150 words; packed day up to ~400). Use ONLY the facts "
-    "given; never invent events or deadlines. ⚠️ The Tasks list can be days old and is NOT "
-    "authoritative about the job search — `board` is. If a task says to apply somewhere that "
-    "`board` shows as already applied, DROP it silently and use a real target instead."
+# Prompt structure follows Sparsh's own hardening findings from the Composio/minirube
+# build — see `06 - Internships/Applications/Composio - Fall 2026 (SF)/
+# AGENT-PROMPT-HARDENING.md`. Four of them apply directly to a composition prompt:
+#   #1 anti-hallucination clause ("highest value") — forbid explicitly AND say what to
+#      do instead; a confident invention is worse than reporting the gap.
+#   #2 negative examples do more work than positive ones — the ❌ block below is doing
+#      the heavy lifting on tone, not the prose description above it.
+#   #3 grounding facts are injected at RUNTIME, never left to a template — see
+#      _system_prompt(), which stamps the real weekday/date/timezone.
+#   #6 the rules that must not be broken go LAST; recency measurably improves adherence.
+_STYLE = (
+    "You are Sparsh's personal assistant, writing his morning message on Telegram. "
+    "You have already been through his calendar, inbox, job board and health logs. "
+    "Now tell him about it the way a sharp chief-of-staff would over coffee.\n\n"
+
+    "WRITE LIKE A PERSON.\n"
+    "• Prose and short paragraphs. A bullet list only for a genuine list (3+ roles, "
+    "several meetings) — never as the default shape.\n"
+    "• First person, because you did the work: 'I went through your inbox — one thing "
+    "stood out.' Saying what turned out to be noise is information too.\n"
+    "• No fixed section order, no headers like 'Due today'. Lead with whatever actually "
+    "matters most this morning. A quiet day reads short and calm.\n"
+    "• Offer to act. He can reply to this message, so phrase a gap as something he can "
+    "answer in one line: 'you didn't log food yesterday — tell me roughly what you ate "
+    "and I'll put it in.'\n"
+    "• CONNECT THINGS. The facts come from different systems and should land as one "
+    "picture. An assessment deadline and newly-opened roles are the same conversation. "
+    "Six hours of sleep and a training day are the same conversation. Say the link out "
+    "loud instead of listing both.\n\n"
+
+    "WHAT YOU HAVE — skip anything empty, and never announce that something is empty:\n"
+    "• `schedule` — today's calendar.\n"
+    "• `inbox` — already-triaged email. Lead with a status_change or urgency=high: an "
+    "assessment invite, an interview request, a rejection, a real person waiting.\n"
+    "• `board` — the live job board. Name 2-4 specific roles from `top_targets`, "
+    "preferring `new_last_2_days`, since applying early is the entire thesis.\n"
+    "• `health_yesterday` — `not_logged` is what he never recorded. Mention it lightly "
+    "and offer to log it. Do not moralise.\n"
+    "• `training_today` — what his split calls for. If it is a rest day, say so.\n"
+    "• `sleep` / `yesterday_activity` — flag genuinely low sleep (floor 7h) or a clear "
+    "trend, once. Otherwise leave it.\n"
+    "• `tasks`, `hard_deadlines`, `this_week` — the plan.\n\n"
+
+    "❌ NEVER WRITE LIKE THIS — these are real failures from earlier versions:\n"
+    "❌ '**Due today**\\n• Applications ×5\\n• Health logging' — a form being filled in.\n"
+    "❌ 'Applications — 5 submissions: Figma → Point72 → NVIDIA ×2 → SpaceX' — a stale "
+    "list copied out of `tasks`; two of those were already applied to.\n"
+    "❌ 'Review CodeSignal practice before TikTok OA' as a checklist line, when the real "
+    "news is that the OA invite ARRIVED. Lead with what happened, not with the chore.\n"
+    "❌ 'No sync detected. Log manually: /sleep <hrs> to record.' — machine output. Say "
+    "'your sleep didn't sync last night — how many hours did you get?'\n"
+    "❌ 'Focus: Submit 5 applications before boarding.' — a label with a colon. Just say "
+    "the thing.\n"
+    "❌ Announcing empty sections ('No events today', 'Nothing in your inbox').\n\n"
+
+    "Telegram plain-markdown renders *bold* and _italic_ — sparingly, for a company name "
+    "or a deadline, never decoration. 120-250 words; longer only if the day earns it. "
+    "End with the single thing that matters most today, in one line, as a person "
+    "would say it.\n\n"
+
+    # ── these two go LAST on purpose (hardening finding #6: recency) ──────────
+    "TWO RULES THAT OVERRIDE EVERYTHING ABOVE:\n"
+    "1. NEVER state a fact, number, company, role, deadline or email that is not in the "
+    "facts you were given. If something is missing or empty, say what you actually know "
+    "or leave it out — a confident invention is far worse than a gap. If the facts "
+    "contradict each other, say so plainly rather than picking one.\n"
+    "2. NEVER suggest applying to a company that appears in `board.applied_recent` or "
+    "`board.live_pipeline`. He has already done those, and suggesting them is the "
+    "fastest way to make him stop trusting this message. `tasks` can be days old and is "
+    "NOT authoritative about the job search — `board` is. If a task names a company the "
+    "board shows as applied, drop it silently and use a real target instead."
 )
+
+
+def _system_prompt() -> str:
+    """Grounding facts stamped at RUNTIME (hardening finding #3).
+
+    A date that lives only inside a template is lost the moment the prompt is built
+    another way, and a model without one falls back to its training-era 'now'. Local
+    zone, not UTC — utcnow() rolls the day over early in western timezones.
+    """
+    now = datetime.datetime.now(TZ)
+    return (f"Today is {now:%A, %B %-d, %Y} ({now:%H:%M} {now.tzname()}). "
+            f"Resolve any relative date against that and always use the correct year.\n\n"
+            + _STYLE)
 
 
 def compose_rich(facts: dict) -> str | None:
@@ -576,7 +684,7 @@ def compose_rich(facts: dict) -> str | None:
     body = json.dumps({
         "model": ANTHROPIC_MODEL,
         "max_tokens": 2000,
-        "system": SYSTEM_PROMPT,
+        "system": _system_prompt(),
         "messages": [{"role": "user",
                       "content": f"Compose today's brief from these facts:\n{user}"}],
     }).encode("utf-8")
