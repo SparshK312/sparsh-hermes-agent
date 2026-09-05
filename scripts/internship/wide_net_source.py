@@ -104,6 +104,17 @@ def _gather_postings() -> list:
         tier = brand_tier(p.company)
         if not KEEP_NONBRAND and tier == "C":             # brand-only mode
             continue
+        # 🔴 SWElist rows are STRICTLY WORSE DATA than the same role from a GitHub
+        # source: the newsletter carries no location at all and its links are
+        # simplify.jobs/p/<uuid> rewrites that ats_router cannot JD-enrich. Empty
+        # location classifies as "unclear", which is KEPT, so nothing downstream
+        # filters them. Measured on the VPS 2026-09-05 (SINCE_DAYS=12): 1,114 raw ->
+        # 948 unique -> 524 surviving, 442 of them tier C. That would have taken the
+        # queue from 353 to ~880 rows, almost all with no location, no JD and no fit
+        # score. Restricted to recognized brands, where thin data is still worth
+        # having; the (company, title) dedup above already removes the repo overlap.
+        if p.source == "swelist" and tier == "C":
+            continue
         if role_lane(p.title) is None:
             continue
         if classify_location(p.location)[0] == "reject":
