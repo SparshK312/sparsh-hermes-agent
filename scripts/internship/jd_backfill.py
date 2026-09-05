@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sys
 from collections import Counter
@@ -31,7 +32,33 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ats_router as A  # noqa: E402
 
-STORE = Path("/Users/sparshk/Documents/School Vault - UofT/06 - Internships/Job Search/curated_postings.json")
+def _store_path() -> Path:
+    """Resolve the live store the same way curate.py does.
+
+    The board moved to the VPS 2026-09-04 and the store went with it, to
+    ~/.hermes/internship/ (outside the vault, because .json does not sync).
+    A hardcoded Mac path here silently pointed at a historical copy.
+    Order: $CURATED_STORE -> the VPS store -> the Mac vault copy.
+    """
+    env = os.environ.get("CURATED_STORE")
+    if env:
+        return Path(env)
+    vps = Path.home() / ".hermes" / "internship" / "curated_postings.json"
+    if vps.is_file():
+        return vps
+    mac = Path.home() / "Documents" / "School Vault - UofT" / \
+        "06 - Internships" / "Job Search" / "curated_postings.json"
+    # 🔴 On the Mac this file is a HISTORICAL COPY since 2026-09-04 — the live store
+    # is on the VPS. Writing here changes nothing the board will ever read.
+    print("⚠️  WARNING: the live store is on the VPS "
+          "(~/.hermes/internship/curated_postings.json).\n"
+          "    This Mac copy is historical and the refresh no longer reads it.\n"
+          "    Run this on the VPS instead, or set CURATED_STORE explicitly.",
+          file=sys.stderr)
+    return mac
+
+
+STORE = _store_path()
 CONCURRENCY = 6
 MIN_USABLE = 500          # below this it is nav chrome, not a job description
 
