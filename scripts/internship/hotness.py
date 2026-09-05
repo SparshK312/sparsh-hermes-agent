@@ -32,7 +32,12 @@ FRESH_HOT_DAYS = 3               # 🔥
 FRESH_NEW_DAYS = 7               # 🆕
 
 BRAND_SCORE = {"S": 100, "A": 80, "B": 55, "C": 30}
-ROLE_SCORE = {"AI/ML": 100, "Data": 100, "SWE": 85, "PM": 60, "Other": 40}
+# PM raised 60 -> 85 on 2026-09-05 at Sparsh's direction: product management is now a
+# first-class target alongside SWE, not a fallback. He founded and sold a voice-AI
+# company and owned that roadmap himself, so his strongest differentiator is worth far
+# more in a PM screen than in a LeetCode screen. Left below AI/ML (100) because the
+# AI-agent lane is still where his built evidence is deepest.
+ROLE_SCORE = {"AI/ML": 100, "Data": 100, "SWE": 85, "PM": 85, "Other": 40}
 
 # ── brand tiers (single source of truth; normalized names) ────────────────────
 TIER_S = {
@@ -117,7 +122,9 @@ _HARD_NEGATIVES = [k for k in NEGATIVE_ROLE_KEYWORDS if k not in _PM_NEGATIVES]
 
 _PM_KEYWORDS = ("product manager", "product management", "associate product",
                 "apm ", " apm", "product management intern", "program manager",
-                "technical program manager", "tpm ", " tpm", "product intern")
+                "technical program manager", "tpm ", " tpm", "product intern",
+                # added 2026-09-05 — "Product Owner Intern" classified as None before
+                "product owner")
 _DATA_KEYWORDS = ("data engineer", "data scientist", "data science", "data analyst",
                   "analytics engineer", "data developer", "data engineering")
 _AIML_KEYWORDS = ("machine learning", "ml engineer", "ml intern", "ml/ai", "ai/ml",
