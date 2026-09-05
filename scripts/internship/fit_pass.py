@@ -56,7 +56,15 @@ JD_HEAD = 2200
 JD_TAIL = 1300
 CHUNK_SIZE = 5                      # postings per LLM call (smaller = steadier recall, no dropped items)
 MAX_LLM_PER_RUN = 120              # hard cost guard (first run is ~94)
-PROMPT_VERSION = "fit-v3.4"        # bump to force re-score on prompt changes (part of cache key)
+PROMPT_VERSION = "fit-v3.5"        # bump to force re-score on prompt changes (part of cache key)
+#                                    v3.5 (2026-09-05): PRODUCT MANAGEMENT is a first-class
+#                                          target role (was absent from the 85-100 band, so
+#                                          on-target PM reqs scored ~62); a non-US/CA location
+#                                          is no longer a DISQUALIFIER, only a score penalty;
+#                                          FALL 2026 is now wrong-cycle (Shopify runs to
+#                                          Dec 18 2026). Bumped because rubric edits are inert
+#                                          for already-cached postings without it -- ~1,470
+#                                          rows were still carrying fit-v3.4 verdicts.
 #                                    v3.1: head+tail JD truncation so deadlines (end of JD) are seen
 #                                    v3.2: target cycles (Fall26/Win27/Spr27/Sum27) never wrong-cycle;
 #                                          7-8mo Sep-Apr co-ops are long-placement (not wrong-cycle)

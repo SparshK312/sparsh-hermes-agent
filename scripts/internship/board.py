@@ -52,7 +52,26 @@ TABS = (G.TAB_QUEUE, G.TAB_APPS, G.TAB_REVIEWED)
 
 
 def _find(needle: str):
-    """-> (tab, row_number, headers, row). Refuses an ambiguous match."""
+    """-> (tab, row_number, headers, row). Refuses an ambiguous match.
+
+    Prefix `id:` forces an EXACT match on the hidden _id column instead of the
+    substring-anywhere search. Added 2026-09-05 because substring matching cannot
+    address a row whose _id is a PREFIX of another row's: one Amazon Robotics req
+    (10529525) occupies five rows sourced from five places, and
+    "www.amazon.jobs/jobs/10529525" is a substring of ".../10529525/apply", so every
+    fragment was refused as ambiguous and the row could not be marked at all.
+    Usage:  board.py status "id:www.amazon.jobs/jobs/10529525" "On Hold" --notes "..."
+    """
+    if needle.startswith("id:"):
+        want = needle[3:].strip().lower()
+        for tab in TABS:
+            h = G._HEADERS[tab]
+            rows = G.values_get(G.SHEET_ID_DEFAULT,
+                                f"{G._q(tab)}!A1:{G._col_letter(len(h))}500")
+            for i, r in enumerate(rows[1:], start=2):
+                if r and str(r[0]).strip().lower() == want:
+                    return (tab, i, h, r)
+        sys.exit(f"no row has _id exactly {want!r}. Try: board.py show <fragment>")
     n = needle.lower()
     hits = []
     for tab in TABS:
