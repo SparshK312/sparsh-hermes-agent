@@ -37,6 +37,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from build_curated_xlsx import (  # single source of truth for routing + ranking
@@ -302,10 +303,17 @@ def read_back_human(sheet_id: str = SHEET_ID_DEFAULT) -> dict[str, dict]:
             human = out.setdefault(cid, {})
             for hname, field in _HUMAN_BY_HEADER.items():
                 ci = col_of.get(hname)
-                if ci is not None and ci < len(row):
-                    val = str(row[ci]).strip()
-                    if val:
-                        human[field] = val
+                if ci is None:
+                    continue        # this tab has no such column: leave the field alone
+                # 🔴 A column that EXISTS on this tab is authoritative, BLANK INCLUDED
+                # (2026-09-05). The old `if val:` skipped empty cells, so a value he had
+                # cleared on his phone — or via `board.py priority <m> clear` — came
+                # straight back from the store on the next render and could never be
+                # removed. Sheets trims trailing empty cells from each row, so an index
+                # past the row's end is an EMPTY cell of an existing column, not a missing
+                # column. Fields whose column is absent from this tab (Applied on Apply
+                # Now, Priority on My Applications) are untouched.
+                human[field] = str(row[ci]).strip() if ci < len(row) else ""
     return out
 
 
@@ -539,6 +547,17 @@ def write_board(store: dict, sheet_id: str = SHEET_ID_DEFAULT,
         h = dict(entry.get("human", {}) or {})
         h.update(human.get(cid, {}))
         merged[cid] = {"machine": entry.get("machine", {}) or {}, "human": h}
+
+    # Loud, not silent: a suppressed row is invisible by construction, so if these
+    # ever appear the count is the only way anyone finds out.
+    ghosts = sum(1 for e in merged.values()
+                 if not str((e.get("machine") or {}).get("company") or "").strip()
+                 and not str((e.get("machine") or {}).get("role") or "").strip())
+    if ghosts:
+        print(f"[gsheet] ⚠️  {ghosts} entries have no company AND no role — kept in the "
+              f"store, NOT rendered (they would be blank rows). This means a refresh "
+              f"adopted orphans from a mismatched store; see curate.py _merge_readback.",
+              file=sys.stderr)
 
     buckets = _route(merged)
     _ensure_tabs(sheet_id, {t: len(buckets[t]) for t in TABS})

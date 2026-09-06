@@ -14,13 +14,12 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-VAULT = Path(os.environ.get("HERMES_VAULT")
-             or ("/home/hermes/vault" if Path("/home/hermes/vault").exists()
-                 else str(Path.home() / "Documents" / "School Vault - UofT")))
+import store_paths  # noqa: E402
+VAULT = store_paths.vault_root()
 sys.path.insert(0, str(VAULT / "Scripts"))
 
 from openpyxl import load_workbook
-from build_curated_xlsx import check_lock, read_back_human, write_board, ID_HEADER
+from build_curated_xlsx import check_lock, classify_row, read_back_human, write_board, ID_HEADER
 from curated_store import CuratedStore
 
 # 2026-08-18: was ".../Internship Pipeline/curated_postings.json" — the pre-reorg
@@ -28,7 +27,8 @@ from curated_store import CuratedStore
 # fit_pass.py were updated, this file was not), so the suite loaded an EMPTY store
 # and asserted out at "need >=3 queue rows" before running a single check. The
 # round-trip-preserve guarantee has therefore been untested for ~8 weeks.
-STORE_PATH = VAULT / "06 - Internships" / "Job Search" / "curated_postings.json"
+# 2026-09-05: and again — the store left the vault on 2026-09-04. Resolver, not a path.
+STORE_PATH = store_paths.store_path()
 
 PASS = 0
 FAIL = 0
@@ -84,9 +84,13 @@ def main():
     gen = "2026-06-20 12:00"
 
     store = CuratedStore(STORE_PATH).load()
+    # 2026-09-05: select by the SAME routing the board uses. Since ❌-disqualified rows
+    # route to Reviewed (which has no Priority column), a live "To Apply" row picked by
+    # status alone could sit there, and the P0 edit below landed nowhere — three false
+    # failures that looked like a broken round-trip.
     queue_cids = [cid for cid, e in store.items()
-                  if (e.get("human", {}).get("status") or "") in ("", "To Apply")
-                  and not e.get("machine", {}).get("dead")]
+                  if classify_row({"_cid": cid, "machine": e.get("machine") or {},
+                                   "human": e.get("human") or {}}) == "queue"]
     app_cids = [cid for cid, e in store.items()
                 if (e.get("human", {}).get("status") or "") not in ("", "To Apply")]
     assert len(queue_cids) >= 3, "need >=3 queue rows to test"

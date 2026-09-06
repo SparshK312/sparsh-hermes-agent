@@ -106,6 +106,13 @@ def _find(needle: str):
 
 def _set(tab: str, row: int, headers: list, field: str, value: str) -> None:
     if field not in headers:
+        # 🔴 Say it. This used to return silently, which is how "Applied" dates
+        # vanished: the Apply Now tab has no "Applied" column, so the write was
+        # dropped and the command still printed ✅. A write that reports success and
+        # does nothing is the worst failure mode in this whole system.
+        # (curate.py step 1c backfills the date on the next refresh.)
+        print(f"   ⚠️  '{field}' is not a column on {tab} — value not written here "
+              f"({field}={value!r}).", file=sys.stderr)
         return
     col = G._col_letter(headers.index(field) + 1)
     G.values_update(G.SHEET_ID_DEFAULT, f"{G._q(tab)}!{col}{row}", [[value]])
@@ -160,6 +167,15 @@ def main() -> int:
         if val not in VALID:
             sys.exit(f"{val!r} is not a valid Status.\nValid: {' · '.join(VALID)}")
         _set(tab, row, headers, "Status", val)
+        # 🔴 An application with no date is a silent data loss (added 2026-09-05).
+        # `board.py applied` stamps today's date; `board.py status <m> "Applied"` did
+        # not — and "Applied" is in the status vocabulary, so it is the natural thing
+        # to type. Result: 15 real applications (9 Tesla, 6 Microsoft) sat on the board
+        # undated, which breaks every "when did I apply / how long has it been" answer
+        # and cannot be reconstructed later without digging through Gmail.
+        # Only fills an EMPTY cell, so re-running never rewrites a real date.
+        if val == "Applied" and not (g("Applied") or "").strip():
+            _set(tab, row, headers, "Applied", _arg("--date", date.today().isoformat()))
         if _arg("--notes"):
             _set(tab, row, headers, "Notes", _arg("--notes"))
         print(f"✅ {val} — {g('Company')} — {g('Role')[:54]}")

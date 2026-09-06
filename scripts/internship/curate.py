@@ -139,16 +139,18 @@ def _new_postings_digest(store, new_cids: set) -> str | None:
     lines.append("\nOpen *Curated Board.xlsx* → 🔥 Curated Queue to apply.")
     return "\n".join(lines)
 
-# vault paths (Mac-local; do NOT import the VPS POSTINGS_SEEN_PATH).
-# Override via env for testing (CURATED_XLSX / CURATED_STORE).
+# Paths come from store_paths.py — the ONE resolver, shared by every script here.
+# 🔴 Do NOT reintroduce a local default. This file used to default the store to the
+# vault copy, which on the VPS is a stale historical file; a bare `python curate.py`
+# then loaded it, orphaned ~700 unrecognised Sheet rows into identity-less entries,
+# and rendered them as blank rows. See store_paths.py for the full account.
 import os  # noqa: E402
-VAULT = Path(os.environ.get("HERMES_VAULT")
-             or ("/home/hermes/vault" if Path("/home/hermes/vault").exists()
-                 else str(Path.home() / "Documents" / "School Vault - UofT")))
-STORE_PATH = Path(os.environ.get("CURATED_STORE",
-                  VAULT / "06 - Internships" / "Job Search" / "curated_postings.json"))
-XLSX_PATH = Path(os.environ.get("CURATED_XLSX",
-                 VAULT / "06 - Internships" / "Job Search" / "Curated Board.xlsx"))
+import re  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import store_paths  # noqa: E402
+VAULT = store_paths.vault_root()
+STORE_PATH = store_paths.store_path()
+XLSX_PATH = store_paths.xlsx_path()
 OLD_TRACKER = VAULT / "06 - Internships" / "Job Search" / "Legacy" / "Application Tracker.xlsx"
 
 # Google Sheets mirror — the phone-accessible copy, and during the transition the
@@ -164,7 +166,7 @@ sys.path.insert(0, str(VAULT / "Scripts"))
 import brand_first_source  # noqa: E402
 import wide_net_source  # noqa: E402
 from company_boards import boards as _boards  # noqa: E402
-from build_curated_xlsx import is_locked, read_back_human, write_board  # noqa: E402
+from build_curated_xlsx import classify_row, is_locked, write_board  # noqa: E402
 try:
     import build_curated_gsheet as gsheet  # noqa: E402
 except Exception as _e:                    # noqa: BLE001 - never fail the refresh on import
@@ -270,6 +272,137 @@ def import_old_tracker_history(store) -> int:
     return seeded
 
 
+# 🔴 An `_id` on the board that the store does not know is a PATHOLOGICAL signal, not a
+# routine one. The board is rendered FROM the store, and nothing ever deletes a posting
+# (entries are flagged `dead`, never removed), so in healthy operation every id read back
+# is already present. A handful can appear legitimately — a row hand-typed onto the
+# Sheet, or an entry lost to a truncated save — and those are adopted as orphans.
+#
+# HUNDREDS means the WRONG STORE IS LOADED, and adopting them is precisely how a stale
+# store destroys a healthy board. read_back_human returns ONLY human fields (status,
+# applied_date, notes, priority_override), so an adopted row carries a status and NO
+# company, role or URL. It renders as a BLANK ROW, and it is saved back into the store,
+# so it returns on every later run.
+#
+# That is exactly what happened on 2026-09-05: a bare `python curate.py` on the VPS
+# loaded the stale vault copy (767 entries) instead of the live store (1,471), adopted
+# ~700 Sheet rows as identity-less ghosts and blanked the board — including the Shopify
+# Offer row and three submitted Tesla applications, which kept their status and lost
+# their names. 496 of that store's 767 entries ended up being ghosts.
+#
+# So: adopt a few, ABORT on many. Aborting costs one refresh. Adopting costs the board.
+ORPHAN_ADOPT_MAX = 25
+
+# "Applied 2026-08-29. Shared Tesla resume as-is ..." — the date he typed into the note
+# when the Applied column was not there to hold it. Recovered by step 1c.
+_APPLIED_IN_NOTE = re.compile(r"\bApplied\s+(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
+
+
+class StoreMismatch(RuntimeError):
+    """The loaded store disagrees with the rendered board badly enough that continuing
+    would destroy data. Raised BEFORE anything is written."""
+
+
+def _merge_readback(store, back: dict, source: str) -> int:
+    """Merge a human-field read-back into the store. Returns the orphans adopted."""
+    unknown = {cid: h for cid, h in back.items() if cid not in store.postings}
+
+    if len(unknown) > ORPHAN_ADOPT_MAX:
+        raise StoreMismatch(
+            f"{len(unknown)} of {len(back)} rows on the {source} are absent from the "
+            f"loaded store.\n"
+            f"    A board is rendered FROM the store and postings are never deleted, so "
+            f"this cannot happen with the right file.\n"
+            f"    store : {getattr(store, 'path', STORE_PATH)} "
+            f"({len(store.postings)} postings)\n"
+            f"    {source:6}: {len(back)} rows read back\n"
+            f"    NOTHING WAS WRITTEN. The live store is "
+            f"~/.hermes/internship/curated_postings.json on the VPS — run the refresh "
+            f"via ~/.hermes/scripts/run_curate_vps.sh, or set CURATED_STORE explicitly.")
+
+    for cid, human in back.items():
+        if cid in store.postings:
+            prev = ((store.postings[cid].get("human") or {}).get("status") or "").strip()
+            if prev and prev.lower() != "to apply" and human.get("status", prev) == "":
+                # The Sheet is authoritative, blank included — but a cleared Status on a
+                # row that HAD an application status is more likely a fat finger on the
+                # phone than a decision, so say it out loud. The row returns to Apply Now;
+                # `board.py status <m> "<Status>"` puts it back.
+                print(f"[refresh] ⚠️  Status CLEARED on the {source} for {cid[:60]} "
+                      f"(was {prev!r}) — row returns to the queue", file=sys.stderr)
+            store.set_human(cid, human)
+    for cid, human in unknown.items():
+        store.add_orphan(cid, human)
+        print(f"[refresh] ⚠️  orphan adopted from {source}: {cid[:64]} "
+              f"(status={human.get('status', '')!r}) — no company/role, so it is kept "
+              f"in the store but NOT rendered", file=sys.stderr)
+    return len(unknown)
+
+
+def _touched(h: dict) -> bool:
+    """He has done something with this row — it must survive any dedup."""
+    st = (h.get("status") or "").strip().lower()
+    return bool(st and st != "to apply") or bool((h.get("notes") or "").strip()) \
+        or bool((h.get("priority_override") or "").strip())
+
+
+def _dup_quality(e: dict) -> tuple:
+    """Higher sorts first. Employer-hosted beats aggregator, then fuller JD, then fresher."""
+    m = e.get("machine") or {}
+    url = (m.get("url") or "").lower()
+    aggregator = any(a in url for a in ("simplify.jobs", "jobright", "swelist", "api.smartrecruiters"))
+    brand = (m.get("source") == "brand-board")
+    age = m.get("age_days")
+    return (int(brand), int(not aggregator), len(m.get("full_jd") or ""),
+            -(999 if age is None else int(age)))
+
+
+def _collapse_duplicates(store) -> int:
+    """Mark URL-variant twins of one (company, role) dead, keeping the best one. Returns
+    the number of rows newly marked. Idempotent; a revived twin is re-collapsed next run."""
+    groups: dict[tuple, list[str]] = {}
+    for cid, e in store.postings.items():
+        m = e.get("machine") or {}
+        if m.get("dead") or not m.get("company") or not m.get("role"):
+            continue
+        # Location is part of the key: SpaceX, Booz Allen, Manulife and SNC each post
+        # ONE title across several cities as separate requisitions, and the first dry
+        # run (2026-09-05) would have merged them. A URL-variant twin always shares the
+        # location; a distinct req rarely does.
+        key = (normalize_company_name(m["company"]),
+               re.sub(r"\s+", " ", m["role"].strip().lower()),
+               re.sub(r"\s+", " ", (m.get("location") or "").strip().lower()))
+        groups.setdefault(key, []).append(cid)
+
+    collapsed = 0
+    for key, cids in groups.items():
+        if len(cids) < 2:
+            continue
+        # Two DIFFERENT known req ids under one title+location are two requisitions
+        # (AMD 90891 vs 90947), not one posting seen twice. An aggregator row with no
+        # req id may still collapse onto the employer's row that has one.
+        rids = {str(store.postings[c]["machine"].get("req_id") or "") for c in cids} - {""}
+        if len(rids) > 1:
+            continue
+        touched = [c for c in cids if _touched(store.postings[c].get("human") or {})]
+        if len(touched) > 1:
+            print(f"[refresh] ⚠️  duplicate rows BOTH touched, leaving both: "
+                  f"{key[0]} / {key[1][:50]}", file=sys.stderr)
+            continue
+        if touched:
+            keep = touched[0]
+        else:
+            keep = max(cids, key=lambda c: _dup_quality(store.postings[c]))
+        for c in cids:
+            if c == keep:
+                continue
+            m = store.postings[c]["machine"]
+            m["dead"] = True
+            m["dead_reason"] = f"duplicate of {keep}"
+            collapsed += 1
+    return collapsed
+
+
 async def refresh(notify: bool = False) -> int:
     # An open-in-Excel lock no longer aborts the whole refresh — we still harvest, score,
     # and update the store JSON, and only DEFER the xlsx render (step 5). That keeps the
@@ -279,33 +412,66 @@ async def refresh(notify: bool = False) -> int:
     today = date.today().isoformat()
     store = CuratedStore(STORE_PATH).load()
     prior_cids = set(store.postings.keys())   # to detect genuinely-new postings
+    # Pre-merge routing snapshot for step 1c. A date may be stamped ONLY on a row that
+    # BECOMES an application during this run; a row that was already an undated
+    # application before the run has an unknown real date, and today is not it.
+    _was_application = {
+        cid: classify_row({"_cid": cid, "machine": e.get("machine") or {},
+                           "human": e.get("human") or {}}) == "application"
+        for cid, e in store.postings.items()}
 
-    # 1) read back manual edits from the existing curated board
-    back = read_back_human(XLSX_PATH)
-    for cid, human in back.items():
-        if cid in store.postings:
-            store.set_human(cid, human)
-        else:
-            store.add_orphan(cid, human)
-    if back:
-        print(f"[refresh] merged manual edits on {len(back)} rows", file=sys.stderr)
-
-    # …and from the Google Sheet, which is where edits made on his phone land. The
-    # Sheet wins on conflict: it is the surface he actually touches now, and the xlsx
-    # can hold a stale value from before an edit was made away from the laptop.
+    # 1) read his edits back from the Google Sheet — THE source of truth for human fields
+    # (Sparsh, 2026-09-05: "we no longer use any mac xlsx sheet, only the google sheet").
+    # The xlsx read-back that used to run first is GONE. On the VPS the xlsx is rendered
+    # from this same store one run earlier, so reading it back could only re-inject a
+    # value he had since cleared on the Sheet (both read-backs skipped blank cells, so a
+    # cleared cell could never stick). The xlsx is now write-only output.
     if gsheet is not None and GSHEET_ON:
         try:
             g_back = gsheet.read_back_human(GSHEET_ID)
-            for cid, human in g_back.items():
-                if cid in store.postings:
-                    store.set_human(cid, human)
-                else:
-                    store.add_orphan(cid, human)
+            _merge_readback(store, g_back, "Sheet")
             if g_back:
                 print(f"[refresh] merged Sheet edits on {len(g_back)} rows", file=sys.stderr)
         except Exception as e:  # noqa: BLE001
             print(f"⚠️  [refresh] could not read the Google Sheet: "
                   f"{type(e).__name__}: {e}", file=sys.stderr)
+
+    # 1c) BACKFILL A MISSING APPLICATION DATE (added 2026-09-05).
+    # board.py writes the date into the Sheet, but the Apply Now tab HAS NO "Applied"
+    # COLUMN — and _set() returns silently when a header is absent. So marking a row
+    # Applied while it was still in the queue could never record a date, by either
+    # command, and nothing said so. 15 real applications (9 Tesla, 6 Microsoft) were
+    # sitting undated when this was found.
+    # Stamp the date the first time a refresh sees an application status with no date.
+    # This is the REFRESH date, not necessarily the submit date (it can be up to one
+    # refresh interval late), so it only ever FILLS A BLANK and never overwrites a
+    # real value. Routing comes from classify_row() so this cannot drift from the
+    # definition of "is an application" the board itself uses.
+    # 🔴 Two rules, learned the same evening this was added. (1) A date written in the
+    # Notes ("Applied 2026-08-29 ...") is EVIDENCE — use it first. (2) Otherwise stamp
+    # the refresh date ONLY on a row that transitioned into an application in THIS run.
+    # The first version stamped every undated application with today's date and
+    # back-dated rejections from August to September 5th: an unmarked guess written as
+    # fact, which Fact Hygiene rule 1 forbids. An old undated row stays blank.
+    dated = recovered = 0
+    for _cid, _e in store.postings.items():
+        _h = _e.get("human") or {}
+        if (_h.get("applied_date") or "").strip():
+            continue
+        if classify_row({"_cid": _cid, "machine": _e.get("machine") or {},
+                         "human": _h}) != "application":
+            continue
+        _hit = _APPLIED_IN_NOTE.search(_h.get("notes") or "")
+        if _hit:
+            store.set_human(_cid, {"applied_date": _hit.group(1)})
+            recovered += 1
+        elif not _was_application.get(_cid, False):
+            store.set_human(_cid, {"applied_date": today})
+            dated += 1
+    if dated or recovered:
+        print(f"[refresh] applied_date: {dated} stamped (newly applied this run), "
+              f"{recovered} recovered from Notes (see 1c — the queue tab cannot carry "
+              f"the column)", file=sys.stderr)
 
     # 2) one-time history seed
     seeded = import_old_tracker_history(store)
@@ -436,6 +602,21 @@ async def refresh(notify: bool = False) -> int:
                       "recency": h["recency"], "tier": h["tier"], "brand": h["brand"],
                       "lane": h["lane"], "role_score": h["role"]})
 
+    # 4a) COLLAPSE URL-VARIANT DUPLICATES (added 2026-09-05).
+    # canonical_id() keys on the URL, and ATSes hand out several URLs for one req:
+    # Workday with and without `/en-US/`, path case (`/DMA/` vs `/dma/`), an
+    # aggregator link (simplify.jobs/p/…) beside the employer's own, SmartRecruiters'
+    # api.* beside jobs.*. Each variant minted its own row: 19 live (company, role)
+    # pairs were on the board twice. Changing canonical_id would re-key every stored
+    # posting (a migration), so the fix is here: the twins stay in the store and one
+    # is marked dead with `dead_reason` naming its keeper — no id changes, no data loss.
+    # 🔴 A row he has TOUCHED (any status beyond To Apply, a note, a priority) is never
+    # the one that dies; if both twins are touched, both stay and it is logged.
+    collapsed = _collapse_duplicates(store)
+    if collapsed:
+        print(f"[refresh] collapsed {collapsed} URL-variant duplicate rows "
+              f"(kept the touched/brand/fuller twin; dead_reason names it)", file=sys.stderr)
+
     # 4b) FIT PASS — the AI reads each JD: fit score + why + disqualifier flag.
     #     Cached by JD-hash, so only new/changed postings cost anything (idempotent).
     try:
@@ -540,7 +721,13 @@ def main() -> int:
     args = ap.parse_args()
     if args.validate_boards:
         return asyncio.run(validate_boards())
-    return asyncio.run(refresh(notify=args.notify))
+    try:
+        return asyncio.run(refresh(notify=args.notify))
+    except StoreMismatch as e:
+        # Exit 2, not a traceback: this is an operator error with a known remedy, and
+        # the whole point of the guard is that the message gets read.
+        print(f"\n🛑 REFRESH ABORTED — store/board mismatch.\n   {e}\n", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

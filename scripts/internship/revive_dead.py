@@ -52,11 +52,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from curated_store import CuratedStore  # noqa: E402
 
-VAULT = Path(os.environ.get("HERMES_VAULT")
-             or ("/home/hermes/vault" if Path("/home/hermes/vault").exists()
-                 else str(Path.home() / "Documents" / "School Vault - UofT")))
-STORE_PATH = Path(os.environ.get(
-    "CURATED_STORE", VAULT / "06 - Internships" / "Job Search" / "curated_postings.json"))
+import store_paths  # noqa: E402
+VAULT = store_paths.vault_root()
+STORE_PATH = store_paths.store_path()
 
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 TIMEOUT = 20

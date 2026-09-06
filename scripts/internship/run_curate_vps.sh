@@ -26,10 +26,14 @@ LOG="$HOME/.hermes/health/curate.log"
 mkdir -p "$(dirname "$LOG")" "$HOME/.hermes/internship"
 
 {
+  t0=$(date +%s)
   echo "=== $(date -Is) curate (vps) ==="
   cd "$DIR" || exit 1
   timeout 1800 "$PY" curate.py "$@"
-  echo "exit=$?"
+  rc=$?
+  # duration: a run creeping toward the 1800s timeout should be visible BEFORE it
+  # starts getting killed (timeout exits 124, which is now readable here too).
+  echo "exit=$rc  duration=$(( $(date +%s) - t0 ))s"
 } >> "$LOG" 2>&1
 
 # Keep the log bounded — this runs twice a day forever.

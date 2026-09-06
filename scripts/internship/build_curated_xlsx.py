@@ -86,6 +86,18 @@ def classify_row(rec: dict) -> str:
     - drop:        stale with no note and no status -> off the board (still kept in JSON).
     """
     m, h = rec.get("machine", {}), rec.get("human", {})
+    # 🔴 NO IDENTITY -> NEVER RENDERED (added 2026-09-05).
+    # An entry with neither a company nor a role has nothing to put in any visible
+    # column, so it reaches the board as a BLANK ROW that still shows a Status. ~700
+    # of them did exactly that on 2026-09-05: a refresh pointed at the wrong store
+    # adopted every unrecognised Sheet id as an orphan, and read_back_human carries
+    # only human fields, so each one arrived with a status and no name. Real
+    # applications were among them — the Shopify Offer row and three Tesla
+    # submissions rendered blank while keeping their status.
+    # The entry stays in the JSON (its status is not discarded); it is simply not
+    # drawn. A blank row is a rendering defect, never data worth showing.
+    if not str(m.get("company") or "").strip() and not str(m.get("role") or "").strip():
+        return "drop"
     status = (h.get("status") or "").strip().lower()
     note = (h.get("notes") or "").strip()
     if status in REVIEWED_STATUSES:

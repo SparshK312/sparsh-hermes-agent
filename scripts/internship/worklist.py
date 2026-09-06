@@ -32,11 +32,10 @@ import os
 import sys
 from pathlib import Path
 
-VAULT = Path(os.environ.get("HERMES_VAULT")
-             or ("/home/hermes/vault" if Path("/home/hermes/vault").exists()
-                 else str(Path.home() / "Documents" / "School Vault - UofT")))
-STORE = Path(os.environ.get(
-    "CURATED_STORE", VAULT / "06 - Internships" / "Job Search" / "curated_postings.json"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import store_paths  # noqa: E402
+VAULT = store_paths.vault_root()
+STORE = store_paths.store_path()
 
 # The only terms he can actually take. Rotation #3 = Winter 2027 (Jan-Apr),
 # rotation #4 = Summer 2027 (May-Aug). US employers often label Jan-Apr "Spring".

@@ -457,6 +457,7 @@ def _append_spend_ledger(model: str, st, usage: dict) -> None:
 @dataclass
 class FitStats:
     scored: int = 0
+    skipped_dead: int = 0
     cached: int = 0
     no_jd: int = 0
     errors: int = 0
@@ -513,6 +514,14 @@ def run_fit_pass(store, model: str = FIT_MODEL, max_llm: int = MAX_LLM_PER_RUN,
         if not jd:
             st.no_jd += 1
             continue
+        # A dead posting is never on the queue, so its Fit is never read. Re-scoring it
+        # spends the per-run cap on rows nobody sees: after the v3.5 prompt bump the
+        # backlog was 1,115 against 493 LIVE rows — more than half of ~5 runs' worth of
+        # cap would have gone to dead postings. A revived row (fail_count reset) comes
+        # straight back through here on its next run.
+        if m.get("dead"):
+            st.skipped_dead += 1
+            continue
         if _needs_scoring(m, model):
             todo.append((cid, m))
         else:
@@ -553,7 +562,7 @@ def run_fit_pass(store, model: str = FIT_MODEL, max_llm: int = MAX_LLM_PER_RUN,
         log(f"deadline sweep: sank {sunk} past-deadline role(s)")
 
     st.cost = _cost(model, usage)
-    log(f"{model}: scored {st.scored}, cached {st.cached}, no-JD {st.no_jd}, "
+    log(f"{model}: scored {st.scored}, cached {st.cached}, no-JD {st.no_jd}, dead-skipped {st.skipped_dead}, "
         f"errors {st.errors} · ~${st.cost:.4f} "
         f"({usage.get('prompt_tokens',0)}+{usage.get('completion_tokens',0)} tok, "
         f"cache w{usage.get('cache_write_tokens',0)}/r{usage.get('cache_read_tokens',0)})")
@@ -565,9 +574,7 @@ if __name__ == "__main__":
     # smoke: score the live store (uses cache; cheap on a warm store)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from curated_store import CuratedStore
-    VAULT = Path(os.environ.get("HERMES_VAULT")
-                 or ("/home/hermes/vault" if Path("/home/hermes/vault").exists()
-                     else str(Path.home() / "Documents" / "School Vault - UofT")))
-    store = CuratedStore(VAULT / "06 - Internships" / "Job Search" / "curated_postings.json").load()
+    import store_paths
+    store = CuratedStore(store_paths.store_path()).load()
     stats = run_fit_pass(store, dry_run="--dry-run" in sys.argv)
     print(stats)
