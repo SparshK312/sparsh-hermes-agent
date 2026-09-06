@@ -189,7 +189,8 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # decoys and cron kept running whatever had last been scp'd by hand (found 2026-09-05).
   cp scripts/internship/run_curate_vps.sh ~/.hermes/scripts/run_curate_vps.sh
   cp scripts/internship/run_hot_watch.sh  ~/.hermes/scripts/run_hot_watch.sh
-  chmod +x ~/.hermes/scripts/run_curate_vps.sh ~/.hermes/scripts/run_hot_watch.sh
+  cp scripts/internship/run_revive_dead.sh ~/.hermes/scripts/run_revive_dead.sh
+  chmod +x ~/.hermes/scripts/run_curate_vps.sh ~/.hermes/scripts/run_hot_watch.sh ~/.hermes/scripts/run_revive_dead.sh
   # RETIRED 2026-08-26: internship_watch.sh -> internship_triage.py, the legacy
   # frontier watcher. Its cron job (internship-watcher) was disabled and last ran
   # 2026-06-21; the job record is removed and both files are deleted. Nothing
