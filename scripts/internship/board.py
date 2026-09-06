@@ -20,12 +20,23 @@ USAGE
   board.py applied  <match> [--date YYYY-MM-DD] [--notes "..."]
   board.py status   <match> "<Status>" [--notes "..."]
   board.py note     <match> "<text>"
+  board.py priority <match> <P0|P1|P2|P3|clear>
   board.py show     <match>
   board.py list-live
 
   <match> is any distinctive fragment of the URL, company, or role. Ambiguous matches
   are REFUSED rather than guessed — writing a status onto the wrong posting is worse
   than not writing it.
+
+PRIORITY is the FIRST sort key, ahead of hotness and fit, so a P0 row -- and since
+2026-09-05 its whole company block -- floats to the top of the queue. Convention set
+2026-09-05, because the column had sat ENTIRELY EMPTY and there was no way to tell a
+row that had been vetted from one nobody had ever opened:
+
+  P0      reviewed, strong fit -- apply
+  P1      reviewed, viable
+  P2      reviewed, marginal -- Sparsh's call
+  (blank) NOT YET REVIEWED
 
 Valid Status values (they are a dropdown on the Sheet; anything else will look broken):
   To Apply · Applied · OA · Phone Screen · Onsite · Offer · Rejected ·
@@ -159,6 +170,19 @@ def main() -> int:
             sys.exit("usage: board.py note <match> \"<text>\"")
         _set(tab, row, headers, "Notes", sys.argv[3])
         print(f"✅ note set — {g('Company')} — {g('Role')[:54]}")
+        return 0
+
+    if cmd == "priority":
+        if len(sys.argv) < 4:
+            sys.exit('usage: board.py priority <match> <P0|P1|P2|P3|clear>')
+        val = sys.argv[3].strip().upper()
+        if val in ("CLEAR", "NONE"):
+            val = ""
+        elif val not in ("P0", "P1", "P2", "P3"):
+            sys.exit(f"priority must be P0, P1, P2, P3 or clear -- got {sys.argv[3]!r}. "
+                     "Anything else renders as broken (it is a dropdown on the Sheet).")
+        _set(tab, row, headers, "Priority", val)
+        print(f"\u2705 priority {val or '(cleared)'} -- {g('Company')} -- {g('Role')[:48]}")
         return 0
 
     print(__doc__)
