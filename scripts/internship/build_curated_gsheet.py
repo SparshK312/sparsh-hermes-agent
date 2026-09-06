@@ -324,7 +324,7 @@ def _route(store: dict) -> dict[str, list]:
         if tab:
             buckets[tab].append(rec)
     buckets[TAB_QUEUE].sort(key=_queue_sort_key)
-    buckets[TAB_QUEUE] = _diversify(buckets[TAB_QUEUE])
+    buckets[TAB_QUEUE] = _group_by_company(buckets[TAB_QUEUE])
     buckets[TAB_APPS].sort(key=lambda r: (
         STATUS_RANK.get((r["human"].get("status") or "").strip(), 7),
         r["human"].get("applied_date") or "0"))
@@ -349,6 +349,30 @@ def _route(store: dict) -> dict[str, list]:
 MAX_RUN = 2          # consecutive rows from one company
 MAX_IN_WINDOW = 3    # rows from one company in any WINDOW-sized stretch
 WINDOW = 12
+
+
+def _group_by_company(rows: list[dict]) -> list[dict]:
+    """Put every row from one company together, in one block.
+
+    Sparsh, 2026-09-05: "if they're the same company, they should be put next to each
+    other, even if that breaks the score. it just makes it easier for me to see all the
+    open positions for a company."
+
+    This REPLACES _diversify() (kept below, unused), which did the exact opposite: it
+    deliberately scattered same-company rows apart so no one company could dominate the
+    top of the queue. That made sense while the board was read top-down; it stopped
+    making sense once he started working it company by company.
+
+    Brand-first ordering is PRESERVED, not discarded. `rows` arrives already sorted by
+    _queue_sort_key, so a company's position is set by its single best row -- Google,
+    Microsoft and Amazon still sit at the top -- and within a company the rows keep
+    their own ranking. Same ranking logic, blocks instead of stripes.
+    """
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        co = (r["machine"].get("company") or "?").strip().lower()
+        groups.setdefault(co, []).append(r)
+    return [r for block in groups.values() for r in block]
 
 
 def _diversify(rows: list[dict]) -> list[dict]:

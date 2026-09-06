@@ -94,6 +94,19 @@ def classify_row(rec: dict) -> str:
     # queue, NOT the applications sheet (nothing has actually been applied to yet).
     if status not in ("", "to apply", "on hold"):
         return "application"
+    # 🔴 A machine DISQUALIFIER now routes off the queue, added 2026-09-05.
+    # Previously a ❌ row stayed in the queue and was merely SUNK by _queue_sort_key,
+    # on the theory that it should stay "visible/filterable". Measured on the live
+    # board that day: 88 of 481 Apply-Now rows were ❌ -- PhD-required, MBA-required,
+    # new-grad-not-intern, clearance, wrong-cycle, 12-month placements -- all sitting
+    # under a "To Apply" status he can do nothing about. Sparsh: "instead we should
+    # just put them under the reviewed sheet or something rather than cluttering the
+    # to apply sheet". They keep their row, their reason and their fit score; they
+    # just live on Reviewed now.
+    # "On Hold" is excluded on purpose: that is a deliberate park (e.g. waiting on the
+    # Amazon referral) and must stay in the queue where he will see it.
+    if _is_disq(m) and status != "on hold":
+        return "reviewed"
     if m.get("dead"):
         return "reviewed" if note else "drop"
     return "queue"
