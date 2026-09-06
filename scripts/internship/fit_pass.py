@@ -56,7 +56,50 @@ JD_HEAD = 2200
 JD_TAIL = 1300
 CHUNK_SIZE = 5                      # postings per LLM call (smaller = steadier recall, no dropped items)
 MAX_LLM_PER_RUN = 120              # hard cost guard (first run is ~94)
-PROMPT_VERSION = "fit-v3.6"        # v3.6: graduation date + grad-date gate (was guessed)        # bump to force re-score on prompt changes (part of cache key)
+PROMPT_VERSION = "fit-v3.6"        # v3.6: graduation date + grad-date gate (was guessed)
+
+# ── Targeted invalidation ─────────────────────────────────────────────────────
+# A PROMPT_VERSION bump used to re-score EVERY cached row: 466 live rows (~$2.40, ~20
+# min) for v3.6, a change that could only move rows where the model had reasoned about
+# graduation. Sparsh, 2026-09-05: "shouldn't we only be rating the new ones that come
+# in?" — yes. Each version may register a predicate over the cached machine record
+# saying "this change could alter this row"; a row is re-scored only if some version it
+# has missed says so. A version with NO predicate means "re-score everything" (the old
+# behaviour) — use that only when the whole rubric moved.
+def _ver(v: str) -> tuple:
+    m = re.search(r"(\d+)\.(\d+)", v or "")
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+_GRAD_RE = re.compile(r"graduat|class of|final intern|202[78]|new.?grad|semester|term remaining", re.I)
+
+_RESCORE_IF = {
+    # v3.6 changed only what the model knows about his graduation date.
+    "fit-v3.6": lambda m: bool(_GRAD_RE.search(" ".join(str(m.get(k) or "") for k in
+                                              ("fit_why", "fit_jd_summary", "fit_disqualifier")))),
+}
+
+
+def _affected_by_bump(m: dict) -> bool:
+    """True if any version newer than the row's cached one could change its score."""
+    have = _ver(m.get("fit_prompt_ver") or "")
+    for ver, pred in sorted(_RESCORE_IF.items(), key=lambda kv: _ver(kv[0])):
+        if have < _ver(ver) <= _ver(PROMPT_VERSION) and pred(m):
+            return True
+    # any missed version WITHOUT a predicate = blanket re-score
+    missed_blanket = [v for v in _all_versions_between(have, _ver(PROMPT_VERSION))
+                      if v not in {_ver(k) for k in _RESCORE_IF}]
+    return bool(missed_blanket)
+
+
+def _all_versions_between(lo: tuple, hi: tuple) -> list:
+    """Versions strictly above `lo` up to `hi` that this file knows about."""
+    known = {_ver(PROMPT_VERSION)} | {_ver(k) for k in _RESCORE_IF} | set(_KNOWN_VERSIONS)
+    return sorted(v for v in known if lo < v <= hi)
+
+
+# Every version that ever shipped, so a row cached on v3.3 knows it missed v3.4 and v3.5
+# (blanket) even though only v3.6 has a predicate.
+_KNOWN_VERSIONS = [(3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6)]        # bump to force re-score on prompt changes (part of cache key)
 #                                    v3.5 (2026-09-05): PRODUCT MANAGEMENT is a first-class
 #                                          target role (was absent from the 85-100 band, so
 #                                          on-target PM reqs scored ~62); a non-US/CA location
@@ -474,9 +517,11 @@ def _needs_scoring(m: dict, model: str) -> bool:
         return False
     if not m.get("fit_score") and m.get("fit_score") != 0:
         return True
-    return (m.get("fit_jd_hash") != _jd_hash(jd)
-            or m.get("fit_model") != model
-            or m.get("fit_prompt_ver") != PROMPT_VERSION)
+    if m.get("fit_jd_hash") != _jd_hash(jd) or m.get("fit_model") != model:
+        return True
+    if m.get("fit_prompt_ver") == PROMPT_VERSION:
+        return False
+    return _affected_by_bump(m)   # targeted: only if a missed version could move this row
 
 
 def _deadline_sweep(store) -> int:
