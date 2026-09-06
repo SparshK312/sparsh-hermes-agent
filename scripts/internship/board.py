@@ -49,6 +49,7 @@ on the next `curate.py` run, which is also when the row re-routes between tabs (
 from __future__ import annotations
 
 import sys
+import re
 from datetime import date
 from pathlib import Path
 
@@ -186,6 +187,19 @@ def main() -> int:
             sys.exit("usage: board.py note <match> \"<text>\"")
         _set(tab, row, headers, "Notes", sys.argv[3])
         print(f"✅ note set — {g('Company')} — {g('Role')[:54]}")
+        return 0
+
+    if cmd == "date":
+        # Set the Applied date on its own — for rows whose Status is not "Applied" (OA,
+        # Phone Screen, Rejected …) where `applied` would clobber the status. Added
+        # 2026-09-06 when a TikTok screenshot supplied a date the board had lost.
+        if len(sys.argv) < 4:
+            sys.exit("usage: board.py date <match> YYYY-MM-DD")
+        val = sys.argv[3].strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", val):
+            sys.exit("date must be YYYY-MM-DD")
+        _set(tab, row, headers, "Applied", val)
+        print(f"✅ Applied date {val} — {g('Company')} — {g('Role')[:54]}")
         return 0
 
     if cmd == "priority":
