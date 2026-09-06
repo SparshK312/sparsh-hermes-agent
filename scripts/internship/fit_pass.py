@@ -403,7 +403,7 @@ def _validate_item(it: dict, valid_ids: set) -> dict | None:
 
 
 # ── shared scoring core (used by run_fit_pass AND the eval) ────────────────────
-def score_batch(items: list[dict], model: str = FIT_MODEL) -> tuple[dict, dict]:
+def score_batch(items: list[dict], model: str = FIT_MODEL, on_chunk=None) -> tuple[dict, dict]:
     """items: [{id,company,title,location,cycle,jd}]. Returns ({id: fit_result}, usage_totals).
     Chunks, calls the model, validates per item. JDs are already truncated by the caller."""
     out, usage_tot = {}, {"prompt_tokens": 0, "completion_tokens": 0,
@@ -427,19 +427,23 @@ def score_batch(items: list[dict], model: str = FIT_MODEL) -> tuple[dict, dict]:
         # actually cost 1.25x.
         usage_tot["cache_write_tokens"] += usage.get("cache_creation_input_tokens", 0)
         usage_tot["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
-        if not parsed:
-            continue
-        jd_by_id = {it["id"]: it.get("jd", "") for it in chunk}
-        for it in parsed.get("items", []):
-            v = _validate_item(it, valid_ids)
-            if v:
-                # deterministic override: code, not the model, decides deadline-passed.
-                passed, ddl = _deadline_passed(jd_by_id.get(it["id"], ""))
-                if passed and v["fit_disqualifier"] != "deadline-passed":
-                    v["fit_disqualifier"] = "deadline-passed"
-                    v["fit_score"] = min(v["fit_score"], 10)
-                    v["fit_why"] = f"Application window closed ({ddl})."
-                out[it["id"]] = v
+        chunk_out: dict = {}
+        if parsed:
+            jd_by_id = {it["id"]: it.get("jd", "") for it in chunk}
+            for it in parsed.get("items", []):
+                v = _validate_item(it, valid_ids)
+                if v:
+                    passed, ddl = _deadline_passed(jd_by_id.get(it["id"], ""))
+                    if passed and v["fit_disqualifier"] != "deadline-passed":
+                        v["fit_disqualifier"] = "deadline-passed"
+                        v["fit_score"] = min(v["fit_score"], 10)
+                        v["fit_why"] = f"Application window closed ({ddl})."
+                    chunk_out[it["id"]] = v
+        out.update(chunk_out)
+        # Hand each chunk back as it lands (progress + incremental persistence). A failed
+        # chunk still reports, with nothing in it, so the caller's counter keeps moving.
+        if on_chunk:
+            on_chunk(i // CHUNK_SIZE + 1, -(-len(items) // CHUNK_SIZE), chunk_out, dict(usage_tot))
     return out, usage_tot
 
 
@@ -588,18 +592,37 @@ def run_fit_pass(store, model: str = FIT_MODEL, max_llm: int = MAX_LLM_PER_RUN,
         items = [{"id": cid, "company": m.get("company", ""), "title": m.get("role", ""),
                   "location": m.get("location", ""), "cycle": m.get("cycle", ""),
                   "jd": _truncate_jd(m.get("full_jd") or "")} for cid, m in todo]
-        results, usage = score_batch(items, model)
         today = datetime.now().strftime("%Y-%m-%d")
-        for cid, m in todo:
-            r = results.get(cid)
-            if not r:
-                st.errors += 1
-                continue
-            store.upsert_machine(cid, {
-                **r, "fit_model": model, "fit_prompt_ver": PROMPT_VERSION,
-                "fit_at": today, "fit_jd_hash": _jd_hash((m.get("full_jd") or "").strip()),
-            })
-            st.scored += 1
+        m_by_id = {cid: m for cid, m in todo}
+        n_items = len(items)
+        gen = (getattr(store, "data", None) or {}).get("generated_at")
+        done = {"rows": 0}
+
+        # 🔴 Three things this got wrong on a long run (2026-09-05, 466 rows, ~20 min):
+        # it printed NOTHING until the end, it wrote results to the store only after EVERY
+        # chunk had returned (a crash at chunk 90/94 would have lost the whole spend), and
+        # nothing reached disk until the caller saved. Now each chunk is written the moment
+        # it lands, progress is logged, and the store checkpoints every 10 chunks.
+        def _on_chunk(k: int, n: int, chunk_out: dict, usage_so_far: dict) -> None:
+            for cid, r in chunk_out.items():
+                mm = m_by_id.get(cid) or {}
+                store.upsert_machine(cid, {
+                    **r, "fit_model": model, "fit_prompt_ver": PROMPT_VERSION,
+                    "fit_at": today, "fit_jd_hash": _jd_hash((mm.get("full_jd") or "").strip()),
+                })
+            done["rows"] += len(chunk_out)
+            if k == 1 or k % 5 == 0 or k == n:
+                log(f"progress {k}/{n} chunks · {done['rows']}/{n_items} rows · "
+                    f"~${_cost(model, usage_so_far):.2f} so far")
+            if k % 10 == 0 and k != n and gen and hasattr(store, "save"):
+                try:
+                    store.save(gen)          # what is paid for is on disk
+                except Exception as e:  # noqa: BLE001
+                    log(f"checkpoint save failed: {type(e).__name__}: {e}")
+
+        results, usage = score_batch(items, model, on_chunk=_on_chunk)
+        st.scored = len(results)
+        st.errors = n_items - len(results)
 
     # deterministic deadline sweep — ALWAYS (covers cached-only refreshes too)
     sunk = _deadline_sweep(store)
