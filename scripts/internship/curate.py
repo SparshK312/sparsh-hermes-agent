@@ -166,7 +166,8 @@ sys.path.insert(0, str(VAULT / "Scripts"))
 import brand_first_source  # noqa: E402
 import wide_net_source  # noqa: E402
 from company_boards import boards as _boards  # noqa: E402
-from build_curated_xlsx import classify_row, is_locked, write_board  # noqa: E402
+from build_curated_xlsx import (REVIEWED_STATUSES, classify_row, is_locked,  # noqa: E402
+                                write_board)
 try:
     import build_curated_gsheet as gsheet  # noqa: E402
 except Exception as _e:                    # noqa: BLE001 - never fail the refresh on import
@@ -357,48 +358,81 @@ def _dup_quality(e: dict) -> tuple:
             -(999 if age is None else int(age)))
 
 
+def _norm_rid(m: dict) -> str:
+    """Requisition id, comparable across portals. Workday appends -1/-2 to the SAME req on
+    its /search/ portal (CIBC …_2617782 vs …_2617782-1); Amazon aggregators often carry no
+    req_id at all but the job number is right there in the URL (amazon.jobs/…/jobs/10529525)."""
+    rid = str(m.get("req_id") or "").strip().lower()
+    if not rid:
+        u = (m.get("url") or "").lower()
+        hit = re.search(r"amazon\.jobs/(?:[a-z]{2}/)?jobs/(\d{6,})", u)
+        if not hit and "myworkdayjobs.com" in u:
+            # Workday paths end in _<req id>, with -1/-2 appended on the /search/ portal.
+            # Aggregator rows arrive without req_id but with exactly this URL.
+            hit = re.search(r"_([a-z]*-?\d[a-z0-9-]*)/?$", u)
+        rid = hit.group(1) if hit else ""
+    # Strip ONLY a short Workday portal suffix (-1, -2 …) and ONLY when a real id remains.
+    # The first version stripped any -\d+ tail and turned Campbell's "Req-66015",
+    # "Req-65842", … into a bare "Req" — four DIFFERENT requisitions grouped as one. Caught
+    # by the dry run on the live store before it ever ran for real.
+    return re.sub(r"^(.*\d.*?)-\d{1,2}$", r"\1", rid)
+
+
+def _same_human(store, cids) -> bool:
+    """True when every row carries IDENTICAL human data, so collapsing loses nothing. This
+    is how one req annotated four times with the same On-Hold note collapses to one row."""
+    seen = set()
+    for c in cids:
+        h = store.postings[c].get("human") or {}
+        seen.add(tuple(sorted((k, (v or "").strip()) for k, v in h.items() if (v or "").strip())))
+    return len(seen) == 1
+
+
 def _collapse_duplicates(store) -> int:
-    """Mark URL-variant twins of one (company, role) dead, keeping the best one. Returns
-    the number of rows newly marked. Idempotent; a revived twin is re-collapsed next run."""
+    """Mark twins of one requisition dead, keeping the best one. Returns rows newly marked.
+    Two passes share one loop: (1) same company + same req id — survives the ATS re-titling
+    or re-locating a role per portal; (2) same company + title + location for URL variants
+    that carry no req id. Idempotent; a revived twin is re-collapsed next run."""
     groups: dict[tuple, list[str]] = {}
     for cid, e in store.postings.items():
         m = e.get("machine") or {}
         if m.get("dead") or not m.get("company") or not m.get("role"):
             continue
-        # Location is part of the key: SpaceX, Booz Allen, Manulife and SNC each post
-        # ONE title across several cities as separate requisitions, and the first dry
-        # run (2026-09-05) would have merged them. A URL-variant twin always shares the
-        # location; a distinct req rarely does.
-        key = (normalize_company_name(m["company"]),
-               re.sub(r"\s+", " ", m["role"].strip().lower()),
-               re.sub(r"\s+", " ", (m.get("location") or "").strip().lower()))
-        groups.setdefault(key, []).append(cid)
+        # A row he has already Skipped / Not-a-Fit'd / Closed is resolved: it lives on
+        # Reviewed and is not a duplicate candidate (otherwise a hand-skipped twin would
+        # trip the "different notes" warning on every run forever).
+        if ((e.get("human") or {}).get("status") or "").strip().lower() in REVIEWED_STATUSES:
+            continue
+        co = normalize_company_name(m["company"])
+        rid = _norm_rid(m)
+        if rid:
+            groups.setdefault(("rid", co, rid), []).append(cid)
+        groups.setdefault(("title", co, re.sub(r"\s+", " ", m["role"].strip().lower()),
+                           re.sub(r"\s+", " ", (m.get("location") or "").strip().lower())), []).append(cid)
 
     collapsed = 0
     for key, cids in groups.items():
+        cids = [c for c in cids if not store.postings[c]["machine"].get("dead")]
         if len(cids) < 2:
             continue
-        # Two DIFFERENT known req ids under one title+location are two requisitions
-        # (AMD 90891 vs 90947), not one posting seen twice. An aggregator row with no
-        # req id may still collapse onto the employer's row that has one.
-        rids = {str(store.postings[c]["machine"].get("req_id") or "") for c in cids} - {""}
-        if len(rids) > 1:
-            continue
+        if key[0] == "title":
+            # Two DIFFERENT known req ids under one title+location are two requisitions
+            # (AMD 90891 vs 90947), not one posting seen twice.
+            if len({_norm_rid(store.postings[c]["machine"]) for c in cids} - {""}) > 1:
+                continue
         touched = [c for c in cids if _touched(store.postings[c].get("human") or {})]
-        if len(touched) > 1:
-            print(f"[refresh] ⚠️  duplicate rows BOTH touched, leaving both: "
-                  f"{key[0]} / {key[1][:50]}", file=sys.stderr)
+        if len(touched) > 1 and not _same_human(store, touched):
+            print(f"[refresh] ⚠️  duplicate rows carry DIFFERENT notes/statuses, leaving all: "
+                  f"{key[1]} / {str(key[2])[:50]} — resolve by hand with board.py", file=sys.stderr)
             continue
-        if touched:
-            keep = touched[0]
-        else:
-            keep = max(cids, key=lambda c: _dup_quality(store.postings[c]))
+        pool = touched or cids
+        keep = max(pool, key=lambda c: _dup_quality(store.postings[c]))
         for c in cids:
             if c == keep:
                 continue
-            m = store.postings[c]["machine"]
-            m["dead"] = True
-            m["dead_reason"] = f"duplicate of {keep}"
+            mm = store.postings[c]["machine"]
+            mm["dead"] = True
+            mm["dead_reason"] = f"duplicate of {keep}"
             collapsed += 1
     return collapsed
 

@@ -56,7 +56,7 @@ JD_HEAD = 2200
 JD_TAIL = 1300
 CHUNK_SIZE = 5                      # postings per LLM call (smaller = steadier recall, no dropped items)
 MAX_LLM_PER_RUN = 120              # hard cost guard (first run is ~94)
-PROMPT_VERSION = "fit-v3.5"        # bump to force re-score on prompt changes (part of cache key)
+PROMPT_VERSION = "fit-v3.6"        # v3.6: graduation date + grad-date gate (was guessed)        # bump to force re-score on prompt changes (part of cache key)
 #                                    v3.5 (2026-09-05): PRODUCT MANAGEMENT is a first-class
 #                                          target role (was absent from the 85-100 band, so
 #                                          on-target PM reqs scored ~62); a non-US/CA location
