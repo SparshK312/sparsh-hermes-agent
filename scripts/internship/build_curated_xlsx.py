@@ -73,6 +73,12 @@ _thin = Side(style="thin", color="E5E7EB")
 BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 
 PRIO_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "": 4}
+# Sparsh, 2026-09-08: "i would prefer S is at the top and then A and then B and then
+# C. right now its a little mixed up." It was: the queue sorted on HOTNESS alone,
+# which is brand-DOMINANT but not brand-ONLY (recency and role-lane move it), so a
+# tier-S Palantir req at hot 72 sat below tier-A rows at hot 74-90. Tier is now the
+# band and hotness only orders WITHIN a band.
+TIER_RANK = {"S": 0, "A": 1, "B": 2, "C": 3}
 STATUS_RANK = {"Offer": 0, "Onsite": 1, "Phone Screen": 2, "OA": 3,
                "Applied": 4, "Networking": 5, "On Hold": 6, "Rejected": 9}
 
@@ -255,14 +261,19 @@ def _queue_sort_key(rec):
     on_hold = 1 if (h.get("status") or "").strip().lower() == "on hold" else 0
     # within a priority band: active To-Apply first, then On Hold (parked), then
     # disqualified rows sink to the bottom -- all still visible/filterable.
-    return (PRIO_RANK.get(prio, 4), 1 if _is_disq(m) else 0, on_hold,
+    tier = TIER_RANK.get(str(m.get("tier") or "").strip().upper(), 4)
+    # ORDER MATTERS: on_hold stays ABOVE tier so a parked row sinks no matter how good
+    # its brand is -- the two Amazon On Hold reqs are tier S and would otherwise lead
+    # the board ("we can keep the 2 Amazon ones that are on hold at the bottom, that is
+    # fine" -- Sparsh, 2026-09-08).
+    return (PRIO_RANK.get(prio, 4), 1 if _is_disq(m) else 0, on_hold, tier,
             -int(m.get("hotness", 0) or 0))
 
 
 def _build_queue(ws, rows):
     _title_block(ws, len(QUEUE_HEADERS),
                  "🔥 Curated Queue — brand-ranked open intern roles",
-                 "Ranked by Hotness (brand-dominant). Fit = AI read of the JD (hover a Role "
+                 "Ranked by TIER (S -> A -> B -> C), then Hotness within a tier. Fit = AI read of the JD (hover a Role "
                  "cell for the JD). ❌ = disqualified (still shown, sunk). Set Status to move a row.")
     hdr = 3; first = 4
     _header(ws, QUEUE_HEADERS, QUEUE_WIDTHS, hdr)

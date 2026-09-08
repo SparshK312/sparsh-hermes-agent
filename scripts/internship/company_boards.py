@@ -87,6 +87,13 @@ BOARDS = [
      "host": "campbellsoup.wd5.myworkdayjobs.com", "site": "ExternalCareers_GlobalSite"},
     {"name": "CIBC", "tier": "B", "ats_type": "workday",
      "host": "cibc.wd3.myworkdayjobs.com", "site": "campus"},
+    # Added 2026-09-08. Capital One was reachable ONLY through aggregators, and when
+    # one stopped listing its Toronto Winter-2027 intern reqs they took 24 strikes and
+    # died -- while Capital One's own Workday still served all four (verified live).
+    # A lane-1 board is the fix: the employer's own list can't "stop listing" a job
+    # that is open.
+    {"name": "Capital One", "tier": "B", "ats_type": "workday",
+     "host": "capitalone.wd12.myworkdayjobs.com", "site": "Capital_One"},
     {"name": "Ciena", "tier": "B", "ats_type": "workday",
      "host": "ciena.wd5.myworkdayjobs.com", "site": "Careers"},
     {"name": "DPR Construction", "tier": "B", "ats_type": "workday",

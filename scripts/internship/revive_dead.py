@@ -45,6 +45,7 @@ import os
 import re
 import sys
 import urllib.request
+import urllib.error
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -64,6 +65,39 @@ _board_cache: dict[str, set[str]] = {}
 def _get(url: str):
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=TIMEOUT) as r:
         return json.loads(r.read())
+
+
+_WORKDAY_RE = re.compile(
+    r"^https?://(?P<tenant>[^./]+)\.wd\d+\.myworkdayjobs\.com/"
+    r"(?:[a-z]{2}-[A-Z]{2}/)?"          # optional /en-US/ locale segment
+    r"(?P<site>[^/]+)/job/(?P<rest>.+)$",
+    re.I,
+)
+
+
+def _workday_status(url: str) -> str:
+    """Workday has no board-wide id list worth pulling (Capital One alone posts 1,178
+    jobs, 20 per page), but it DOES serve one job as JSON at
+    /wday/cxs/<tenant>/<site>/job/<path>. So check the single req directly.
+
+    200 -> active · 404 -> expired · anything else -> uncertain. A wrong tenant guess
+    reads as 404, i.e. 'stays dead', which is exactly today's behaviour — this can
+    only ever recover rows, never bury a live one."""
+    m = _WORKDAY_RE.match(url.strip())
+    if not m:
+        return "uncertain"
+    origin = url.split("/", 3)[0] + "//" + url.split("/", 3)[2]
+    api = f"{origin}/wday/cxs/{m.group('tenant').lower()}/{m.group('site')}/job/{m.group('rest')}"
+    req = urllib.request.Request(api, headers={**UA, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            if r.status != 200:
+                return "uncertain"
+            return "active" if json.loads(r.read()).get("jobPostingInfo") else "expired"
+    except urllib.error.HTTPError as e:
+        return "expired" if e.code == 404 else "uncertain"
+    except Exception:
+        return "uncertain"
 
 
 def _board_ids(kind: str, org: str) -> set[str]:
@@ -99,6 +133,8 @@ def classify(url: str) -> str:
         m = re.search(r"lever\.co/([^/?#]+)/([0-9a-f-]{36})", url, re.I)
         if m:
             return "active" if m.group(2) in _board_ids("lever", m.group(1)) else "expired"
+        if "myworkdayjobs.com" in url.lower():
+            return _workday_status(url)
     except Exception:            # network/API failure is OUR problem, not the job's
         return "uncertain"
     return "uncertain"           # no public API -> refuse to guess
@@ -117,7 +153,7 @@ def main() -> int:
 
     checkable = [(c, m) for c, m in dead
                  if any(k in (m.get("url") or "")
-                        for k in ("greenhouse", "ashbyhq", "lever.co"))]
+                        for k in ("greenhouse", "ashbyhq", "lever.co", "myworkdayjobs.com"))]
     print(f"{len(checkable)} have a public ATS API and can be verified\n", file=sys.stderr)
 
     with ThreadPoolExecutor(10) as ex:
