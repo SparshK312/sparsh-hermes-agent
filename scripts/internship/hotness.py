@@ -20,6 +20,7 @@ the PM lane the daily VPS digest deliberately omits).
 from __future__ import annotations
 
 import math
+import re
 
 from internship_scraper import NEGATIVE_ROLE_KEYWORDS, normalize_company_name
 
@@ -45,6 +46,10 @@ TIER_S = {
     "anthropic", "openai", "xai", "deepmind", "google deepmind",
 }
 TIER_A = {
+    # Added 2026-09-08. Tier C is not a ranking penalty, it is partial DELETION:
+    # wide_net_source.py drops every tier-C swelist row outright and the MAX_ENRICH=160
+    # truncation cuts by tier, so a company missing from this table loses its rows.
+    "blue origin", "postman", "five rings", "pdt partners",
     "stripe", "plaid", "mercury", "ramp", "brex", "robinhood",
     "vercel", "linear", "notion", "figma", "scale ai", "databricks",
     "perplexity", "cursor", "anysphere", "replit", "cohere", "mistral",
@@ -54,6 +59,17 @@ TIER_A = {
     "snowflake", "github",
 }
 TIER_B = {
+    # Added 2026-09-08 for the same reason as the TIER_A block above. The Big Five
+    # Canadian banks matter disproportionately here: they run the WINTER co-op cycle in
+    # TORONTO, which is his scarcest cycle in his home city, and CIBC was the only one
+    # the table knew. Quant firms are B rather than A because their listed peers
+    # (Jane Street, Citadel, DRW, IMC, HRT) are the A bar and these sit a rung below.
+    "royal bank of canada", "rbc", "bank of montreal", "bmo", "manulife", "cae", "telus", "general motors", "sony", "ge aerospace", "ge healthcare", "rtx", "raytheon", "micron", "motorola solutions", "hp", "hpe", "hewlett packard", "caterpillar", "johnson & johnson", "pimco", "vanguard", "gartner", "workiva", "appian", "freddie mac", "fannie mae", "ancestry", "virtu financial", "chicago trading", "belvedere trading", "hyannis port", "dv trading", "garda capital",
+    # "campbell" (single word) is REQUIRED by the _name_matches boundary fix: the board
+    # name "Campbell's" normalizes to "campbell s", which only ever matched "Campbell
+    # Soup" via the unbounded substring that fix removed. Verified to cover Campbell's,
+    # Campbell Soup and Campbell Soup Company.
+    "campbell",
     "rippling", "1password", "cerebras", "autodesk", "intel",
     "unity", "bosch", "cibc", "ciena", "rivian", "rivian vw", "dolby",
     "coveo", "kinaxis",
@@ -114,7 +130,14 @@ def _name_matches(brand: str, nn: str, words: set[str]) -> bool:
     parts = brand.split()
     if len(parts) == 1:
         return parts[0] in words
-    return brand in nn
+    # 🔴 MULTI-WORD BRANDS NEED BOUNDARIES TOO. This was a bare `brand in nn`, an
+    # unbounded substring test: "ge healthcare" matched *villa*GE HEALTHCARE, and
+    # "ge aerospace" matched *presti*GE AEROSPACE. Single-word brands were already
+    # boundary-safe via the `words` set; multi-word ones were not.
+    rx = _BRAND_RE.get(brand)
+    if rx is None:
+        rx = _BRAND_RE[brand] = re.compile(r"(?<!\w)" + re.escape(brand) + r"(?!\w)")
+    return rx.search(nn) is not None
 
 # PM is accepted here even though internship_scraper rejects it for the daily digest.
 _PM_NEGATIVES = {"product manager", "product management"}
@@ -188,6 +211,26 @@ _GENERIC_TECH_KEYWORDS = ("technology co-op", "technology intern", "technology a
                           "cohort")
 
 
+_BRAND_RE: dict[str, "re.Pattern"] = {}
+
+# Normalized names that borrow a tiered brand's word but are a different company.
+# Checked before every other rule, so they can never inherit that brand's tier.
+TIER_EXCEPTIONS = {
+    "sierra nevada", "sierra space", "brunswick mercury marine", "mercury systems",
+    "mercury insurance", "meta materials", "apple bank", "apple hospitality reit",
+    "square enix", "square panda", "block harbor cybersecurity",
+    # ⬜ NOT FIXABLE HERE, recorded so nobody retries it: "Linear Technology" and
+    # "Linear Labs" both normalize to exactly "linear" (normalize_company_name strips
+    # the words technology/technologies/labs), so they are indistinguishable from the
+    # real Linear after normalization and cannot be excluded by name. Left scoring A;
+    # the harm is one defunct chip brand ranking high, and neither posts intern roles.
+    "visa solutions", "unity health toronto", "citadel credit union",
+    # Collisions created by the 2026-09-08 tier additions, found by running every new
+    # name against an adversarial corpus rather than by waiting for them to surface:
+    "hp hood", "vanguard space systems", "micron solutions",
+}
+
+
 def brand_tier(company: str) -> str:
     """Whole-word / phrase match so 'meta' doesn't fire on 'nox METAls' and
     'intel' doesn't fire on 'INTELlivision'.
@@ -198,6 +241,17 @@ def brand_tier(company: str) -> str:
     """
     nn = normalize_company_name(company)
     if not nn:
+        return "C"
+
+    # 🔴 NAME COLLISIONS, verified against the live board 2026-09-08. A whole-word match
+    # cannot tell these apart from the brand they borrow, and every one was scoring high:
+    #   Sierra Nevada Corporation / Sierra Space -> A off "sierra" (the Bret Taylor AI
+    #     company). SNC's postings state "U.S. Citizenship status IS REQUIRED", so the
+    #     false A promoted an employer he CANNOT apply to into the top of the queue.
+    #   Meta Materials -> S off "meta". Apple Bank -> S off "apple".
+    #   Citadel Credit Union -> A off "citadel". Unity Health Toronto (a hospital) -> B.
+    #   Square Enix -> A off "square". Brunswick Mercury Marine -> A off "mercury".
+    if nn in TIER_EXCEPTIONS:
         return "C"
 
     words = set(nn.split())

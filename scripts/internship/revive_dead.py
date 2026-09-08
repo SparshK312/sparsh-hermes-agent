@@ -52,6 +52,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from curated_store import CuratedStore  # noqa: E402
+from internship_scraper import PAST_PERIODS_LOWER  # noqa: E402
 
 import store_paths  # noqa: E402
 VAULT = store_paths.vault_root()
@@ -140,6 +141,58 @@ def classify(url: str) -> str:
     return "uncertain"           # no public API -> refuse to guess
 
 
+def worth_reviving(m: dict, store=None) -> tuple[bool, str]:
+    """🔴 THE ONLY THING A REVIVAL MAY NOT BRING BACK IS A DUPLICATE.
+
+    History, because the wrong version of this function shipped first. On 2026-09-08 the
+    Workday branch above tripled the checkable set and one run revived 331 postings; the
+    queue went 108 -> 276. The first fix gated on `tier == "C"` plus a stale `last_seen`.
+    Both selectors were wrong and an audit caught it before it ran:
+
+      * `last_seen` tracks the AGGREGATOR's rolling window, not the employer. All 172
+        candidates sat at fail_count=1 -- ATS-confirmed open, then one strike from that
+        day's roll-off. An independent check hit each employer's own board: 172/172 OPEN.
+      * `tier == "C"` is a DEFAULT, not a judgement. brand_tier() returns "C" for any
+        company absent from a ~121-name table, so the filter really meant "the table has
+        never heard of this employer" -- which swept up 21 WINTER 2027 reqs in Toronto
+        (BMO, RBC, Manulife, CAE, GM Markham), his scarcest cycle in his home city.
+
+    Killing on staleness re-creates the exact false-dead bug this script exists to repair
+    (its own header measures 54% of dead wide-net rows as still open). So relevance is NOT
+    this script's job -- the ATS answer is. The one real exclusion is a row we ourselves
+    marked dead as a duplicate: reviving that resurrects a twin of a req he already
+    settled, and on 2026-09-08 it put three Autodesk 'Not a Fit' calls, an Intel
+    Master's-only req and an NVIDIA req whose deadline passed back in front of him."""
+    cycle = str(m.get("cycle") or "").strip().lower()
+    if cycle and cycle in PAST_PERIODS_LOWER:
+        # A calendar fact, not a judgement: he is at Shopify through Dec 18 2026, so a
+        # Fall-2026 req cannot be worked no matter how open it is. Without this, one run
+        # would have added 129 Fall-2026 rows to the queue.
+        return False, "past-cycle"
+
+    raw = (m.get("dead_reason") or "").strip()
+    if not raw.lower().startswith("duplicate of"):
+        return True, ""
+
+    # 🔴 THE REASON MUST STILL BE TRUE. `dead_reason` is not durable: curate.py
+    # resurrects a re-harvested row and (before 2026-09-08) left the string behind, so a
+    # row could carry "duplicate of X" long after X was gone. Gating on the string alone
+    # made that a PERMANENT burial nothing could clear -- ten rows were already primed
+    # for it, including two Bank of Montreal Winter-2027 Toronto co-ops. So resolve the
+    # named keeper and only refuse when it is genuinely still alive to represent this
+    # requisition. Unknown or dead keeper -> check the row like any other.
+    keeper = raw[len("duplicate of "):].split(" (already")[0].strip()
+    rec = None
+    if store is not None:
+        try:
+            rec = store.postings.get(keeper)
+        except AttributeError:
+            rec = store.get(keeper) if hasattr(store, "get") else None
+    if rec is not None and not (rec.get("machine") or {}).get("dead"):
+        return False, "duplicate"
+    return True, ""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -156,6 +209,21 @@ def main() -> int:
                         for k in ("greenhouse", "ashbyhq", "lever.co", "myworkdayjobs.com"))]
     print(f"{len(checkable)} have a public ATS API and can be verified\n", file=sys.stderr)
 
+    # Relevance bar BEFORE the network calls -- cheaper, and it keeps the queue usable.
+    skipped = Counter()
+    relevant = []
+    for cid, m in checkable:
+        ok, why = worth_reviving(m, store)
+        if ok:
+            relevant.append((cid, m))
+        else:
+            skipped.update([why])
+    if skipped:
+        print(f"  not worth reviving: {dict(skipped)} "
+              f"(left dead on purpose — see worth_reviving())", file=sys.stderr)
+    checkable = relevant
+    print(f"{len(checkable)} pass the relevance bar and will be checked\n", file=sys.stderr)
+
     with ThreadPoolExecutor(10) as ex:
         verdicts = list(ex.map(lambda t: classify(t[1].get("url") or ""), checkable))
 
@@ -164,7 +232,10 @@ def main() -> int:
         if v == "active":
             revived.append(m)
             if not args.dry_run:
-                store.upsert_machine(cid, {"dead": False, "fail_count": 0})
+                # 🔴 CLEAR dead_reason TOO. Leaving it behind produced 11 live rows
+                # that literally read dead_reason="duplicate of <cid>" (2026-09-08) --
+                # the row asserting its own duplicate origin while sitting in the queue.
+                store.upsert_machine(cid, {"dead": False, "fail_count": 0, "dead_reason": ""})
         elif v == "uncertain" and not args.dry_run:
             # our failure, not the employer's — give it a clean slate to re-check
             store.upsert_machine(cid, {"fail_count": 0})

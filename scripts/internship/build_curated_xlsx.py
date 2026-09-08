@@ -456,13 +456,35 @@ REVIEW_WIDTHS = [2, 12, 18, 38, 8, 18, 12, 6, 30, 8, 36]
 
 
 def _review_status(rec) -> str:
-    """Display status on the Reviewed sheet: your Skip/Not-a-Fit if set, else 'Closed'
-    for a posting that went stale while you had a note on it. 'To Apply'/blank is not a
-    real status, so a dead row carrying it shows as Closed."""
+    """Display status on the Reviewed sheet: ONLY what he actually set.
+
+    🔴 THIS USED TO FABRICATE. It returned the literal string "Closed" for any dead row
+    with no real status — and `read_back_human()` reads the Status column of EVERY tab,
+    Reviewed included, straight back into `human["status"]`. So a transient scrape failure
+    was rendered as "Closed", read back as though he had typed it, and became a PERMANENT
+    human decision that never lifted when the posting came back. `Closed` is in
+    REVIEWED_STATUSES, so the row was routed off the queue forever.
+
+    Measured 2026-09-08 before the fix: 296 rows carried status "Closed". Only 17 had a
+    note (his real calls — "Missed deadline", "dead link, verified by Sparsh"). The other
+    279 had no note and no applied_date, the signature of a machine write; 96 of those had
+    `machine.dead == False`, i.e. the scraper knew they were alive while the fabricated
+    status hid them. Nine were tier-S BRAND-BOARD rows harvested THAT MORNING with
+    fail_count=0 — four Palantir and five SpaceX reqs, live on the employers' own boards,
+    sitting on Reviewed labelled "Closed".
+
+    The rule this encodes: NEVER render a machine-derived value into a column that is read
+    back as a human field. Closure now shows in the `Why` column (see `_review_closed`),
+    which is display-only and never round-trips."""
     status = (rec["human"].get("status") or "").strip()
-    if status and status.lower() != "to apply":
-        return status
-    return "Closed" if rec["machine"].get("dead") else status
+    return status if status.lower() != "to apply" else ""
+
+
+def _review_closed(rec) -> bool:
+    """True when a row is on Reviewed because the posting went stale rather than because
+    he judged it. Drives a display marker only — never a Status value."""
+    status = (rec["human"].get("status") or "").strip().lower()
+    return bool(rec["machine"].get("dead")) and status in ("", "to apply")
 
 
 def _build_reviewed(ws, rows):
@@ -478,6 +500,7 @@ def _build_reviewed(ws, rows):
         # Skips first, then Closed (stale); alpha by company within each.
         ds = _review_status(rec)
         return (0 if ds in ("Skip", "Not a Fit") else 1, rec["machine"].get("company", ""))
+
     rows = sorted(rows, key=sort_key)
     for i, rec in enumerate(rows):
         r = first + i
@@ -487,7 +510,10 @@ def _build_reviewed(ws, rows):
         fit_disp = "❌" if m.get("fit_disqualifier") not in (None, "", "none") else fit
         vals = [rec["_cid"], disp, m.get("company", ""), m.get("role", ""),
                 m.get("lane", ""), m.get("location", ""), m.get("cycle", ""),
-                fit_disp, m.get("fit_why", ""), ("Apply ↗" if m.get("url") else ""),
+                fit_disp,
+                (("❌ posting went stale — " + (m.get("fit_why") or "")).strip(" —")
+                 if _review_closed(rec) else m.get("fit_why", "")),
+                ("Apply ↗" if m.get("url") else ""),
                 h.get("notes", "")]
         for j, v in enumerate(vals, start=1):
             c = ws.cell(row=r, column=j, value=v)

@@ -437,6 +437,93 @@ def _collapse_duplicates(store) -> int:
     return collapsed
 
 
+# Skip / Not a Fit are judgements about the ROLE and transfer to a twin of the same
+# requisition. "Closed" is a claim about availability and does NOT transfer -- see the
+# docstring in _collapse_shadowed_twins for the measurement that forced this split.
+JUDGEMENT_STATUSES = {"skip", "not a fit"}
+
+
+def _collapse_shadowed_twins(store) -> int:
+    """🔴 A RESOLVED REQUISITION MUST NOT REAPPEAR AS AN UNDECIDED ROW.
+
+    `_collapse_duplicates` above deliberately skips any row whose status is in
+    REVIEWED_STATUSES, so a hand-skipped twin stops tripping its "different notes"
+    warning forever. The side effect, found 2026-09-08: because the DECIDED row is
+    excluded from grouping, its untouched twin under a different URL path has no partner
+    to collapse against and survives in the queue looking undecided.
+
+    Six requisitions were in that state at once, and all three of that day's Autodesk
+    'Not a Fit' calls were among them -- decided on `/uni/job/...`, still live on
+    `/Ext/job/...` under a different harvested title. Also Intel JR0286836 (Master's-only,
+    Not a Fit, twin alive with a blank status), Dropbox 8106224, and NVIDIA JR2022295
+    whose scored twin reads `deadline-passed August 9, 2026` while the unscored twin sat
+    in the queue at the TOP of the board.
+
+    This is a separate pass on purpose: it can only ever mark an UNTOUCHED row dead, so
+    it cannot change any decision _collapse_duplicates already makes.
+
+    Safety rules, all enforced below:
+      * the anchor must carry a JUDGEMENT status -- Skip or Not a Fit ONLY.
+        🔴 `Closed` is deliberately excluded and that is not a detail. `Closed` is a
+        claim about AVAILABILITY, not about the role, and it goes stale: on the first
+        dry run of this function 15 rows matched, and hitting every employer's own ATS
+        showed victim AND anchor OPEN in all 15 -- while 10 of the anchors read `Closed`.
+        Collapsing into those would have hidden live jobs, among them a Bank of Montreal
+        Full Stack co-op for WINTER 2027 in Toronto, his scarcest cycle in his home city.
+        Skip and Not a Fit are judgements about the ROLE, so they transfer to any twin of
+        the same requisition no matter which URL it arrived on. Availability does not.
+      * the victim must be UNTOUCHED -- no status, no notes, no priority (`_touched`)
+      * grouping is by requisition id, or by title AND a NON-EMPTY location (stricter
+        than the main pass, whose empty-location bucket would over-match aggregator rows)
+    """
+    groups: dict[tuple, list[str]] = {}
+    for cid, e in store.postings.items():
+        m = e.get("machine") or {}
+        if m.get("dead") or not m.get("company") or not m.get("role"):
+            continue
+        co = normalize_company_name(m["company"])
+        rid = _norm_rid(m)
+        if rid:
+            groups.setdefault(("rid", co, rid), []).append(cid)
+        # 🔴 NO TITLE KEY HERE, deliberately, unlike _collapse_duplicates above.
+        # Transferring a SKIP / NOT-A-FIT is a much stronger act than collapsing a URL
+        # variant, so it must require a positively matched requisition id. 45% of live
+        # rows (349 of 775, measured 2026-09-08) carry NO req id -- Simplify URLs are
+        # UUIDs that carry none -- and the "two known rids = two requisitions" guard has
+        # a hole: one known rid plus N rid-less rows passes it. Bank of Montreal posts
+        # TWO different Winter-2027 Toronto reqs (r260026093 and r260026089) under an
+        # identical company/role/location; one Simplify re-pickup blanks a rid, the guard
+        # passes, and marking one Not a Fit would have killed the other. Measured: the
+        # rid key alone produces the IDENTICAL 5 collapses, so the title key buys nothing
+        # and risks exactly the loss this whole pass exists to prevent.
+
+    collapsed = 0
+    for key, cids in groups.items():
+        if len(cids) < 2:
+            continue
+        live = [c for c in cids if not store.postings[c]["machine"].get("dead")]
+        anchors = [c for c in live
+                   if ((store.postings[c].get("human") or {}).get("status") or "")
+                   .strip().lower() in JUDGEMENT_STATUSES]
+        victims = [c for c in live if not _touched(store.postings[c].get("human") or {})]
+        if not anchors or not victims:
+            continue
+        keep = max(anchors, key=lambda c: _dup_quality(store.postings[c]))
+        st = ((store.postings[keep].get("human") or {}).get("status") or "").strip()
+        for c in victims:
+            mm = store.postings[c]["machine"]
+            mm["dead"] = True
+            mm["dead_reason"] = f"duplicate of {keep} (already {st})"
+            collapsed += 1
+            # A victim is untouched and note-less, so classify_row drops it from ALL
+            # three tabs -- a false kill would otherwise leave no trace anywhere. Log it.
+            km = store.postings[keep]["machine"]
+            print(f"[refresh] shadowed twin: {mm.get('company')} | "
+                  f"{str(mm.get('role'))[:44]} -> already '{st}' as "
+                  f"{str(km.get('role'))[:44]}", file=sys.stderr)
+    return collapsed
+
+
 async def refresh(notify: bool = False) -> int:
     # An open-in-Excel lock no longer aborts the whole refresh — we still harvest, score,
     # and update the store JSON, and only DEFER the xlsx render (step 5). That keeps the
@@ -655,6 +742,13 @@ async def refresh(notify: bool = False) -> int:
         elif cid in harvested:
             m["fail_count"] = 0
             m["dead"] = False               # reappeared -> it was never dead
+            # 🔴 AND CLEAR THE REASON. Leaving it made `dead_reason` a permanent,
+            # unclearable brand: a row collapsed as a duplicate, then re-harvested here,
+            # kept the string; if its twin later vanished and this row rolled off the
+            # aggregator, the strike rule killed it again and revive_dead refused to
+            # even CHECK it, forever. Ten rows were already in that state on 2026-09-08,
+            # two of them Bank of Montreal Winter-2027 Toronto co-ops.
+            m["dead_reason"] = ""
         # refresh age + re-score from stored posted_date
         if m.get("company") and m.get("role"):
             age = brand_first_source._age_from_date(m.get("posted_date", ""))
@@ -674,6 +768,10 @@ async def refresh(notify: bool = False) -> int:
     # 🔴 A row he has TOUCHED (any status beyond To Apply, a note, a priority) is never
     # the one that dies; if both twins are touched, both stay and it is logged.
     collapsed = _collapse_duplicates(store)
+    shadowed = _collapse_shadowed_twins(store)
+    if shadowed:
+        print(f"[refresh] collapsed {shadowed} rows that duplicate a requisition he has "
+              f"already Skipped / marked Not a Fit", file=sys.stderr)
     if collapsed:
         print(f"[refresh] collapsed {collapsed} URL-variant duplicate rows "
               f"(kept the touched/brand/fuller twin; dead_reason names it)", file=sys.stderr)

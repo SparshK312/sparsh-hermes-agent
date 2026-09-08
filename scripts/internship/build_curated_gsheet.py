@@ -49,6 +49,7 @@ from build_curated_xlsx import (  # single source of truth for routing + ranking
     _fit_cells,
     _queue_sort_key,
     _review_status,
+    _review_closed,
     classify_row,
 )
 
@@ -435,7 +436,13 @@ def _row_values(tab: str, rec: dict) -> list:
         common.update({"Applied": h.get("applied_date", ""),
                        "Source / Referral": m.get("source", "")})
     elif tab == TAB_REVIEWED:
+        # Status carries ONLY what he set. A posting that merely went stale shows that in
+        # Why, never in Status — Status on this tab is read back as a human field, so a
+        # machine-derived value written here becomes a permanent fake decision. See the
+        # docstring on _review_status for the 2026-09-08 measurement that forced this.
         common["Status"] = _review_status(rec)
+        if _review_closed(rec):
+            common["Why"] = ("❌ posting went stale — " + (why_disp or "")).strip(" —")
     return [common.get(hname, "") for hname in _HEADERS[tab]]
 
 
