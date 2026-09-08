@@ -576,22 +576,52 @@ def _default_prefilter(title: str, location: str = "") -> bool:
     return default_intern_filter(title)
 
 
+# 🔴 Boards whose fetch RAISED this run (2026-09-08). fetch_board() used to
+# swallow every exception and return [], which is INDISTINGUISHABLE from "this
+# board genuinely has no matching roles". Two consequences, both observed:
+#   1. no retry — one transient ReadTimeout cost the whole board for that run
+#      (measured: Dropbox on one probe, NVIDIA on the next, both fit-80+ boards);
+#   2. brand_first_source.FAILED_BOARDS stayed EMPTY, so those postings were NOT
+#      exempt from the stale-strike and could be marked dead while still live.
+# The module docstring already warned about this shape ("a live 2027 Software
+# Engineer Intern req was confirmed false-dead because of it") but nothing
+# actually recorded the failure. This set does; brand_first_source merges it.
+BOARD_FETCH_FAILURES: set[str] = set()
+
+
 async def fetch_board(client, board: dict, prefilter=None) -> list[JobRecord]:
     """Pull all postings for one company board. Workday/SmartRecruiters accept a
     (title, location) prefilter applied at the LISTING level — before the expensive
-    per-job detail calls — to cap how many JDs we fetch (defaults to interns only)."""
+    per-job detail calls — to cap how many JDs we fetch (defaults to interns only).
+
+    Retries ONCE on a transient network error before giving up: a board is ~1 of 60
+    and a lost one costs every posting it holds, so one extra attempt is cheap
+    insurance. A board that fails twice is recorded in BOARD_FETCH_FAILURES."""
     ats = board.get("ats_type")
     fetcher = _BOARD_FETCHERS.get(ats)
     if not fetcher:
         return []
-    try:
+
+    async def _attempt():
         if ats in ("workday", "smartrecruiters"):
             return await fetcher(client, board, prefilter or _default_prefilter)
         return await fetcher(client, board)
-    except Exception as e:  # noqa: BLE001
-        print(f"[ats_router] board {board.get('name')} ({ats}) failed: "
-              f"{type(e).__name__}: {e}", file=sys.stderr)
-        return []
+
+    for attempt in (1, 2):
+        try:
+            return await _attempt()
+        except Exception as e:  # noqa: BLE001
+            transient = isinstance(e, (httpx.TimeoutException, httpx.TransportError))
+            if attempt == 1 and transient:
+                print(f"[ats_router] board {board.get('name')} ({ats}) "
+                      f"{type(e).__name__} — retrying once", file=sys.stderr)
+                await asyncio.sleep(2)
+                continue
+            print(f"[ats_router] board {board.get('name')} ({ats}) failed: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+            BOARD_FETCH_FAILURES.add(board.get("name") or "?")
+            return []
+    return []
 
 
 async def fetch_jd_record(client, url: str) -> JobRecord:

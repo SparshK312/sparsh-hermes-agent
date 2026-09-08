@@ -188,11 +188,16 @@ async def collect(client=None) -> list[dict]:
     if own_client:
         client = A.make_client()
     FAILED_BOARDS.clear()          # per-run; curate.py reads it right after
+    getattr(A, "BOARD_FETCH_FAILURES", set()).clear()
     try:
         results = await asyncio.gather(*[_one_board(client, b) for b in boards()])
     finally:
         if own_client:
             await client.aclose()
+    # Boards that failed INSIDE ats_router.fetch_board never raised up to
+    # _one_board (it swallows and returns []), so they were invisible here and
+    # their postings were not exempt from the stale-strike. Merge them in.
+    FAILED_BOARDS.update(getattr(A, "BOARD_FETCH_FAILURES", set()))
     if FAILED_BOARDS:
         print(f"[brand-first] {len(FAILED_BOARDS)} board(s) failed this run — their "
               f"postings are EXEMPT from the stale-check: "
@@ -209,11 +214,28 @@ async def collect(client=None) -> list[dict]:
             rec["canonical_id"] = cid
             deduped.append(rec)
 
-    # soft dedup: the same role posted to multiple locations (different URLs ->
-    # different canonical_id) collapses to one — keep the freshest (lowest age).
+    # soft dedup: collapse TRUE duplicates of one posting that reached us under
+    # two URLs — keep the freshest (lowest age).
+    #
+    # 🔴 LOCATION IS PART OF THE KEY (added 2026-09-08). It was (company, role)
+    # only, which silently destroyed genuinely DIFFERENT reqs that happen to share
+    # a title. Measured on a live run: 22 groups, 39 roles lost. The worst were
+    #   Palantir  — the same title posted separately in New York / Palo Alto /
+    #               Seattle / D.C. / London / Denver / Honolulu / Seoul, each its
+    #               own Lever req with its own application form. The board showed
+    #               ONE, chosen by whichever was freshest, and NEW YORK (his target
+    #               city) was routinely the one dropped.
+    #   Datadog   — "Product Management Intern" in New York AND Paris; the Paris
+    #               req won a live probe and the New York one, which he had
+    #               applied to, was the casualty.
+    #   SpaceX    — "New Graduate Engineer, Software Security" across 4 sites.
+    #   Perplexity— Search MLE in London AND Belgrade.
+    # A single req that genuinely spans cities arrives as ONE record with a
+    # multi-city location string, so it still collapses correctly.
     best: dict[tuple, dict] = {}
     for rec in deduped:
-        key = (rec["company"].strip().lower(), rec["role"].strip().lower())
+        key = (rec["company"].strip().lower(), rec["role"].strip().lower(),
+               (rec.get("location") or "").strip().lower())
         cur = best.get(key)
         # `or 999` is WRONG: age_days == 0 is falsy, so a role posted TODAY was
         # scored 999 and lost "keep the freshest" to an older duplicate.

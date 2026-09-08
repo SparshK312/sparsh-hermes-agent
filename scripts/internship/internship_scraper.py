@@ -83,6 +83,22 @@ TRACKING_PARAMS = {
     "gh_jid",  # SimplifyJobs / Greenhouse
 }
 
+# 🔴 gh_jid is a SPECIAL CASE and canonical_id() re-reads it (2026-09-08).
+# It is stripped from the DISPLAY url above because aggregators bolt it onto a
+# posting that already carries its id in the path. But for an employer whose
+# careers site serves EVERY posting from ONE path, gh_jid is the only identity
+# there is:
+#     careers.withwaymo.com/jobs?gh_jid=8174099
+#     careers.withwaymo.com/jobs?gh_jid=8174504   -> both became
+#     careers.withwaymo.com/jobs                     THE SAME canonical_id
+# All four open Waymo internships collapsed onto one row, an arbitrary one
+# survived `if cid in seen: continue`, and the BS-eligible reqs were the ones
+# that lost. Measured against the live store, NINE employers were collapsed to a
+# single row for their entire careers site -- Stripe, Hudson River Trading,
+# Databricks, Nuro, Waymo, Jump Trading, Coveo, Global Relay, ProCogia -- three
+# of them already applied to. See canonical_id() for the rule.
+_PATH_HAS_ID_RE = re.compile(r"/\d{4,}")
+
 
 def canonicalize_url(url: str) -> str:
     """Strip tracking params, lowercase host, normalize trailing slash."""
@@ -128,6 +144,18 @@ def canonical_id(url: str) -> str:
         # `embed` is a rendering flag, never part of a posting's identity.
         query = "&".join(kv for kv in query.split("&")
                          if not kv.split("=", 1)[0].lower() == "embed")
+
+    # Re-attach gh_jid when, and ONLY when, the path cannot identify the posting
+    # on its own. If the path already carries a numeric id (boards.greenhouse.io/
+    # neuralink/jobs/6594422003) the query is redundant and stays stripped, so
+    # every id already in the store keeps its current value. If the path has no
+    # id (careers.withwaymo.com/jobs) gh_jid IS the identity and must survive.
+    if not _PATH_HAS_ID_RE.search(path):
+        for kv in urlparse(url).query.split("&"):
+            k, _, v = kv.partition("=")
+            if k.lower() == "gh_jid" and v:
+                query = f"{query}&gh_jid={v}" if query else f"gh_jid={v}"
+                break
 
     base = f"{parsed.netloc}{path}"
     if query:
