@@ -111,6 +111,20 @@ BOARDS = [
     {"name": "Nuro", "tier": "B", "ats_type": "greenhouse", "token": "nuro"},
     {"name": "Hudson River Trading", "tier": "A", "ats_type": "greenhouse", "token": "wehrtyou"},
     {"name": "Samsara", "tier": "B", "ats_type": "greenhouse", "token": "samsara"},
+
+    # ── ADDED 2026-09-07 after a sourcing audit prompted by Sparsh asking what was
+    #    open at Apple / Waymo / Neuralink / Wealthsimple. Both tokens validated
+    #    live against the ATS API before being added. ─────────────────────────
+    # Neuralink had NO board entry at all, so the queue held ZERO Neuralink rows
+    # while 20 internships were open, 7 of them SWE/ML. Two of those (BCI
+    # Applications, Internal Apps) had résumé variants staged since Jul 2026 and
+    # were never fired. Verified live: token "neuralink" returns 78 postings.
+    {"name": "Neuralink", "tier": "A", "ats_type": "greenhouse", "token": "neuralink"},
+    # Wealthsimple reached the queue only via the wide net, which is why a fit-85
+    # Winter 2027 Toronto intern req sat on one thinly-sourced row. Winter is the
+    # scarce cycle he is free for from Dec 18. Verified live: org "wealthsimple"
+    # returns 47 postings.
+    {"name": "Wealthsimple", "tier": "B", "ats_type": "ashby", "org": "wealthsimple"},
     {"name": "Affirm", "tier": "B", "ats_type": "greenhouse", "token": "affirm"},
 
     # ── manual / custom (no public API) — click-through, ranked by brand ────
