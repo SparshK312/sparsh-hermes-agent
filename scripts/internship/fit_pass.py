@@ -56,7 +56,7 @@ JD_HEAD = 2200
 JD_TAIL = 1300
 CHUNK_SIZE = 5                      # postings per LLM call (smaller = steadier recall, no dropped items)
 MAX_LLM_PER_RUN = 120              # hard cost guard (first run is ~94)
-PROMPT_VERSION = "fit-v3.6"        # v3.6: graduation date + grad-date gate (was guessed)
+PROMPT_VERSION = "fit-v3.8"        # v3.8: firmware-embedded DISQUALIFIER + Fall-2026 example fix + clearance/degree gates
 
 # ── Targeted invalidation ─────────────────────────────────────────────────────
 # A PROMPT_VERSION bump used to re-score EVERY cached row: 466 live rows (~$2.40, ~20
@@ -72,10 +72,28 @@ def _ver(v: str) -> tuple:
 
 _GRAD_RE = re.compile(r"graduat|class of|final intern|202[78]|new.?grad|semester|term remaining", re.I)
 
+# v3.7 (2026-09-07) touches four things, so its predicate is the union of their language.
+# Firmware/embedded is a new SCORE penalty; the Fall-2026 worked example was corrected
+# (it contradicted rule 4 and kept Fall-2026 reqs scoring ~88); clearance now covers
+# "able to obtain"; phd-required now covers a required COMPLETED bachelor's.
+_V37_RE = re.compile(
+    r"firmware|embedded|bare.?metal|rtos|microcontroller|device driver|fpga|verilog|vhdl|"
+    r"\basic\b|\bic\b|pcb|silicon|hardware|board bring.?up|signal integrity|"
+    r"fall 2026|autumn 2026|sep.{0,4}dec 2026|"
+    r"clearance|secret|"
+    r"completed (bs|b\.s\.|bachelor)",
+    re.I,
+)
+
 _RESCORE_IF = {
     # v3.6 changed only what the model knows about his graduation date.
     "fit-v3.6": lambda m: bool(_GRAD_RE.search(" ".join(str(m.get(k) or "") for k in
                                               ("fit_why", "fit_jd_summary", "fit_disqualifier")))),
+    # v3.7: only rows whose cached reasoning mentions firmware/hardware, Fall 2026,
+    # clearance, or a completed degree could move. Everything else keeps its verdict,
+    # per his standing instruction not to re-score the whole board on a bump.
+    "fit-v3.8": lambda m: bool(_V37_RE.search(" ".join(str(m.get(k) or "") for k in
+                                              ("fit_why", "fit_jd_summary", "fit_disqualifier", "role")))),
 }
 
 
@@ -99,7 +117,15 @@ def _all_versions_between(lo: tuple, hi: tuple) -> list:
 
 # Every version that ever shipped, so a row cached on v3.3 knows it missed v3.4 and v3.5
 # (blanket) even though only v3.6 has a predicate.
-_KNOWN_VERSIONS = [(3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6)]        # bump to force re-score on prompt changes (part of cache key)
+_KNOWN_VERSIONS = [(3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7), (3, 8)]   # bump to force re-score on prompt changes (part of cache key)
+#                                    v3.8 (2026-09-07): firmware/embedded is a DISQUALIFIER
+#                                          ("firmware-embedded") so those rows leave Apply Now
+#                                          entirely. Shipped first as a <=35 score band, which
+#                                          was not enough -- a low score still sits in the queue; the Fall-2026 worked example was CORRECTED
+#                                          (it returned none/88 and contradicted rule 4, which
+#                                          is how Cloudflare Austin scored 72 on a Fall-2026
+#                                          term); clearance now covers "must be able to obtain";
+#                                          phd-required now covers a required COMPLETED BS.
 #                                    v3.5 (2026-09-05): PRODUCT MANAGEMENT is a first-class
 #                                          target role (was absent from the 85-100 band, so
 #                                          on-target PM reqs scored ~62); a non-US/CA location
@@ -121,7 +147,13 @@ ENV_FILE = Path.home() / ".hermes" / ".env"
 OPENAI_URL = "https://openrouter.ai/api/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 VALID_DQ = {"none", "wrong-cycle", "phd-required", "citizenship",
-            "clearance", "long-placement", "deadline-passed", "other"}
+            "clearance", "long-placement", "deadline-passed", "other",
+            # Added 2026-09-07. The ONLY disqualifier that is a PREFERENCE rather than an
+            # eligibility gate. Sparsh: "if its firmware or embedded specifically, we can
+            # just remove it from the list, it doesn't have to be under Apply Now at all."
+            # A score penalty was tried first and was not enough -- a low score still
+            # leaves the row in the queue, and he wants them gone.
+            "firmware-embedded"}
 # Non-reasoning models that accept temperature=0. MUST list the OpenRouter-prefixed
 # slug too: FIT_MODEL moved to "openai/gpt-5.4-mini" in the OpenRouter migration, and
 # an unprefixed-only set silently made is_reasoning True — dropping `temperature: 0`
@@ -259,7 +291,7 @@ def _build_sys_prompt() -> str:
         return ("You screen internship job descriptions for " + load_profile() + " For each "
                 "posting (with its jd) return JSON {\"items\":[{\"id\":str,\"fit_score\":int 0-100,"
                 "\"fit_why\":str,\"disqualifier\":\"none|wrong-cycle|phd-required|citizenship|"
-                "clearance|long-placement|deadline-passed|other\",\"jd_summary\":str}]}. Flag ONLY "
+                "clearance|long-placement|deadline-passed|firmware-embedded|other\",\"jd_summary\":str}]}. Flag ONLY "
                 "clearly-stated disqualifiers; the applicant is US+Canada work-authorized (green "
                 "card, no sponsorship) so work-authorization requirements are NOT disqualifiers. "
                 "When unsure, use none. Include every id.")
