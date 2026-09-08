@@ -79,6 +79,35 @@ if [ "$DO_PUSH" = "true" ] && [ "$DO_SYNC" = "true" ]; then
   echo
 fi
 
+# ===== Step 0b: Board invariants — MUST PASS OR THE DEPLOY ABORTS =====
+# Added 2026-09-08. Five defects shipped in one afternoon, every one already covered by a
+# prose rule in the vault's CLAUDE.md -- one of those rules written that same morning and
+# violated that same afternoon. Prose did not hold; a gate that blocks the deploy does.
+# The suite is pure-function, runs in under a second, and is mutation-tested: reintroduce
+# any of the five defects and it goes red.
+# ⚠️ scripts/internship/test_curated_roundtrip.py is the cautionary tale -- it existed for
+# months, was wired into NOTHING, and silently passed for ~8 weeks against an empty store.
+# A test nobody runs is not a check, it is a comment.
+INV="$REPO_ROOT/scripts/internship/test_board_invariants.py"
+if [ -f "$INV" ]; then
+  echo "[0b/3] Board invariants..."
+  INV_PY="${INV_PY:-/Users/sparshk/Documents/School Vault - UofT/.venv/bin/python}"
+  [ -x "$INV_PY" ] || INV_PY="$(command -v python3)"
+  # 🔴 NOT `cmd | tail`: a pipeline's exit status is the LAST command's, so `| tail`
+  # always succeeds and the gate silently passes. That exact mistake was made writing
+  # this gate. Capture, then test the real status.
+  INV_OUT="$("$INV_PY" "$INV" 2>&1)"; INV_RC=$?
+  echo "$INV_OUT" | tail -3
+  if [ "$INV_RC" -ne 0 ]; then
+    echo "  ❌ BOARD INVARIANTS FAILED (exit $INV_RC) — deploy aborted."
+    echo "     Fix the defect. Do not skip this; every one of these tests exists because"
+    echo "     the defect it covers already shipped once."
+    exit 1
+  fi
+  echo "  ✓ invariants hold"
+  echo
+fi
+
 # ===== Step 1: Push (Mac → GitHub) =====
 if [ "$DO_PUSH" = "true" ]; then
   echo "[1/3] Pushing local changes to GitHub..."
