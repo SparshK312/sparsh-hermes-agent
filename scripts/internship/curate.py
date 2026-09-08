@@ -613,10 +613,26 @@ async def refresh(notify: bool = False) -> int:
         is_wide = src.startswith("wide:")
         nn = normalize_company_name(m.get("company", ""))
 
+        # (e) 🔴 A ROW HE HAS ACTED ON IS NEVER AUTO-STRUCK (added 2026-09-08).
+        # Once he has applied, the posting disappearing from the board carries NO
+        # information about his application — reqs are routinely pulled the moment
+        # they stop accepting candidates, which is often right after he applies.
+        # STALE_STRIKES is 2, so two unharvested runs (ONE DAY at the normal 2/day
+        # cadence) was enough to mark a live application dead. Observed 2026-09-08:
+        # Palantir, Databricks, PayPal, Perplexity and Stripe — all with status
+        # 'Applied' — were struck together. `Rejected`/`Closed`/`Not a Fit` are
+        # deliberately NOT exempt: those are already-settled rows and letting them
+        # go dead is correct.
+        human_status = (rec.get("human", {}).get("status") or "").strip()
+        in_pipeline = human_status in {
+            "Applied", "OA", "Phone Screen", "Onsite", "Offer", "Networking", "On Hold",
+        }
+
         exempt = (
             nn in failed_boards            # (a) its board errored this run
             or nn in manual_boards         # (b) no API exists to confirm death
             or (is_brand and not lane1_ok)  # (d) lane-1 partial collapse
+            or in_pipeline                 # (e) he has acted on it
         )
         strikes_needed = WIDE_STALE_STRIKES if is_wide else STALE_STRIKES
 
