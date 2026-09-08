@@ -72,6 +72,11 @@ TIER_B = {
     "campbell",
     "rippling", "1password", "cerebras", "autodesk", "intel",
     "unity", "bosch", "cibc", "ciena", "rivian", "rivian vw", "dolby",
+    # Scotiabank was the ONLY Big Five Canadian bank missing here while RBC, BMO
+    # and CIBC were all present, so its Velocity co-ops scored tier C (the DEFAULT
+    # for any company absent from this table) and sorted to the bottom of the queue.
+    # Added 2026-09-08 with the six Winter-2027 Toronto Velocity reqs.
+    "scotiabank", "bank of nova scotia",
     "coveo", "kinaxis",
     # added Jun 20
     "sofi", "zoox", "capital one", "pinterest", "reddit",
