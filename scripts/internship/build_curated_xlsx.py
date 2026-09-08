@@ -484,6 +484,13 @@ def _review_closed(rec) -> bool:
     """True when a row is on Reviewed because the posting went stale rather than because
     he judged it. Drives a display marker only — never a Status value."""
     status = (rec["human"].get("status") or "").strip().lower()
+    # 🔴 A DISQUALIFIED ROW IS NOT A STALE ONE. Without this clause the marker fired on
+    # 190 of 190 rows it touched (audited 2026-09-08) and printed "posting went stale"
+    # AHEAD of the real reason -- "❌ posting went stale — ❌ phd-required — Requires a
+    # PhD". That is the same fabrication this file was just fixed for, moved into the
+    # Why column: a machine-invented reason asserted in front of the true one.
+    if (rec["machine"].get("fit_disqualifier") or "none") not in ("none", "", None):
+        return False
     return bool(rec["machine"].get("dead")) and status in ("", "to apply")
 
 

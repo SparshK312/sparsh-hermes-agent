@@ -376,12 +376,36 @@ def _group_by_company(rows: list[dict]) -> list[dict]:
     _queue_sort_key, so a company's position is set by its single best row -- Google,
     Microsoft and Amazon still sit at the top -- and within a company the rows keep
     their own ranking. Same ranking logic, blocks instead of stripes.
+
+    🔴 GROUPING RUNS AFTER THE SORT, SO IT CAN UNDO IT. Found 2026-09-08 by auditing the
+    RENDERED sheet rather than the sort key: a block takes the position of its best row,
+    so ONE row can drag a whole company. Two guarantees were being defeated, and both
+    passed at the time only by accident of the data (Amazon was the sole company with an
+    On Hold row and had no other queue rows; 0 of 276 rows carried a priority):
+      * an `On Hold` row at a company that ALSO has live rows was pulled UP into that
+        block -- simulated at position 84 of 276, when he asked for parked rows at the
+        BOTTOM ("we can keep the 2 Amazon ones that are on hold at the bottom");
+      * a P0 on one tier-C row lifted all 6 of that company's tier-C rows above every
+        tier-S row.
+    So group WITHIN the sort's bands, never across them: rows that must sink (parked or
+    disqualified) are grouped separately and appended after everything else. Company
+    blocks and his 2026-09-05 request survive; the band structure survives too.
     """
-    groups: dict[str, list[dict]] = {}
-    for r in rows:
-        co = (r["machine"].get("company") or "?").strip().lower()
-        groups.setdefault(co, []).append(r)
-    return [r for block in groups.values() for r in block]
+    def sunk(r) -> bool:
+        h, m = r.get("human") or {}, r.get("machine") or {}
+        return ((h.get("status") or "").strip().lower() == "on hold"
+                or (m.get("fit_disqualifier") or "none") not in ("none", "", None))
+
+    def blocks(subset: list[dict]) -> list[dict]:
+        groups: dict[str, list[dict]] = {}
+        for r in subset:
+            co = (r["machine"].get("company") or "?").strip().lower()
+            groups.setdefault(co, []).append(r)
+        return [r for block in groups.values() for r in block]
+
+    # `rows` arrives sorted, so dict insertion order already ranks each block by its best
+    # row -- but only within a band, which is the part that was missing.
+    return blocks([r for r in rows if not sunk(r)]) + blocks([r for r in rows if sunk(r)])
 
 
 def _diversify(rows: list[dict]) -> list[dict]:

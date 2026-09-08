@@ -168,6 +168,61 @@ def test_brand_tier_collisions():
 
 
 # ── DEFECT 5 ─────────────────────────────────────────────────────────────────
+def test_grouping_cannot_undo_the_sort():
+    """DEFECT 6 (2026-09-08): _group_by_company runs AFTER the sort and a block takes the
+    position of its best row, so ONE row dragged a whole company. An On Hold row at a
+    company with live rows was pulled to position 84 of 276 instead of the bottom, and a
+    P0 on a tier-C row lifted all 6 of that company's C rows above every tier-S row.
+    Both passed at the time only by accident of the data. This is the surface HE sees;
+    the sort key alone is not the guarantee."""
+    print("6. company grouping never breaks a sort band")
+    from build_curated_gsheet import _group_by_company
+
+    def row(co, tier, hot=50, status="", prio="", dq="none"):
+        return {"machine": {"company": co, "tier": tier, "hotness": hot,
+                            "fit_disqualifier": dq},
+                "human": {"status": status, "priority_override": prio}}
+
+    # an On Hold row at a company that ALSO has live rows must still sink
+    rows = [row("Acme", "S"), row("Acme", "S", status="On Hold"), row("Zeta", "C")]
+    out = _group_by_company(sorted(rows, key=_queue_sort_key))
+    check("On Hold sinks below another company's C row",
+          out[-1]["human"]["status"], "On Hold")
+
+    # A P0 DOES lift the whole company block above a tier-S company, and that is
+    # INTENDED, not a defect -- Sparsh, 2026-09-05: "if they're the same company, they
+    # should be put next to each other, EVEN IF THAT BREAKS THE SCORE." Company blocking
+    # and strict tier order genuinely conflict; his pin wins. Asserted so the behaviour
+    # is deliberate and nobody "fixes" it later by accident.
+    rows = [row("Big", "S"), row("Small", "C", prio="P0"), row("Small", "C")]
+    out = _group_by_company(sorted(rows, key=_queue_sort_key))
+    check("a P0 pins its company block to the top, siblings included",
+          [r["machine"]["company"] for r in out], ["Small", "Small", "Big"])
+
+    # a disqualified row must not be pulled up by its company block
+    rows = [row("Acme", "S"), row("Acme", "S", dq="phd-required"), row("Zeta", "B")]
+    out = _group_by_company(sorted(rows, key=_queue_sort_key))
+    check("disqualified row sinks below another company's B row",
+          out[-1]["machine"]["fit_disqualifier"], "phd-required")
+
+    # company blocking itself must still work (his 2026-09-05 request)
+    rows = [row("A", "S"), row("B", "A"), row("A", "B")]
+    out = _group_by_company(sorted(rows, key=_queue_sort_key))
+    check("same company stays contiguous",
+          [r["machine"]["company"] for r in out], ["A", "A", "B"])
+
+
+def test_staleness_marker_is_not_a_second_fabrication():
+    """DEFECT 7 (2026-09-08): the `posting went stale` marker fired on 190 of 190 rows it
+    touched, all of which were routed by a DISQUALIFIER, and printed ahead of the real
+    reason. A machine-invented reason asserted in front of the true one."""
+    print("7. staleness marker never overrides a real disqualifier")
+    d = rec(dead=True); d["machine"]["fit_disqualifier"] = "phd-required"
+    check("disqualified row is not called stale", _review_closed(d), False)
+    d2 = rec(dead=True); d2["machine"]["fit_disqualifier"] = "none"
+    check("genuinely stale row still marked", _review_closed(d2), True)
+
+
 def test_queue_sort():
     """His instruction: S at the top, then A, B, C — and the two Amazon On Hold reqs
     (both tier S) parked at the bottom regardless."""
@@ -185,7 +240,8 @@ def test_queue_sort():
 
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
-           test_queue_sort):
+           test_queue_sort, test_grouping_cannot_undo_the_sort,
+           test_staleness_marker_is_not_a_second_fabrication):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:
