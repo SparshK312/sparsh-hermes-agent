@@ -383,6 +383,18 @@ async def _board_workday(client, board, prefilter=None) -> list[JobRecord]:
     candidates: dict[str, dict] = {}
     terms = board.get("search_terms", WORKDAY_SEARCH_TERMS)
     for term in terms:
+        # 🔴 Workday returns `total` ONLY on the first page of a search; every
+        # later page reports total=0 (measured 2026-09-08: NVIDIA offset 0 -> 1011,
+        # offsets 20..800 -> 0; Intel offset 0 -> 356, 20..200 -> 0). The loop's
+        # exit test below compared against `data.get("total", 0)` from the CURRENT
+        # page, so on page 1 it evaluated `40 >= 0` and stopped -- every term, every
+        # tenant, capped at 40 postings. WORKDAY_MAX_PAGES = 5 was never the binding
+        # limit. Measured cost: NVIDIA (tier S) exposes 40 of 1,011 postings and
+        # 3 of its 14 US target intern reqs were unreachable, among them
+        # "AI Developer Technology Engineer Intern, AI - 2027" and
+        # "AI Developer Technology Intern, Robotics - 2027".
+        # Latch the first page's total and use it for the whole term.
+        term_total = None
         for page in range(WORKDAY_MAX_PAGES):
             body = {"appliedFacets": {}, "limit": WORKDAY_PAGE,
                     "offset": page * WORKDAY_PAGE, "searchText": term}
@@ -406,7 +418,9 @@ async def _board_workday(client, board, prefilter=None) -> list[JobRecord]:
                 ext = jp.get("externalPath", "")
                 if ext and ext not in candidates:
                     candidates[ext] = jp
-            if (page + 1) * WORKDAY_PAGE >= data.get("total", 0):
+            if term_total is None:
+                term_total = int(data.get("total", 0) or 0)
+            if term_total and (page + 1) * WORKDAY_PAGE >= term_total:
                 break
     candidates = list(candidates.values())
     # 2) GET detail for each candidate (this is where the real JD lives)
