@@ -541,9 +541,20 @@ async def refresh(notify: bool = False) -> int:
         b_age = b.get("age_days")
         return (999 if a_age is None else a_age) < (999 if b_age is None else b_age)
 
+    # 🔴 LOCATION IS PART OF THE KEY (2026-09-08). This loop keyed on
+    # (company, role) only, which silently re-collapsed exactly what the same fix
+    # in brand_first_source.collect() had just separated one step earlier — the
+    # lane-1 repair was nullified here and never reached the board. Measured on a
+    # live pull: 22 groups / 46 distinct reqs dropped in lane 1, plus 60 groups /
+    # 107 rows in lane 2, including two DIFFERENT Google "Software Engineer
+    # Intern - Multiple Teams" reqs and Palantir's per-city Lever reqs, where
+    # New York (his target) routinely lost to London on the _better() tiebreak.
+    # _better() ranks brand > JD length > age and never considers location, so
+    # which city survived was effectively arbitrary.
     best: dict[tuple, dict] = {}
     for r in lane1 + lane2:
-        key = (normalize_company_name(r["company"]), r["role"].strip().lower())
+        key = (normalize_company_name(r["company"]), r["role"].strip().lower(),
+               (r.get("location") or "").strip().lower())
         if key not in best or _better(r, best[key]):
             best[key] = r
 

@@ -130,7 +130,15 @@ _DATA_KEYWORDS = ("data engineer", "data scientist", "data science", "data analy
 _AIML_KEYWORDS = ("machine learning", "ml engineer", "ml intern", "ml/ai", "ai/ml",
                   "ai engineer", "ai developer", "ai agent", "ai intern", "applied ai",
                   "ai research", "deep learning", "computer vision", "nlp", "llm",
-                  "research engineer", "research intern", "ai scientist", "agentic")
+                  "research engineer", "research intern", "ai scientist", "agentic",
+                  # 🔴 Added 2026-09-08. role_lane() returning None is a hard REJECT,
+                  # and each of these was a real posting that never reached the board:
+                  #   "Applied Scientist Intern" — AMAZON'S FLAGSHIP ML INTERN TITLE
+                  #     (and Datadog's "Applied Science Intern").
+                  #   "Agent Development Intern" — Sierra, tier A. The list had
+                  #     "ai agent" and "agentic" but not "agent development".
+                  "applied scientist", "applied science", "agent development",
+                  "reinforcement learning", "perception")
 _SWE_KEYWORDS = ("software", "swe", "sde", "sdet", "backend", "back-end",
                  "back end", "frontend", "front-end", "front end", "full-stack",
                  "full stack", "fullstack", "platform engineer", "infrastructure",
@@ -138,7 +146,19 @@ _SWE_KEYWORDS = ("software", "swe", "sde", "sdet", "backend", "back-end",
                  "firmware", "developer", "perf engineer", "performance engineer",
                  "compiler", "kernel", "kubernetes", "cloud software", "runtime",
                  "distributed systems", "web developer", "mobile developer", "ios ",
-                 "android", "api ", "sdk")
+                 "android", "api ", "sdk",
+                 # 🔴 Added 2026-09-08, same audit. Each was rejected outright:
+                 #   Tesla "Mobile App Intern" — the very req he APPLIED to on
+                 #     2026-08-29; Tesla renamed it and the feed's new title
+                 #     stopped matching, so the live posting became invisible.
+                 #   Tesla "Robotaxi Simulation Engineer Intern"; Palantir
+                 #     "Information Security Engineer, Internship"; Palantir
+                 #     "Forward Deployed Engineer".
+                 #   "product engineer" — the role_lane docstring already SAYS
+                 #     "'Product Engineer' is SWE, not PM", but nothing
+                 #     implemented it, so it fell through to None.
+                 "product engineer", "security engineer", "mobile app",
+                 "simulation", "forward deployed", "autonomy")
 
 # AWS/cloud field-technical roles. Not SWE, and deliberately NOT scored as such.
 # They exist here for one reason: role_lane() returned None for every "Solutions

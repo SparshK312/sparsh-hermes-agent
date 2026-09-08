@@ -288,7 +288,7 @@ async def _board_greenhouse(client, board) -> list[JobRecord]:
     data, code = await _get_json(
         client, f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true")
     if not data:
-        return []
+        raise BoardFetchError(f"greenhouse {token}: HTTP {code}")
     out = []
     for j in data.get("jobs", []):
         out.append(JobRecord(
@@ -312,7 +312,7 @@ async def _board_ashby(client, board) -> list[JobRecord]:
     data, code = await _get_json(
         client, f"https://api.ashbyhq.com/posting-api/job-board/{org}?includeCompensation=true")
     if not data:
-        return []
+        raise BoardFetchError(f"ashby {org}: HTTP {code}")
     out = []
     for j in data.get("jobs", []):
         loc = j.get("location") or ""
@@ -347,7 +347,7 @@ async def _board_workable(client, board) -> list[JobRecord]:
     data, code = await _get_json(
         client, f"https://apply.workable.com/api/v1/widget/accounts/{account}?details=true")
     if not data:
-        return []
+        raise BoardFetchError(f"workable {account}: HTTP {code}")
     out = []
     for j in data.get("jobs", []):
         loc = j.get("location") or {}
@@ -388,6 +388,14 @@ async def _board_workday(client, board, prefilter=None) -> list[JobRecord]:
                     "offset": page * WORKDAY_PAGE, "searchText": term}
             data, code = await _post_json(client, list_url, body, headers)
             if not data:
+                # page 0 failing means the board never answered -> a real failure.
+                # A later page failing loses only the tail; log and keep what we have.
+                if page == 0 and term == terms[0] and not candidates:
+                    raise BoardFetchError(
+                        f"workday {tenant}/{site} term={term!r}: HTTP {code}")
+                print(f"[ats_router] workday {tenant}/{site} term={term!r}: page {page} "
+                      f"returned HTTP {code} — keeping the {len(candidates)} candidates "
+                      f"already collected, remainder LOST", file=sys.stderr)
                 break
             postings = data.get("jobPostings", [])
             if not postings:
@@ -477,11 +485,11 @@ async def _board_lever_impl(client, board) -> list[JobRecord]:
     r = await client.get(f"https://api.lever.co/v0/postings/{site}?mode=json",
                          headers=JSON_HEADERS, follow_redirects=True)
     if r.status_code != 200:
-        return []
+        raise BoardFetchError(f"lever {site}: HTTP {r.status_code}")
     try:
         jobs = r.json()
-    except Exception:  # noqa: BLE001
-        return []
+    except Exception as e:  # noqa: BLE001
+        raise BoardFetchError(f"lever {site}: unparseable body") from e
     out = []
     for j in jobs:
         cats = j.get("categories") or {}
@@ -589,6 +597,20 @@ def _default_prefilter(title: str, location: str = "") -> bool:
 BOARD_FETCH_FAILURES: set[str] = set()
 
 
+class BoardFetchError(RuntimeError):
+    """A board's LISTING call returned a non-200 / unparseable body.
+
+    Raised instead of returning [] so fetch_board() can retry it and record it.
+    🔴 Added 2026-09-08. Every board fetcher used to `return []` on a bad
+    response, which is INDISTINGUISHABLE from "this board has no matching
+    roles" -- several boards legitimately return zero interns. A 429, a 5xx or
+    a WAF 403 at 08:00 and again at 18:00 therefore marked every `To Apply`
+    posting from that company dead in a single day, and LANE1_MIN_HEALTHY
+    (25 of ~200) cannot notice one board going quiet. Verified by pointing a
+    fetcher at a 404 token: 0 records, BOARD_FETCH_FAILURES empty,
+    FAILED_BOARDS empty."""
+
+
 async def fetch_board(client, board: dict, prefilter=None) -> list[JobRecord]:
     """Pull all postings for one company board. Workday/SmartRecruiters accept a
     (title, location) prefilter applied at the LISTING level — before the expensive
@@ -611,7 +633,8 @@ async def fetch_board(client, board: dict, prefilter=None) -> list[JobRecord]:
         try:
             return await _attempt()
         except Exception as e:  # noqa: BLE001
-            transient = isinstance(e, (httpx.TimeoutException, httpx.TransportError))
+            transient = isinstance(
+                e, (httpx.TimeoutException, httpx.TransportError, BoardFetchError))
             if attempt == 1 and transient:
                 print(f"[ats_router] board {board.get('name')} ({ats}) "
                       f"{type(e).__name__} — retrying once", file=sys.stderr)

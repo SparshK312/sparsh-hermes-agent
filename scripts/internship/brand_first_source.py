@@ -75,16 +75,33 @@ def _cycle_label(title: str, jd: str) -> str:
     each, forward order wins over reversed. The whole JD is scanned, not just the
     head — brand boards frequently state the term in a 'Program dates' block far
     below the fold."""
+    # 🔴 A TARGET TERM ANYWHERE BEATS A NON-TARGET TERM EARLIER IN THE TEXT
+    # (2026-09-08). This used to return the FIRST season+year it saw and stop,
+    # which is wrong because eligibility boilerplate names a GRADUATION term
+    # before the role names its own term. Worked example that cost a real role:
+    #   Databricks "Software Engineering Intern (2027 Start) - Winter"
+    #     JD: "You will graduate in fall 2027 or spring 2028"   <- matched first
+    #         "This application is ONLY for Winter 2027 (January-April)"
+    #   -> labelled "Fall 2027", which is in PAST_PERIODS (he is back at school
+    #      then), so classify_period rejected a WINTER 2027 req -- the scarce
+    #      cycle he is actually free for. Reordering classify_period alone did NOT
+    #      fix it, because by then the label already said the wrong thing.
+    # Collect every candidate in order, then prefer one that is an actual target.
+    from internship_scraper import TARGET_PERIODS_LOWER
+    found: list[str] = []
     for src in (title or "", jd or ""):
         if not src:
             continue
-        m = _CYCLE_RE.search(src)
-        if m:
-            return f"{m.group(1).title()} {m.group(2)}"
-        m = _CYCLE_REV_RE.search(src)
-        if m:
-            return f"{m.group(2).title()} {m.group(1)}"
-    return ""
+        for m in _CYCLE_RE.finditer(src):
+            found.append(f"{m.group(1).title()} {m.group(2)}")
+        for m in _CYCLE_REV_RE.finditer(src):
+            found.append(f"{m.group(2).title()} {m.group(1)}")
+    if not found:
+        return ""
+    for f in found:                       # a target term wins wherever it appears
+        if f.lower() in TARGET_PERIODS_LOWER:
+            return f
+    return found[0]                       # otherwise keep the old first-match answer
 
 
 # ── Location policy ──────────────────────────────────────────────────────────

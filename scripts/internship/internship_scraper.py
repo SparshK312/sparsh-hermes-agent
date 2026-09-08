@@ -581,7 +581,28 @@ def classify_period(title: str, terms: str, source: str) -> tuple[str, str]:
     signal — off-season repos by definition only carry Fall/Winter/Spring."""
     bag = " ".join([title or "", terms or ""]).lower()
 
-    # Past periods → reject
+    # 🔴 A TARGET PERIOD BEATS A PAST ONE WHEN BOTH APPEAR (reordered 2026-09-08).
+    # This used to test PAST_PERIODS first and return on the first hit, so ONE
+    # stray out-of-window season string anywhere in the title or terms killed the
+    # posting even when it also named a target term. Postings say both routinely,
+    # because eligibility boilerplate names a graduation term while the role names
+    # its own term. Verified losses:
+    #   Databricks "Software Engineering Intern (2027 Start) - Winter" — the JD
+    #     reads "You will graduate in fall 2027 or spring 2028" BEFORE "This
+    #     application is ONLY for Winter 2027 (January-April)". Tier A, and
+    #     WINTER 2027 IS THE SCARCE CYCLE he is actually free for.
+    #   Tesla "Software Engineer Intern - Information Security - Spring 2027",
+    #     terms "Winter 2027, Fall 2027" -> rejected on 'fall 2027'.
+    #   Stripe "Software Engineer Intern - Summer or Winter", terms
+    #     "Summer 2026, Winter 2027" -> rejected on 'summer 2026'.
+    # 7 false rejects in lane 2 on a single measured run. Note "fall 2027" is in
+    # PAST_PERIODS because he is back at school then — which means ANY Summer-2027
+    # posting whose boilerplate says "returning in Fall 2027" was being thrown away.
+    target_hit = next((p for p in TARGET_PERIODS_LOWER if p in bag), None)
+    if target_hit:
+        return "match", f"explicit target period: '{target_hit}'"
+
+    # Past periods → reject (only when NO target period is present)
     for p in PAST_PERIODS_LOWER:
         if p in bag:
             return "reject", f"past period: '{p}'"
@@ -589,11 +610,6 @@ def classify_period(title: str, terms: str, source: str) -> tuple[str, str]:
     # 12-month / 16-month placements don't fit the 4-month rotation plan
     if re.search(r"\b(?:12|16)[\s-]?month", bag):
         return "reject", "12/16-month placement (incompatible with 4-month plan)"
-
-    # Explicit target period in title or terms
-    for p in TARGET_PERIODS_LOWER:
-        if p in bag:
-            return "match", f"explicit target period: '{p}'"
 
     # No explicit period — infer from source
     if source in OFFSEASON_SOURCE_NAMES:

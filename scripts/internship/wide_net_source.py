@@ -96,9 +96,16 @@ def _gather_postings() -> list:
         cid = p.canonical_id or canonical_id(p.url)
         if not cid or cid in seen:
             continue
+        # 🔴 LOCATION IN THE KEY (2026-09-08) — same defect as brand_first_source
+        # and curate.py's cross-lane pass. Measured live: 60 groups / 107
+        # distinct-URL rows dropped, including TWO different Google "Software
+        # Engineer Intern - Multiple Teams" reqs (job ids 94172495052972742 and
+        # 100648618540573382), Stripe SF/NYC vs Toronto, and TikTok "Product
+        # Manager Intern - PGC" LA vs San Jose.
         ct = (normalize_company_name(p.company or ""),
-              re.sub(r"\s+", " ", (p.title or "").lower()).strip())
-        if all(ct) and ct in seen_ct:
+              re.sub(r"\s+", " ", (p.title or "").lower()).strip(),
+              re.sub(r"\s+", " ", (p.location or "").lower()).strip())
+        if all(ct[:2]) and ct in seen_ct:
             continue
         seen.add(cid)
         if all(ct):
@@ -131,6 +138,25 @@ def _gather_postings() -> list:
 
 async def collect(client=None) -> list[dict]:
     cand = _gather_postings()
+    # 🔴 ANNOUNCE THE CAP (2026-09-08). This truncation was silent, and the amount
+    # it silently discarded was not small: a live measurement on 2026-09-08 found
+    # 705 candidates -> 545 CUT, every one of them tier C. KEEP_NONBRAND = True
+    # says "keep ALL relevant intern roles" and this line quietly negated it.
+    # Worse, _gather_postings() sorts by TIER ONLY and Python's sort is stable, so
+    # the survivors are whichever tier-C rows happened to come first in the source
+    # order -- every tier-C row from the later feeds is cut on EVERY run, the same
+    # ones each time, and then takes stale-strikes for never being harvested.
+    # CLAUDE.md: "Any limit must log when it is reached. A result set that exactly
+    # equals your cap is a red flag, never a coincidence."
+    if len(cand) > MAX_ENRICH:
+        from collections import Counter
+        dropped = cand[MAX_ENRICH:]
+        top = ", ".join(f"{c}×{n}" for c, n in
+                        Counter(p.company for p in dropped).most_common(8))
+        print(f"[wide-net] ⚠️ MAX_ENRICH cap HIT: {len(cand)} candidates -> keeping "
+              f"{MAX_ENRICH}, DROPPING {len(dropped)} (tier-sorted, so the cut is all "
+              f"low-tier and is the SAME rows every run). Most-dropped: {top}",
+              file=sys.stderr)
     cand = cand[:MAX_ENRICH]
     own = client is None
     if own:
