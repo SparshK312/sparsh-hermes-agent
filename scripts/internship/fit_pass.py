@@ -76,7 +76,7 @@ _GRAD_RE = re.compile(r"graduat|class of|final intern|202[78]|new.?grad|semester
 # Firmware/embedded is a new SCORE penalty; the Fall-2026 worked example was corrected
 # (it contradicted rule 4 and kept Fall-2026 reqs scoring ~88); clearance now covers
 # "able to obtain"; phd-required now covers a required COMPLETED bachelor's.
-_V37_RE = re.compile(
+_V38_RE = re.compile(
     r"firmware|embedded|bare.?metal|rtos|microcontroller|device driver|fpga|verilog|vhdl|"
     r"\basic\b|\bic\b|pcb|silicon|hardware|board bring.?up|signal integrity|"
     r"fall 2026|autumn 2026|sep.{0,4}dec 2026|"
@@ -92,7 +92,7 @@ _RESCORE_IF = {
     # v3.7: only rows whose cached reasoning mentions firmware/hardware, Fall 2026,
     # clearance, or a completed degree could move. Everything else keeps its verdict,
     # per his standing instruction not to re-score the whole board on a bump.
-    "fit-v3.8": lambda m: bool(_V37_RE.search(" ".join(str(m.get(k) or "") for k in
+    "fit-v3.8": lambda m: bool(_V38_RE.search(" ".join(str(m.get(k) or "") for k in
                                               ("fit_why", "fit_jd_summary", "fit_disqualifier", "role")))),
 }
 
@@ -117,7 +117,16 @@ def _all_versions_between(lo: tuple, hi: tuple) -> list:
 
 # Every version that ever shipped, so a row cached on v3.3 knows it missed v3.4 and v3.5
 # (blanket) even though only v3.6 has a predicate.
-_KNOWN_VERSIONS = [(3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7), (3, 8)]   # bump to force re-score on prompt changes (part of cache key)
+_KNOWN_VERSIONS = [(3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 8)]   # bump to force re-score on prompt changes (part of cache key)
+# 🔴 v3.7 IS DELIBERATELY ABSENT. It never shipped -- it existed for ~20 minutes inside the
+# 2026-09-07 session before being superseded by v3.8, and its predicate key was renamed
+# rather than duplicated. Listing it here while _RESCORE_IF has no "fit-v3.7" entry made
+# every v3.6-cached row "miss a version with no predicate", which _affected_by_bump treats
+# as a BLANKET re-score: the 22:18 run reported "404 need scoring, capping at 120",
+# cached=0, and spent $0.69 re-scoring rows the change could not possibly move -- exactly
+# the waste the targeted-invalidation machinery exists to prevent.
+# RULE: never add a version number here without a matching predicate in _RESCORE_IF,
+# unless you actually intend a full re-score.
 #                                    v3.8 (2026-09-07): firmware/embedded is a DISQUALIFIER
 #                                          ("firmware-embedded") so those rows leave Apply Now
 #                                          entirely. Shipped first as a <=35 score band, which
