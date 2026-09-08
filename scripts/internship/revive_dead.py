@@ -197,6 +197,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
+    # 🔴 BLAST-RADIUS CAP. On 2026-09-08 one ungated run revived 331 postings and took his
+    # queue from 108 to 276 in a single step. The revivals were CORRECT -- an independent
+    # ATS check found 172 of 172 still open -- but nobody knew the size before it ran, and
+    # "331 revived" was read as a success number rather than a warning.
+    # A hard refusal is wrong for a twice-daily cron (revivals would just stop), so this
+    # BOUNDS the step: apply the best N, say loudly how many were held back, let the next
+    # run continue. Big changes become gradual and visible, never silent.
+    ap.add_argument("--max-apply", type=int, default=50,
+                    help="cap revivals per run (default 50); the rest defer to the next "
+                         "run, best-first by tier then hotness")
     args = ap.parse_args()
 
     store = CuratedStore(STORE_PATH).load()
@@ -227,9 +237,25 @@ def main() -> int:
     with ThreadPoolExecutor(10) as ex:
         verdicts = list(ex.map(lambda t: classify(t[1].get("url") or ""), checkable))
 
-    counts, revived = Counter(verdicts), []
+    counts = Counter(verdicts)
+    _TIER = {"S": 0, "A": 1, "B": 2, "C": 3}
+    actives = [(c, m) for (c, m), v in zip(checkable, verdicts) if v == "active"]
+    actives.sort(key=lambda t: (_TIER.get(str(t[1].get("tier") or "").upper(), 4),
+                                -int(t[1].get("hotness") or 0)))
+    deferred = actives[args.max_apply:]
+    actives = actives[:args.max_apply]
+    if deferred:
+        print(f"\n⚠️  BLAST-RADIUS CAP: {len(actives) + len(deferred)} postings are open "
+              f"and revivable; applying the best {len(actives)}, DEFERRING {len(deferred)} "
+              f"to the next run.\n    Deferred by tier: "
+              f"{dict(Counter(str(m.get('tier') or '?') for _c, m in deferred))}"
+              f"\n    Use --max-apply to take more at once — check what it does to the "
+              f"queue first.", file=sys.stderr)
+
+    revived = []
+    _apply = {c for c, _m in actives}
     for (cid, m), v in zip(checkable, verdicts):
-        if v == "active":
+        if v == "active" and cid in _apply:
             revived.append(m)
             if not args.dry_run:
                 # 🔴 CLEAR dead_reason TOO. Leaving it behind produced 11 live rows
@@ -240,7 +266,8 @@ def main() -> int:
             # our failure, not the employer's — give it a clean slate to re-check
             store.upsert_machine(cid, {"fail_count": 0})
 
-    print(f"  active (revive) : {counts['active']}")
+    applied_note = "" if not deferred else f"  ({len(revived)} applied, {len(deferred)} deferred)"
+    print(f"  active (revive) : {counts['active']}{applied_note}")
     print(f"  expired (stays) : {counts['expired']}")
     print(f"  uncertain       : {counts['uncertain']}  (left dead, strikes reset)")
 

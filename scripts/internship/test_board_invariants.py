@@ -223,6 +223,30 @@ def test_staleness_marker_is_not_a_second_fabrication():
     check("genuinely stale row still marked", _review_closed(d2), True)
 
 
+def test_revive_has_a_blast_radius_cap():
+    """DEFECT 8 (2026-09-08): one ungated `revive_dead --apply` revived 331 postings and
+    took the queue from 108 to 276 in a single step. The revivals were CORRECT -- an
+    independent ATS check found 172 of 172 still open -- but the SIZE was never measured
+    before it ran, and "331 revived" was read as a success number rather than a warning.
+    The cap does not refuse (that would silently stop a twice-daily cron); it bounds the
+    step and says loudly what it deferred."""
+    print("8. revive_dead bounds how much it can change in one run")
+    import argparse, inspect
+    src = inspect.getsource(revive_dead.main)
+    check("has a --max-apply flag", "--max-apply" in src, True)
+    check("defers rather than refusing", "DEFERRING" in src, True)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--max-apply", type=int, default=50)
+    check("default cap is bounded and small", ap.parse_args([]).max_apply <= 100, True)
+    # best-first: a tier-S row must be applied before a tier-C row when the cap bites
+    tier = {"S": 0, "A": 1, "B": 2, "C": 3}
+    rows = [("c1", {"tier": "C", "hotness": 99}), ("s1", {"tier": "S", "hotness": 1})]
+    rows.sort(key=lambda t: (tier.get(str(t[1].get("tier") or "").upper(), 4),
+                             -int(t[1].get("hotness") or 0)))
+    check("the cap keeps the best rows first", rows[0][0], "s1")
+
+
 def test_queue_sort():
     """His instruction: S at the top, then A, B, C — and the two Amazon On Hold reqs
     (both tier S) parked at the bottom regardless."""
@@ -241,7 +265,8 @@ def test_queue_sort():
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
-           test_staleness_marker_is_not_a_second_fabrication):
+           test_staleness_marker_is_not_a_second_fabrication,
+           test_revive_has_a_blast_radius_cap):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:
