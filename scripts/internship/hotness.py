@@ -77,6 +77,14 @@ TIER_B = {
     # for any company absent from this table) and sorted to the bottom of the queue.
     # Added 2026-09-08 with the six Winter-2027 Toronto Velocity reqs.
     "scotiabank", "bank of nova scotia",
+    # Added 2026-09-09 with 15 hand-seeded reqs off the Sep-9 SWElist drop. All five
+    # are real, funded employers that were simply ABSENT from this table, so they fell
+    # through to the tier-C default ("unknown company") and sorted below everything —
+    # which is also WHY the wide net had been dropping them: MAX_ENRICH keeps the top
+    # 160 by tier, so tier-C-by-absence is self-reinforcing invisibility.
+    # Deliberately NOT added: Eudia, Revel, CHAOS Industries — genuinely early-stage,
+    # so C is the right answer for them rather than a gap.
+    "gallup", "semgrep", "viam", "talos", "retell ai",
     "coveo", "kinaxis",
     # added Jun 20
     "sofi", "zoox", "capital one", "pinterest", "reddit",
