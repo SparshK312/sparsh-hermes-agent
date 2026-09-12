@@ -376,13 +376,44 @@ def test_status_vocabulary_has_one_source():
           "for st in IN_PROCESS_STATUSES" in xl, True)
 
 
+# ── ID MATCH ─────────────────────────────────────────────────────────────────
+# 2026-09-12: `board.py status "id:jobs.ashbyhq.com/sierra/<uuid>" Skip` marked the row
+# whose _id was `.../Sierra/<uuid>` (capital S). The id: branch lowercased both sides and
+# returned the FIRST hit, so two rows differing only by case were one row to it, and the
+# "ambiguous match is refused" promise did not hold on the one branch built for precision.
+def test_id_match_is_exact_and_refuses_ambiguity():
+    from board_match import find_by_id
+    print("M. id: match is case-exact and never guesses between twins")
+    rows = {"Apply Now": [["_id", "Status"],
+                          ["jobs.ashbyhq.com/Sierra/02e1", "To Apply"],
+                          ["jobs.ashbyhq.com/sierra/02e1", "To Apply"]],
+            "Reviewed": [["_id", "Status"],
+                         ["simplify.jobs/p/c166", "Skip"]]}
+    hit = find_by_id("jobs.ashbyhq.com/Sierra/02e1", rows)
+    check("exact case returns exactly the matching row", [(t, i) for t, i, _ in hit],
+          [("Apply Now", 2)])
+    hit = find_by_id("jobs.ashbyhq.com/sierra/02e1", rows)
+    check("exact case returns the OTHER twin, not the first row", [(t, i) for t, i, _ in hit],
+          [("Apply Now", 3)])
+    hit = find_by_id("JOBS.ASHBYHQ.COM/SIERRA/02E1", rows)
+    check("no exact match -> every case-insensitive twin, so the caller refuses",
+          len(hit), 2)
+    check("no match at all -> empty, not a guess", find_by_id("nope", rows), [])
+    # and board.py must actually route through it — anchored on the call, not the name
+    brd = (Path(__file__).parent / "board.py").read_text()
+    check("board._find uses find_by_id", "hits = find_by_id(want, rows_by_tab)" in brd, True)
+    check("board._find refuses >1 id hits", "if len(hits) > 1:" in brd[brd.index("hits = find_by_id"):], True)
+    check("board._find no longer lowercases the id needle", 'want = needle[3:].strip().lower()' in brd, False)
+
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
            test_staleness_marker_is_not_a_second_fabrication,
            test_revive_has_a_blast_radius_cap,
            test_cap_dropped_rows_are_never_struck,
-           test_status_vocabulary_has_one_source):
+           test_status_vocabulary_has_one_source,
+           test_id_match_is_exact_and_refuses_ambiguity):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

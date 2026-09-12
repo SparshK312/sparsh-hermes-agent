@@ -58,6 +58,7 @@ from pathlib import Path
 # with), and is imported BEFORE the vault path is prepended so the vault's stale copy of
 # the same module cannot shadow it.
 from build_curated_xlsx import STATUS_OPTS  # noqa: E402
+from board_match import find_by_id  # noqa: E402
 
 VAULT_SCRIPTS = Path("/Users/sparshk/Documents/School Vault - UofT/Scripts")
 sys.path.insert(0, str(VAULT_SCRIPTS))
@@ -80,15 +81,29 @@ def _find(needle: str):
     Usage:  board.py status "id:www.amazon.jobs/jobs/10529525" "On Hold" --notes "..."
     """
     if needle.startswith("id:"):
-        want = needle[3:].strip().lower()
+        # 🔴 Case-sensitive first, and an ambiguous id is REFUSED like any other match.
+        # Two rows can carry _ids that differ only by case (jobs.ashbyhq.com/Sierra/...
+        # and .../sierra/... are one posting picked up twice); the old code lowercased
+        # both sides and returned the first hit, and on 2026-09-12 that put Skip on the
+        # row that was meant to be kept. Matching lives in board_match.py so it is
+        # testable without the vault import above.
+        want = needle[3:].strip()
+        rows_by_tab = {}
         for tab in TABS:
             h = G._HEADERS[tab]
-            rows = G.values_get(G.SHEET_ID_DEFAULT,
-                                f"{G._q(tab)}!A1:{G._col_letter(len(h))}500")
-            for i, r in enumerate(rows[1:], start=2):
-                if r and str(r[0]).strip().lower() == want:
-                    return (tab, i, h, r)
-        sys.exit(f"no row has _id exactly {want!r}. Try: board.py show <fragment>")
+            rows_by_tab[tab] = G.values_get(G.SHEET_ID_DEFAULT,
+                                            f"{G._q(tab)}!A1:{G._col_letter(len(h))}500")
+        hits = find_by_id(want, rows_by_tab)
+        if not hits:
+            sys.exit(f"no row has _id exactly {want!r}. Try: board.py show <fragment>")
+        if len(hits) > 1:
+            print(f"{needle!r} matches {len(hits)} rows (case-insensitively) — give the exact case:",
+                  file=sys.stderr)
+            for tab, i, r in hits[:8]:
+                print(f"    [{tab} row {i}] _id={r[0]}", file=sys.stderr)
+            sys.exit(1)
+        tab, i, r = hits[0]
+        return (tab, i, G._HEADERS[tab], r)
     n = needle.lower()
     hits = []
     for tab in TABS:
