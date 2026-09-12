@@ -407,15 +407,38 @@ def _collapse_duplicates(store) -> int:
         rid = _norm_rid(m)
         if rid:
             groups.setdefault(("rid", co, rid), []).append(cid)
-        groups.setdefault(("title", co, re.sub(r"\s+", " ", m["role"].strip().lower()),
-                           re.sub(r"\s+", " ", (m.get("location") or "").strip().lower())), []).append(cid)
+        role_n = re.sub(r"\s+", " ", m["role"].strip().lower())
+        loc_n = re.sub(r"\s+", " ", (m.get("location") or "").strip().lower())
+        groups.setdefault(("title", co, role_n, loc_n), []).append(cid)
+        # (3) 2026-09-12: the URL itself, re-canonicalised with TODAY's rules. A stored id
+        # is frozen at harvest time, so when canonical_id() learns a new tracking param
+        # (gh_src today) the same posting sits under two ids until this catches it.
+        u_cid = canonical_id(m.get("url") or "")
+        if u_cid:
+            groups.setdefault(("url", u_cid), []).append(cid)
+
+    # (4) 2026-09-12: a LOCATION-LESS row (every unresolved SWElist link — the newsletter
+    # carries no location) joins the located group for its (company, title) when there is
+    # exactly ONE such group. Two located groups (Stripe SF vs Toronto) are two requisitions
+    # and an unlocated row cannot be assigned, so it is left alone. Measured on the live
+    # store before this pass existed: 76 unlocated rows sat next to a single located twin.
+    located: dict[tuple, list[tuple]] = {}
+    for key in list(groups):
+        if key[0] == "title" and key[3]:
+            located.setdefault((key[1], key[2]), []).append(key)
+    for key in list(groups):
+        if key[0] == "title" and not key[3]:
+            twins = located.get((key[1], key[2]), [])
+            if len(twins) == 1:
+                groups[twins[0]].extend(c for c in groups[key] if c not in groups[twins[0]])
+                del groups[key]
 
     collapsed = 0
     for key, cids in groups.items():
         cids = [c for c in cids if not store.postings[c]["machine"].get("dead")]
         if len(cids) < 2:
             continue
-        if key[0] == "title":
+        if key[0] in ("title", "url"):
             # Two DIFFERENT known req ids under one title+location are two requisitions
             # (AMD 90891 vs 90947), not one posting seen twice.
             if len({_norm_rid(store.postings[c]["machine"]) for c in cids} - {""}) > 1:
@@ -709,6 +732,7 @@ async def refresh(notify: bool = False) -> int:
               f"stale-check this run (partial-collapse guard).", file=sys.stderr)
 
     stale = 0
+    confirmed_closed = 0
     for cid, rec in store.items():
         m = rec.get("machine", {})
         src = m.get("source", "")
@@ -747,6 +771,18 @@ async def refresh(notify: bool = False) -> int:
                       or wide_net_source._cap_triple(
                           m.get("company"), m.get("role"), m.get("location")
                       ) in wide_net_source.CAPPED_OUT_TRIPLES)
+
+        # (g) 🔴 THE EMPLOYER'S ATS CONFIRMED IT CLOSED (added 2026-09-12). This is the one
+        # dead signal that is evidence rather than absence: a real API answered "gone"
+        # during this run's enrichment. Marked dead NOW instead of after strikes_needed
+        # unharvested runs (a week for a wide-net row). Rows he has acted on keep rule (e).
+        if (cid in wide_net_source.CONFIRMED_DEAD_IDS and not in_pipeline
+                and not m.get("dead")):
+            m["dead"] = True
+            m["dead_reason"] = f"ATS confirmed closed {today}"
+            confirmed_closed += 1
+            # no `continue`: the age/re-score bookkeeping below still runs; the strike
+            # block cannot double-count because `dead` is already set.
 
         exempt = (
             nn in failed_boards            # (a) its board errored this run
@@ -790,6 +826,10 @@ async def refresh(notify: bool = False) -> int:
     # is marked dead with `dead_reason` naming its keeper — no id changes, no data loss.
     # 🔴 A row he has TOUCHED (any status beyond To Apply, a note, a priority) is never
     # the one that dies; if both twins are touched, both stay and it is logged.
+    if confirmed_closed:
+        print(f"[refresh] {confirmed_closed} row(s) marked dead NOW — the employer's ATS "
+              f"confirmed them closed during this run's enrichment (not after strikes)",
+              file=sys.stderr)
     collapsed = _collapse_duplicates(store)
     shadowed = _collapse_shadowed_twins(store)
     if shadowed:

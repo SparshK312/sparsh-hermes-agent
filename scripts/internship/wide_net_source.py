@@ -71,6 +71,19 @@ MIN_NONBRAND_ENRICH = 40
 # as a 21-row leak against 159 covered — the (company, role, location) triple closes it.
 CAPPED_OUT_IDS: set[str] = set()
 CAPPED_OUT_TRIPLES: set[tuple] = set()
+# 🔴 WHAT THE EMPLOYER'S ATS CONFIRMED CLOSED THIS RUN (added 2026-09-12). READ BY curate.py.
+# _enrich() drops a candidate when a real ATS API answers "gone" (Greenhouse 404, Oracle
+# empty items, ...). Dropping it from the harvest was correct, but the STORE row then sat
+# on the queue taking one strike per run — 14 for a wide-net row, i.e. a week of a posting
+# the employer had already pulled. Confirmed-dead is the one dead signal that IS evidence,
+# so curate marks those rows dead in the same run. Cleared with CAPPED_OUT_* before the
+# gather for the same reason those are.
+CONFIRMED_DEAD_IDS: set[str] = set()
+# ATS types whose "dead" answer is a real API saying the requisition is gone (not a
+# timeout, not a WAF page). Module-level since 2026-09-12 so the invariant suite can see it.
+# oracle: _single_oracle reports dead only on an empty `items` list from a 200 (verified:
+# three pulled Tradeweb reqs -> 0 items; a live one -> 1 item).
+DROP_DEAD_ATS = {"greenhouse", "ashby", "lever", "workday", "smartrecruiters", "amazon", "oracle"}
 
 
 def _cap_triple(company: str, role: str, location: str) -> tuple:
@@ -223,6 +236,7 @@ async def collect(client=None) -> list[dict]:
     # the safe default.
     CAPPED_OUT_IDS.clear()
     CAPPED_OUT_TRIPLES.clear()
+    CONFIRMED_DEAD_IDS.clear()
     cand = _gather_postings()
     # 🔴 ANNOUNCE THE CAP (2026-09-08). This truncation was silent, and the amount
     # it silently discarded was not small: a live measurement on 2026-09-08 found
@@ -257,7 +271,6 @@ async def collect(client=None) -> list[dict]:
     # bot-friendly ATS APIs: a non-200 here = genuinely dead -> drop. Manual/iCIMS/
     # Oracle can 403 from bot-blocking even when live, so we DON'T drop those on a
     # failed fetch (we trust the aggregator's freshness — it removes closed roles).
-    DROP_DEAD_ATS = {"greenhouse", "ashby", "lever", "workday", "smartrecruiters", "amazon"}
 
     async def _enrich(p):
         rec = None
@@ -266,6 +279,7 @@ async def collect(client=None) -> list[dict]:
         except Exception:  # noqa: BLE001
             rec = None
         if rec and rec.dead and rec.ats_type in DROP_DEAD_ATS:
+            CONFIRMED_DEAD_IDS.add(p.canonical_id or canonical_id(p.url))
             return None                          # confirmed-dead via a real API -> drop
         ok = rec and not rec.dead
         jd = (rec.full_jd if ok else "") or ""

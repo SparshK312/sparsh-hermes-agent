@@ -81,6 +81,10 @@ TRACKING_PARAMS = {
     "ref", "source", "src", "from",
     # Aggregator-specific tracking:
     "gh_jid",  # SimplifyJobs / Greenhouse
+    # 2026-09-12: Greenhouse's SOURCE tag (`?gh_src=Simplify`), never identity. A resolved
+    # SWElist link carried it and minted a second id for a req the brand board already held
+    # (Domino 7992534 twice on Apply Now, one with a JD and one without).
+    "gh_src",
 }
 
 # 🔴 gh_jid is a SPECIAL CASE and canonical_id() re-reads it (2026-09-08).

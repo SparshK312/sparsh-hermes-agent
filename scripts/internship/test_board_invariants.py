@@ -648,6 +648,72 @@ def test_coverage_digest_partition():
           "coverage_digest.py" in (Path(__file__).parent / "run_coverage_digest.sh").read_text(), True)
 
 
+
+def test_url_variants_and_unlocated_twins_collapse():
+    print("C7. dedup: a gh_src url-variant and an unlocated SWElist twin collapse into the located row")
+    from internship_scraper import canonical_id
+    from curated_store import CuratedStore
+    check("gh_src is a tracking param, not identity",
+          canonical_id("https://app.careerpuck.com/job-board/domino-data-lab/job/7992534?gh_src=Simplify"),
+          canonical_id("https://app.careerpuck.com/job-board/domino-data-lab/job/7992534"))
+    st = CuratedStore(Path("/nonexistent/never-saved.json"))
+
+    def put(cid, company, role, loc, url, source="wide:simplify-main", jd="", status="", notes=""):
+        e = st.entry(cid)
+        e["machine"].update({"company": company, "role": role, "location": loc, "url": url,
+                             "source": source, "full_jd": jd, "dead": False})
+        e["human"].update({"status": status, "notes": notes})
+    # A: brand-board row with a JD; B: the same req from SWElist, unlocated, simplify id
+    put("careerpuck.com/domino/7992534", "Domino Data Lab", "Software Engineer Intern", "New York City, New York",
+        "https://app.careerpuck.com/job-board/domino-data-lab/job/7992534", "brand-board", jd="x" * 500)
+    put("simplify.jobs/p/aaaa", "Domino Data Lab", "Software Engineer Intern", "",
+        "https://simplify.jobs/p/aaaa", "wide:swelist")
+    # C/D: two located requisitions sharing a title; E: unlocated -> ambiguous, must survive
+    put("stripe/1", "Stripe", "Software Engineer, Intern", "San Francisco", "https://job-boards.greenhouse.io/stripe/jobs/1", "brand-board", jd="x" * 500)
+    put("stripe/2", "Stripe", "Software Engineer, Intern", "Toronto", "https://job-boards.greenhouse.io/stripe/jobs/2", "brand-board", jd="x" * 500)
+    put("simplify.jobs/p/bbbb", "Stripe", "Software Engineer, Intern", "", "https://simplify.jobs/p/bbbb", "wide:swelist")
+    # F/G: the same URL under an old id that still carries gh_src, with a DIFFERENT location string
+    put("epicgames.com/careers/jobs/6183401004?gh_src=Simplify", "Epic Games", "UI Programmer Intern", "Cary, NC, USA",
+        "https://epicgames.com/careers/jobs/6183401004?gh_src=Simplify", "wide:simplify-main")
+    put("epicgames.com/careers/jobs/6183401004", "Epic Games", "UI Programmer Intern", "Cary,North Carolina,United States",
+        "https://epicgames.com/careers/jobs/6183401004", "brand-board", jd="x" * 500)
+    # H/I: an unlocated row HE annotated next to a located twin with different notes -> both survive
+    put("acme/9", "Acme", "SWE Intern", "NYC", "https://job-boards.greenhouse.io/acme/jobs/9", "brand-board", jd="x" * 500, notes="called recruiter")
+    put("simplify.jobs/p/cccc", "Acme", "SWE Intern", "", "https://simplify.jobs/p/cccc", "wide:swelist", notes="referral pending")
+    n = curate._collapse_duplicates(st)
+    dead = {c for c, e in st.items() if e["machine"].get("dead")}
+    check("the unlocated SWElist twin dies, the located brand row lives",
+          ("simplify.jobs/p/aaaa" in dead, "careerpuck.com/domino/7992534" in dead), (True, False))
+    check("an unlocated row with TWO located twins is left alone (ambiguous)", "simplify.jobs/p/bbbb" in dead, False)
+    check("both located Stripe reqs live", ("stripe/1" in dead, "stripe/2" in dead), (False, False))
+    check("the gh_src url-variant dies even though its location string differs",
+          ("epicgames.com/careers/jobs/6183401004?gh_src=Simplify" in dead, "epicgames.com/careers/jobs/6183401004" in dead), (True, False))
+    check("rows with DIFFERENT human notes are never collapsed", ("acme/9" in dead, "simplify.jobs/p/cccc" in dead), (False, False))
+    check("the dead reason names the keeper",
+          st.postings["simplify.jobs/p/aaaa"]["machine"]["dead_reason"], "duplicate of careerpuck.com/domino/7992534")
+    check("collapsed count", n, 2)
+
+
+def test_confirmed_dead_rows_die_now():
+    print("C8. a req the employer's ATS confirmed closed dies this run, not after 14 strikes")
+    import wide_net_source as W
+    check("oracle's dead signal is trusted", "oracle" in W.DROP_DEAD_ATS, True)
+    check("wide_net_source exposes CONFIRMED_DEAD_IDS", hasattr(W, "CONFIRMED_DEAD_IDS"), True)
+    wsrc = (Path(__file__).parent / "wide_net_source.py").read_text()
+    body = wsrc[wsrc.index("async def collect("):]
+    check("CONFIRMED_DEAD_IDS is cleared before _gather_postings() can raise",
+          body.index("CONFIRMED_DEAD_IDS.clear()") < body.index("cand = _gather_postings()"), True)
+    enrich = body[body.index("async def _enrich("):body.index("results = await asyncio.gather")]
+    drop = enrich[enrich.index("rec.ats_type in DROP_DEAD_ATS"):enrich.index("return None")]
+    check("_enrich records the id BEFORE dropping a confirmed-dead row", "CONFIRMED_DEAD_IDS.add(" in drop, True)
+    csrc = (Path(__file__).parent / "curate.py").read_text()
+    loop = csrc[csrc.index("for cid, rec in store.items():"):csrc.index("exempt = (")]
+    check("curate consults CONFIRMED_DEAD_IDS inside the stale loop", "wide_net_source.CONFIRMED_DEAD_IDS" in loop, True)
+    blk = loop[loop.index("wide_net_source.CONFIRMED_DEAD_IDS"):]
+    check("a row he has acted on is never killed by it (rule e still wins)", "not in_pipeline" in blk[:200], True)
+    check("it marks dead with a signed reason", 'dead_reason"] = f"ATS confirmed closed' in blk, True)
+
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -662,7 +728,9 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_swelist_links_resolve_before_dedup,
            test_cycle_label_ignores_graduation_dates,
            test_oracle_boards_are_first_class,
-           test_coverage_digest_partition):
+           test_coverage_digest_partition,
+           test_url_variants_and_unlocated_twins_collapse,
+           test_confirmed_dead_rows_die_now):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:
