@@ -156,6 +156,11 @@ BOARDS = [
     {"name": "Saronic", "tier": "B", "ats_type": "ashby", "org": "saronic"},
     {"name": "Hadrian", "tier": "B", "ats_type": "ashby", "org": "hadrian-automation"},
     {"name": "Bedrock Robotics", "tier": "B", "ats_type": "ashby", "org": "bedrock-robotics"},
+    # Lyft was in hotness.TIER_B since Aug 18 but never had a board here, so its 16
+    # Summer-2027 intern reqs reached the queue only as Simplify rows with
+    # app.careerpuck.com URLs that no JD fetcher can read — ten rows rendered "👀 no JD"
+    # on 2026-09-12 while the Greenhouse API served every JD. Verified live that day.
+    {"name": "Lyft", "tier": "B", "ats_type": "greenhouse", "token": "lyft"},
     # Oracle Cloud HCM boards. American Express was the single biggest miss in the
     # audit: 57 rows on the Simplify feed, 29 of them in-lane (Software Engineer /
     # AI Engineer / Digital PM interns under Enterprise Technology Services, 11 in

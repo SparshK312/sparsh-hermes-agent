@@ -591,6 +591,8 @@ def test_oracle_boards_are_first_class():
     check("record ats_type matches detect_ats", rec.ats_type, "oracle")
     check("American Express board is wired as oracle",
           any(b["name"] == "American Express" and b["ats_type"] == "oracle" for b in BOARDS), True)
+    check("Lyft board is wired (its careerpuck URLs are unreadable by the single-URL path)",
+          any(b["name"] == "Lyft" and b["ats_type"] == "greenhouse" and b["token"] == "lyft" for b in BOARDS), True)
     check("board names are unique", len({b["name"] for b in BOARDS}), len(BOARDS))
     check("every board's ats_type has a fetcher (or is manual)",
           all(b["ats_type"] == "manual" or b["ats_type"] in A._BOARD_FETCHERS for b in BOARDS), True)
