@@ -166,7 +166,7 @@ sys.path.insert(0, str(VAULT / "Scripts"))
 import brand_first_source  # noqa: E402
 import wide_net_source  # noqa: E402
 from company_boards import boards as _boards  # noqa: E402
-from build_curated_xlsx import (REVIEWED_STATUSES, classify_row, is_locked,  # noqa: E402
+from build_curated_xlsx import (PIPELINE_STATUSES, REVIEWED_STATUSES, classify_row, is_locked,  # noqa: E402
                                 write_board)
 try:
     import build_curated_gsheet as gsheet  # noqa: E402
@@ -727,9 +727,7 @@ async def refresh(notify: bool = False) -> int:
         # deliberately NOT exempt: those are already-settled rows and letting them
         # go dead is correct.
         human_status = (rec.get("human", {}).get("status") or "").strip()
-        in_pipeline = human_status in {
-            "Applied", "OA", "Phone Screen", "Onsite", "Offer", "Networking", "On Hold",
-        }
+        in_pipeline = human_status in PIPELINE_STATUSES
 
         # (f) 🔴 THE CAP DROPPED IT — THAT IS NOT EVIDENCE OF DEATH (added 2026-09-11).
         # wide_net_source caps JD enrichment at MAX_ENRICH and cuts the remainder

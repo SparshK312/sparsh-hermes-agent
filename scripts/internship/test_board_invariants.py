@@ -325,12 +325,64 @@ def test_cap_dropped_rows_are_never_struck():
           "_cap_triple(" in expr, True)
 
 
+# ── VOCABULARY ───────────────────────────────────────────────────────────────
+# 2026-09-12: the Status vocabulary was enumerated in FOUR places (board.VALID, the
+# Sheet's dropdown via STATUS_OPTS, curate's in-pipeline set, the xlsx "In process"
+# COUNTIF) and had to be edited in lockstep by hand. Adding "Technical Interview"
+# (Sparsh: Wealthsimple's 1-hour CoderPad round "is not a phone screen") is the
+# first change since the board was built; from now on there is one list and every
+# consumer derives from it. A stage missing from any consumer is a silent defect:
+# board.py refuses the write, or curate strikes a live interview as stale, or the
+# Sheet renders it uncoloured with a validation warning.
+def test_status_vocabulary_has_one_source():
+    import re
+    from build_curated_xlsx import (STATUS_OPTS, STATUS_FILL, STATUS_RANK,
+                                    PIPELINE_STATUSES, IN_PROCESS_STATUSES)
+    print("V. status vocabulary has one source")
+    check("Technical Interview is a status", "Technical Interview" in STATUS_OPTS, True)
+    check("every status has a colour (else the Sheet renders it uncoloured)",
+          sorted(set(STATUS_OPTS) - set(STATUS_FILL)), [])
+    check("no colour for a status that does not exist",
+          sorted(set(STATUS_FILL) - set(STATUS_OPTS)), [])
+    check("pipeline statuses are all real statuses",
+          sorted(PIPELINE_STATUSES - set(STATUS_OPTS)), [])
+    check("every pipeline status ranks (else it sorts as unknown)",
+          sorted(PIPELINE_STATUSES - set(STATUS_RANK)), [])
+    check("in-process funnel is inside the pipeline set",
+          sorted(set(IN_PROCESS_STATUSES) - PIPELINE_STATUSES), [])
+    check("Technical Interview is in the interview funnel",
+          "Technical Interview" in IN_PROCESS_STATUSES, True)
+    check("Technical Interview is exempt from the stale strike",
+          "Technical Interview" in PIPELINE_STATUSES, True)
+    # a stage sits between the recruiter screen and the final round
+    check("ranks: Onsite < Technical Interview < Phone Screen",
+          STATUS_RANK["Onsite"] < STATUS_RANK["Technical Interview"] < STATUS_RANK["Phone Screen"], True)
+
+    # the consumers must DERIVE from the list, not restate it. Source-anchored on the
+    # exact assignment, not a substring: a literal set that merely mentions the
+    # symbol in a comment must not pass.
+    here = Path(__file__).parent
+    cur = (here / "curate.py").read_text()
+    check("curate's stale-check consults PIPELINE_STATUSES",
+          bool(re.search(r"^\s*in_pipeline = human_status in PIPELINE_STATUSES\s*$", cur, re.M)), True)
+    check("curate has no inline status set left",
+          "in_pipeline = human_status in {" in cur, False)
+    brd = (here / "board.py").read_text()
+    check("board.VALID derives from STATUS_OPTS",
+          bool(re.search(r"^VALID = list\(STATUS_OPTS\)\s*$", brd, re.M)), True)
+    check("board.py has no literal vocabulary left", '"Phone Screen", "Onsite"' in brd, False)
+    xl = (here / "build_curated_xlsx.py").read_text()
+    check("xlsx 'In process' tile derives from IN_PROCESS_STATUSES",
+          "for st in IN_PROCESS_STATUSES" in xl, True)
+
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
            test_staleness_marker_is_not_a_second_fabrication,
            test_revive_has_a_blast_radius_cap,
-           test_cap_dropped_rows_are_never_struck):
+           test_cap_dropped_rows_are_never_struck,
+           test_status_vocabulary_has_one_source):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

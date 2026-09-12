@@ -39,8 +39,9 @@ row that had been vetted from one nobody had ever opened:
   (blank) NOT YET REVIEWED
 
 Valid Status values (they are a dropdown on the Sheet; anything else will look broken):
-  To Apply · Applied · OA · Phone Screen · Onsite · Offer · Rejected ·
-  Networking · On Hold · Skip · Not a Fit · Closed
+  To Apply · Applied · OA · Phone Screen · Technical Interview · Onsite · Offer ·
+  Rejected · Networking · On Hold · Skip · Not a Fit · Closed
+  (the list is STATUS_OPTS in build_curated_xlsx.py — one vocabulary, imported here)
 
 AFTER RUNNING: the change is live on the Sheet immediately. The JSON store catches up
 on the next `curate.py` run, which is also when the row re-routes between tabs (setting
@@ -53,13 +54,17 @@ import re
 from datetime import date
 from pathlib import Path
 
+# The vocabulary comes from THIS directory's build_curated_xlsx (the one the VPS renders
+# with), and is imported BEFORE the vault path is prepended so the vault's stale copy of
+# the same module cannot shadow it.
+from build_curated_xlsx import STATUS_OPTS  # noqa: E402
+
 VAULT_SCRIPTS = Path("/Users/sparshk/Documents/School Vault - UofT/Scripts")
 sys.path.insert(0, str(VAULT_SCRIPTS))
 
 import build_curated_gsheet as G  # noqa: E402
 
-VALID = ["To Apply", "Applied", "OA", "Phone Screen", "Onsite", "Offer", "Rejected",
-         "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
+VALID = list(STATUS_OPTS)
 TABS = (G.TAB_QUEUE, G.TAB_APPS, G.TAB_REVIEWED)
 
 

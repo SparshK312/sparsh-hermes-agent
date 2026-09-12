@@ -38,12 +38,25 @@ SCHEMA_VERSION = 3
 ID_HEADER = "_id"
 
 # ── dropdown vocab ────────────────────────────────────────────────────────────
-STATUS_OPTS = ["To Apply", "Applied", "OA", "Phone Screen", "Onsite", "Offer",
-               "Rejected", "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
+# 🔴 THE ONE vocabulary. board.py accepts exactly this list and the Sheet's dropdown is
+# built from it; curate's stale-check and the xlsx summary derive from the subsets below.
+# Add a stage HERE and it propagates everywhere. Add it anywhere else and
+# test_board_invariants.py goes red.
+# "Technical Interview" added 2026-09-12 (Sparsh: Wealthsimple's 1-hour CoderPad round
+# "is not a phone screen") — it sits between the recruiter screen and the final round.
+STATUS_OPTS = ["To Apply", "Applied", "OA", "Phone Screen", "Technical Interview", "Onsite",
+               "Offer", "Rejected", "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
 # Statuses that mean "I looked at this and I'm not applying" -> Reviewed sheet, not the
 # active queue and NOT the applications sheet. Skip / Not a Fit = your judgment call;
 # Closed = dead (missed deadline / role pulled) that you never applied to.
 REVIEWED_STATUSES = {"skip", "not a fit", "closed"}
+# Statuses that mean a real application is IN FLIGHT (he has acted on the row). curate's
+# stale-check exempts these from the strike rule: an employer's board often drops a req
+# the moment they stop accepting candidates, which is usually right after he applies.
+PIPELINE_STATUSES = {"Applied", "OA", "Phone Screen", "Technical Interview", "Onsite",
+                     "Offer", "Networking", "On Hold"}
+# The interview funnel proper, for the "In process (OA+)" summary tile.
+IN_PROCESS_STATUSES = ("OA", "Phone Screen", "Technical Interview", "Onsite")
 PRIORITY_OPTS = ["", "P0", "P1", "P2", "P3"]
 LANE_OPTS = ["AI/ML", "SWE", "Data", "PM", "Other"]
 CYCLE_OPTS = ["Fall 2026", "Winter 2027", "Spring 2027", "Summer 2027", "Summer 2026", "TBD"]
@@ -58,6 +71,7 @@ STATUS_FILL = {"To Apply": ("FED7AA", "9A3412"),        # orange  — action nee
                "Applied": ("BFDBFE", "1E40AF"),         # blue    — in the pipeline
                "OA": ("BAE6FD", "075985"),              # sky
                "Phone Screen": ("C7D2FE", "3730A3"),    # indigo
+               "Technical Interview": ("E9D5FF", "6B21A8"),  # purple — between screen and final
                "Onsite": ("DDD6FE", "5B21B6"),          # violet
                "Offer": ("A7F3D0", "065F46"),           # green   — win
                "Networking": ("FBCFE8", "9D174D"),      # pink    — warm outreach
@@ -79,8 +93,8 @@ PRIO_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "": 4}
 # tier-S Palantir req at hot 72 sat below tier-A rows at hot 74-90. Tier is now the
 # band and hotness only orders WITHIN a band.
 TIER_RANK = {"S": 0, "A": 1, "B": 2, "C": 3}
-STATUS_RANK = {"Offer": 0, "Onsite": 1, "Phone Screen": 2, "OA": 3,
-               "Applied": 4, "Networking": 5, "On Hold": 6, "Rejected": 9}
+STATUS_RANK = {"Offer": 0, "Onsite": 1, "Technical Interview": 2, "Phone Screen": 3, "OA": 4,
+               "Applied": 5, "Networking": 6, "On Hold": 7, "Rejected": 9}
 
 
 def classify_row(rec: dict) -> str:
@@ -431,7 +445,7 @@ def _build_summary(wb, app_first, app_last, queue_count, reviewed_count, generat
         ("", ""),
         ("APPLICATIONS", None),
         ("Applied", f'=COUNTIF({rng},"Applied")'),
-        ("In process (OA+)", f'=COUNTIF({rng},"OA")+COUNTIF({rng},"Phone Screen")+COUNTIF({rng},"Onsite")'),
+        ("In process (OA+)", "=" + "+".join(f'COUNTIF({rng},"{st}")' for st in IN_PROCESS_STATUSES)),
         ("Offers", f'=COUNTIF({rng},"Offer")'),
         ("Rejected", f'=COUNTIF({rng},"Rejected")'),
         ("Networking", f'=COUNTIF({rng},"Networking")'),
