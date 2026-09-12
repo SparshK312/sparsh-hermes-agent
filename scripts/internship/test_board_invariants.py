@@ -262,11 +262,75 @@ def test_queue_sort():
           sorted([r("C", 99), r("S", 1)], key=_queue_sort_key)[0]["machine"]["tier"], "S")
 
 
+# ── DEFECT 9 ─────────────────────────────────────────────────────────────────
+# 2026-09-11: the stale-check could not tell "the aggregator dropped it" from
+# "we declined to enrich it". wide_net_source caps enrichment at MAX_ENRICH and
+# cuts the remainder TIER-SORTED, so the same ~990 rows are dropped every run,
+# never enter `harvested`, and can never clear a strike. At WIDE_STALE_STRIKES=14
+# and two runs/day that is a guaranteed 7-day death sentence independent of
+# whether the job is open. It killed 265 rows in one run (queue 272 -> 110) and
+# 38 of 40 spot-checked against the employers' own boards were STILL OPEN.
+def test_cap_dropped_rows_are_never_struck():
+    import wide_net_source as W
+
+    # the module must expose what the cap cut, or curate has nothing to exempt on
+    check("wide_net_source exposes CAPPED_OUT_IDS", hasattr(W, "CAPPED_OUT_IDS"), True)
+    check("wide_net_source exposes CAPPED_OUT_TRIPLES", hasattr(W, "CAPPED_OUT_TRIPLES"), True)
+    check("wide_net_source exposes _cap_triple", callable(getattr(W, "_cap_triple", None)), True)
+
+    # the triple must normalise the same way curate's cross-lane dedup does,
+    # otherwise the exemption silently matches nothing
+    check("triple is case/whitespace-insensitive",
+          W._cap_triple("  Acme  Corp ", "SWE  Intern", " New York, NY "),
+          W._cap_triple("acme corp", "swe intern", "new york, ny"))
+
+    # the sets must be cleared BEFORE anything that can raise, or a throwing
+    # _gather_postings() leaves last run's evidence in place and the stale-check
+    # exempts rows it should strike (wrong-direction: the board fills with dead jobs)
+    wsrc = (Path(__file__).parent / "wide_net_source.py").read_text()
+    body = wsrc[wsrc.index("async def collect("):]
+    clear_at = body.index("CAPPED_OUT_IDS.clear()")
+    gather_at = body.index("cand = _gather_postings()")   # the CALL, not the name:
+    # the bare name also appears in the explanatory comment above the clear, and
+    # anchoring on it made this assertion fail against correct code.
+    check("capped-out sets are cleared before _gather_postings() can raise",
+          clear_at < gather_at, True)
+
+    # curate must actually consult it — the source is the contract here, because a
+    # green unit test on a helper nobody calls is exactly the failure this suite exists for
+    src = (Path(__file__).parent / "curate.py").read_text()
+    check("curate.py reads CAPPED_OUT_IDS", "CAPPED_OUT_IDS" in src, True)
+    check("curate.py reads CAPPED_OUT_TRIPLES", "CAPPED_OUT_TRIPLES" in src, True)
+    check("the capped_out term is wired into `exempt`",
+          "or capped_out" in src, True)
+
+    # and the exemption must sit INSIDE the exempt tuple, not be computed and dropped
+    ex = src[src.index("exempt = ("):src.index("exempt = (") + 420]
+    check("capped_out appears within the exempt expression", "capped_out" in ex, True)
+
+    # id-only keying is not enough: enrichment rewrites URLs
+    # (`url = rec.url if ok else p.url`), so a stored row's id can differ from the
+    # pre-cap id. Measured 2026-09-11: 21 rows that id-alone misses out of 180.
+    # 🔴 THIS ASSERTION MUST LOOK INSIDE THE capped_out EXPRESSION, NOT THE WHOLE
+    # FILE. The first version checked `"CAPPED_OUT_TRIPLES" in src`, which stayed
+    # GREEN when the triple keying was deleted from the logic — because the name
+    # still appeared in a log line elsewhere. Mutation testing caught it; a
+    # file-wide substring check is not a control.
+    expr_start = src.index("capped_out = (")
+    expr = src[expr_start:src.index(")\n", src.index("CAPPED_OUT_TRIPLES", expr_start))]
+    check("capped_out expression keys on the id set", "CAPPED_OUT_IDS" in expr, True)
+    check("capped_out expression ALSO keys on the triple set",
+          "CAPPED_OUT_TRIPLES" in expr, True)
+    check("capped_out expression calls _cap_triple on the stored row",
+          "_cap_triple(" in expr, True)
+
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
            test_staleness_marker_is_not_a_second_fabrication,
-           test_revive_has_a_blast_radius_cap):
+           test_revive_has_a_blast_radius_cap,
+           test_cap_dropped_rows_are_never_struck):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

@@ -43,6 +43,29 @@ REJECT_NON_NA_LOCATIONS = False
 JD_TIMEOUT = 12
 MAX_ENRICH = 160                  # cap JD fetches; brand-first so the cap keeps brands
 
+# 🔴 WHAT THE CAP DROPPED THIS RUN (added 2026-09-11). READ BY curate.py.
+# The cap is an ENRICHMENT BUDGET, not a liveness signal: a posting the cap cut is
+# one the aggregator STILL LISTS and we simply chose not to fetch a JD for. Before
+# this existed, curate.py's stale-check could not tell "the feed dropped it" from
+# "we declined to look at it", struck the latter every run, and — because the cut is
+# tier-sorted and therefore the SAME rows every time — those rows could never clear
+# their strikes. At WIDE_STALE_STRIKES=14 and two runs a day that is a guaranteed
+# 7-day death sentence for every row outside the top MAX_ENRICH, regardless of
+# whether the job is open. Measured 2026-09-11: 38 of 40 checkable rows killed this
+# way were still OPEN on the employer's own board.
+# Keyed BOTH ways on purpose: canonical_id alone misses rows whose stored id came
+# from an enrichment-rewritten URL (`url = rec.url if ok else p.url`), which measured
+# as a 21-row leak against 159 covered — the (company, role, location) triple closes it.
+CAPPED_OUT_IDS: set[str] = set()
+CAPPED_OUT_TRIPLES: set[tuple] = set()
+
+
+def _cap_triple(company: str, role: str, location: str) -> tuple:
+    """Same normalisation curate.py uses for cross-lane dedup."""
+    return (normalize_company_name(company or ""),
+            re.sub(r"\s+", " ", (role or "").lower()).strip(),
+            re.sub(r"\s+", " ", (location or "").lower()).strip())
+
 ENV_PATH = Path.home() / ".hermes" / ".env"
 
 
@@ -137,6 +160,14 @@ def _gather_postings() -> list:
 
 
 async def collect(client=None) -> list[dict]:
+    # 🔴 CLEARED FIRST, BEFORE ANYTHING THAT CAN RAISE. If _gather_postings() throws,
+    # a stale set from the PREVIOUS run would otherwise survive and curate.py's
+    # stale-check would exempt rows on last run's evidence — a silent
+    # wrong-direction failure (rows wrongly exempted never die, so the board
+    # quietly fills with closed postings). Empty means "exempt nothing", which is
+    # the safe default.
+    CAPPED_OUT_IDS.clear()
+    CAPPED_OUT_TRIPLES.clear()
     cand = _gather_postings()
     # 🔴 ANNOUNCE THE CAP (2026-09-08). This truncation was silent, and the amount
     # it silently discarded was not small: a live measurement on 2026-09-08 found
@@ -151,6 +182,12 @@ async def collect(client=None) -> list[dict]:
     if len(cand) > MAX_ENRICH:
         from collections import Counter
         dropped = cand[MAX_ENRICH:]
+        # record BEFORE truncating so the stale-check can exempt them (see above)
+        for _p in dropped:
+            _cid = _p.canonical_id or canonical_id(_p.url)
+            if _cid:
+                CAPPED_OUT_IDS.add(_cid)
+            CAPPED_OUT_TRIPLES.add(_cap_triple(_p.company, _p.title, _p.location))
         top = ", ".join(f"{c}×{n}" for c, n in
                         Counter(p.company for p in dropped).most_common(8))
         print(f"[wide-net] ⚠️ MAX_ENRICH cap HIT: {len(cand)} candidates -> keeping "

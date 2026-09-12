@@ -657,6 +657,11 @@ async def refresh(notify: bool = False) -> int:
         }, first_seen=today, source=r["_src"])
     print(f"[refresh] {len(lane1)} lane-1 + {len(lane2)} lane-2 -> "
           f"{len(harvested)} after cross-lane dedup", file=sys.stderr)
+    if wide_net_source.CAPPED_OUT_IDS or wide_net_source.CAPPED_OUT_TRIPLES:
+        print(f"[refresh] stale-check will EXEMPT the "
+              f"{len(wide_net_source.CAPPED_OUT_IDS)} rows the enrichment cap dropped "
+              f"(they are still in the feed; not looking at them is not evidence of death)",
+              file=sys.stderr)
 
     # SAFETY GUARD: a network-less cron run (DNS failures on a sleeping/just-woke Mac)
     # harvests ~nothing. WITHOUT this, the stale-check below would mark every posting
@@ -726,11 +731,31 @@ async def refresh(notify: bool = False) -> int:
             "Applied", "OA", "Phone Screen", "Onsite", "Offer", "Networking", "On Hold",
         }
 
+        # (f) 🔴 THE CAP DROPPED IT — THAT IS NOT EVIDENCE OF DEATH (added 2026-09-11).
+        # wide_net_source caps JD enrichment at MAX_ENRICH and cuts the remainder
+        # TIER-SORTED, so the same ~990 rows are dropped on EVERY run. They therefore
+        # never appear in `harvested` and can never clear a strike: at
+        # WIDE_STALE_STRIKES=14 and two runs a day, every row outside the top 160 was
+        # on a guaranteed 7-day timer regardless of whether the job was open.
+        # This killed 265 rows in the 2026-09-11 08:00 run alone (queue 272 -> 110);
+        # an independent check of 40 of them against the employers' own boards found
+        # 38 STILL OPEN. It also formed a closed loop with revive_dead, which resets
+        # strikes at 07:30 daily only for curate to re-apply them 30 minutes later.
+        # A row the cap cut was still IN the aggregator feed — that is evidence of
+        # life, not death. Keyed on id AND (company, role, location) because the
+        # stored id may have come from an enrichment-rewritten URL (measured leak:
+        # 21 rows that id-alone misses).
+        capped_out = (cid in wide_net_source.CAPPED_OUT_IDS
+                      or wide_net_source._cap_triple(
+                          m.get("company"), m.get("role"), m.get("location")
+                      ) in wide_net_source.CAPPED_OUT_TRIPLES)
+
         exempt = (
             nn in failed_boards            # (a) its board errored this run
             or nn in manual_boards         # (b) no API exists to confirm death
             or (is_brand and not lane1_ok)  # (d) lane-1 partial collapse
             or in_pipeline                 # (e) he has acted on it
+            or capped_out                  # (f) we declined to look; feed still lists it
         )
         strikes_needed = WIDE_STALE_STRIKES if is_wide else STALE_STRIKES
 
