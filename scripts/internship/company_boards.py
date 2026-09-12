@@ -161,6 +161,11 @@ BOARDS = [
     # app.careerpuck.com URLs that no JD fetcher can read — ten rows rendered "👀 no JD"
     # on 2026-09-12 while the Greenhouse API served every JD. Verified live that day.
     {"name": "Lyft", "tier": "B", "ats_type": "greenhouse", "token": "lyft"},
+    # DV Trading: in hotness.TIER_B since Sep 8 with no board here, so its 15 Summer-2027
+    # intern reqs (Chicago / New York / London) reached the queue only as aggregator rows.
+    # He applied to three (AI Engineer, DevOps, SWE Commodities) by 2026-09-12. Token
+    # validated live that evening: 67 postings, 15 interns.
+    {"name": "DV Trading", "tier": "B", "ats_type": "greenhouse", "token": "dvtrading"},
     # Oracle Cloud HCM boards. American Express was the single biggest miss in the
     # audit: 57 rows on the Simplify feed, 29 of them in-lane (Software Engineer /
     # AI Engineer / Digital PM interns under Enterprise Technology Services, 11 in

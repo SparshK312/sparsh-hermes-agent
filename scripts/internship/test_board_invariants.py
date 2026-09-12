@@ -593,6 +593,8 @@ def test_oracle_boards_are_first_class():
           any(b["name"] == "American Express" and b["ats_type"] == "oracle" for b in BOARDS), True)
     check("Lyft board is wired (its careerpuck URLs are unreadable by the single-URL path)",
           any(b["name"] == "Lyft" and b["ats_type"] == "greenhouse" and b["token"] == "lyft" for b in BOARDS), True)
+    check("DV Trading board is wired (three live applications by 2026-09-12)",
+          any(b["name"] == "DV Trading" and b["token"] == "dvtrading" for b in BOARDS), True)
     check("board names are unique", len({b["name"] for b in BOARDS}), len(BOARDS))
     check("every board's ats_type has a fetcher (or is manual)",
           all(b["ats_type"] == "manual" or b["ats_type"] in A._BOARD_FETCHERS for b in BOARDS), True)
