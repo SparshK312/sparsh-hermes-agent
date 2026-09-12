@@ -636,9 +636,14 @@ def test_coverage_digest_partition():
     rep = CD.format_report(nt, gaps, 7, "2026-09-12 09:00 EDT")
     check("the vault report carries frontmatter", rep.startswith("---\ntype: coverage-digest"), True)
     check("the vault report lists the gap", "| Lyft | B |" in rep, True)
-    dsrc = (Path(__file__).resolve().parents[1] / "deploy.sh").read_text()
-    check("deploy.sh mirrors the cron wrapper",
-          "run_coverage_digest.sh ~/.hermes/scripts/run_coverage_digest.sh" in dsrc, True)
+    # deploy.sh lives one level up in the REPO; the VPS mirror (~/.hermes/scripts/internship)
+    # has no copy, and the deploy gate runs this suite from the repo, where it exists.
+    dep = Path(__file__).resolve().parents[1] / "deploy.sh"
+    if dep.exists():
+        check("deploy.sh mirrors the cron wrapper",
+              "run_coverage_digest.sh ~/.hermes/scripts/run_coverage_digest.sh" in dep.read_text(), True)
+    else:
+        print("     (deploy.sh not present here — mirror check runs in the repo)")
     check("the cron wrapper runs the script",
           "coverage_digest.py" in (Path(__file__).parent / "run_coverage_digest.sh").read_text(), True)
 
