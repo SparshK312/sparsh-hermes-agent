@@ -33,6 +33,7 @@ from internship_scraper import (
     parse_markdown_table,
 )
 import gmail_source
+import simplify_resolve
 
 # Comprehensive mode: keep ALL relevant intern roles (incl. non-brand "C" tier),
 # not just recognized brands. Brand still wins ranking via hotness; C-tier is
@@ -41,7 +42,19 @@ KEEP_NONBRAND = True
 # See brand_first_source.REJECT_NON_NA_LOCATIONS for the rationale (2026-09-05).
 REJECT_NON_NA_LOCATIONS = False
 JD_TIMEOUT = 12
-MAX_ENRICH = 160                  # cap JD fetches; brand-first so the cap keeps brands
+MAX_ENRICH = 160                  # total JD-enrichment budget per run (see _apply_enrich_cap)
+# 🔴 THE CAP NEVER CUTS A TARGET COMPANY (2026-09-12). Until today the cut was
+# `cand[:MAX_ENRICH]` over a tier-sorted list, which was fine while tier S/A/B fitted
+# inside 160 — and on 2026-09-08 they did. By 2026-09-12 the refresh log read
+# "1,159 candidates -> keeping 160, DROPPING 999 ... Most-dropped: ... RTX×20, AMD×16,
+# 🔥AMD×15": TIER-B EMPLOYERS WERE BEING CUT, silently, on every run, and only the
+# capped-out exemption kept their existing rows alive. A tier table only means
+# something if being on it guarantees the row is looked at. So: every S/A/B candidate
+# is enriched unconditionally; MAX_ENRICH bounds the tier-C remainder, with a floor so
+# tier-C discovery never starves as the target set grows. Within tier C the budget goes
+# to the FRESHEST rows (age ascending), so a new posting gets its window instead of the
+# same first-in-feed-order rows winning forever.
+MIN_NONBRAND_ENRICH = 40
 
 # 🔴 WHAT THE CAP DROPPED THIS RUN (added 2026-09-11). READ BY curate.py.
 # The cap is an ENRICHMENT BUDGET, not a liveness signal: a posting the cap cut is
@@ -115,7 +128,27 @@ def _gather_postings() -> list:
     # carrying a real ATS URL, a location and a posted date.
     seen_ct: set[tuple[str, str]] = set()
     cand = []
+    simplify_resolve.reset_run()
+    # newest newsletter rows first, so the per-run resolve budget goes to this week's
+    # postings rather than the tail of the 12-day IMAP window
+    gmail = sorted(gmail, key=lambda p: 999 if p.age_days is None else p.age_days)
     for p in github + gmail:
+        # SWElist rows carry a simplify.jobs/p/<uuid> link and NO location. For a
+        # recognised brand (the only rows that reach the board from this feed), resolve
+        # the link to the employer's URL + real location FIRST, so the id/triple dedup
+        # below can match it to the same req from the repo or a brand board. Cheap
+        # gates run before the network call; tier-C rows are never resolved (they are
+        # the coverage digest's population, not the board's).
+        if (p.source == "swelist" and simplify_resolve.uuid_of(p.url)
+                and brand_tier(p.company) != "C"
+                and role_lane(p.title) is not None
+                and classify_period(p.title, p.terms, p.source)[0] != "reject"):
+            hit = simplify_resolve.resolve(p.url)
+            if hit:
+                p.url = hit["url"]
+                p.canonical_id = canonical_id(hit["url"])
+                p.location = hit.get("location") or p.location
+                p.posted_date = hit.get("posted_date") or p.posted_date
         cid = p.canonical_id or canonical_id(p.url)
         if not cid or cid in seen:
             continue
@@ -144,7 +177,11 @@ def _gather_postings() -> list:
         # 948 unique -> 524 surviving, 442 of them tier C. That would have taken the
         # queue from 353 to ~880 rows, almost all with no location, no JD and no fit
         # score. Restricted to recognized brands, where thin data is still worth
-        # having; the (company, title) dedup above already removes the repo overlap.
+        # having. 2026-09-12: these rows are no longer LOST — coverage_digest.py reads
+        # the same feed and reports every in-lane tier-C posting weekly, so an employer
+        # missing from the tier table surfaces as a line to promote, not a silent hole.
+        # (They stay off the board: no location, no JD, and they would be the first
+        # rows the enrichment cap cuts anyway.)
         if p.source == "swelist" and tier == "C":
             continue
         if role_lane(p.title) is None:
@@ -154,9 +191,27 @@ def _gather_postings() -> list:
         if classify_period(p.title, p.terms, p.source)[0] == "reject":
             continue
         cand.append(p)
-    # brand-first so the MAX_ENRICH cap (if hit) keeps the recognizable brands
-    cand.sort(key=lambda p: _TIER_RANK.get(brand_tier(p.company), 3))
+    if simplify_resolve.STATS["resolved"] or simplify_resolve.STATS["failed"] \
+            or simplify_resolve.STATS["budget_exhausted"]:
+        print(f"[wide-net] simplify links: {simplify_resolve.STATS}", file=sys.stderr)
+    simplify_resolve.save_cache()
+    # tier first (the cap protects S/A/B outright), then FRESHEST first within a tier so
+    # the tier-C budget rotates onto new postings instead of the same first-seen rows.
+    cand.sort(key=lambda p: (_TIER_RANK.get(brand_tier(p.company), 3),
+                             999 if p.age_days is None else p.age_days))
     return cand
+
+
+def _apply_enrich_cap(cand: list) -> tuple[list, list]:
+    """Pure. Split the candidate list into (keep, dropped).
+
+    Every tier-S/A/B candidate is kept. Tier C gets whatever is left of MAX_ENRICH,
+    never less than MIN_NONBRAND_ENRICH. Order within each group is preserved, so the
+    caller's (tier, age) sort decides WHICH tier-C rows survive."""
+    target = [p for p in cand if brand_tier(p.company) != "C"]
+    rest = [p for p in cand if brand_tier(p.company) == "C"]
+    budget = max(MIN_NONBRAND_ENRICH, MAX_ENRICH - len(target))
+    return target + rest[:budget], rest[budget:]
 
 
 async def collect(client=None) -> list[dict]:
@@ -179,9 +234,9 @@ async def collect(client=None) -> list[dict]:
     # ones each time, and then takes stale-strikes for never being harvested.
     # CLAUDE.md: "Any limit must log when it is reached. A result set that exactly
     # equals your cap is a red flag, never a coincidence."
-    if len(cand) > MAX_ENRICH:
+    cand, dropped = _apply_enrich_cap(cand)
+    if dropped:
         from collections import Counter
-        dropped = cand[MAX_ENRICH:]
         # record BEFORE truncating so the stale-check can exempt them (see above)
         for _p in dropped:
             _cid = _p.canonical_id or canonical_id(_p.url)
@@ -190,11 +245,11 @@ async def collect(client=None) -> list[dict]:
             CAPPED_OUT_TRIPLES.add(_cap_triple(_p.company, _p.title, _p.location))
         top = ", ".join(f"{c}×{n}" for c, n in
                         Counter(p.company for p in dropped).most_common(8))
-        print(f"[wide-net] ⚠️ MAX_ENRICH cap HIT: {len(cand)} candidates -> keeping "
-              f"{MAX_ENRICH}, DROPPING {len(dropped)} (tier-sorted, so the cut is all "
-              f"low-tier and is the SAME rows every run). Most-dropped: {top}",
+        n_target = sum(1 for p in cand if brand_tier(p.company) != "C")
+        print(f"[wide-net] ⚠️ enrichment cap HIT: keeping {len(cand)} "
+              f"({n_target} tier-S/A/B, all of them + {len(cand) - n_target} tier-C by "
+              f"freshness), DROPPING {len(dropped)} tier-C. Most-dropped: {top}",
               file=sys.stderr)
-    cand = cand[:MAX_ENRICH]
     own = client is None
     if own:
         client = A.make_client()

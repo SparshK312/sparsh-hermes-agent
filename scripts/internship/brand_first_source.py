@@ -56,6 +56,34 @@ def _listing_prefilter(title: str, location: str = "") -> bool:
 _SEASONS = "fall|winter|spring|summer"
 _CYCLE_RE = re.compile(rf"\b({_SEASONS})\s+(20\d\d)\b", re.IGNORECASE)
 _CYCLE_REV_RE = re.compile(rf"\b(20\d\d)\s+({_SEASONS})\b", re.IGNORECASE)
+# 🔴 A GRADUATION TERM IS NOT THE WORK TERM (2026-09-12). JDs state the candidate's
+# expected graduation as a season+year ("Graduating in Spring 2028 or later", "Must be
+# graduating in December 2027 or Spring 2028"), and this labeler read those as the
+# role's own term. Spring 2028 sits in PAST_PERIODS, so classify_period REJECTED the
+# req. Two confirmed victims, both New York: Domino Data Lab's two 2027 intern reqs
+# (never reached the board) and Palantir's FDSE Commercial reqs — the vault recorded
+# "FDSE Commercial New York has NO BOARD ROW" on Sep 8 and again on Sep 12 without a
+# cause. A season+year preceded (within ~80 chars) by graduation language is skipped.
+# Over-skipping is safe: no label -> "unclear" -> the row is KEPT. Under-skipping is a
+# silent false reject, which is the failure this exists to stop.
+_GRAD_CONTEXT_RE = re.compile(
+    r"graduat|class of|degree|obtained by|expected to|completion|enrolled|"
+    r"rising (?:senior|junior|sophomore)|pursuing", re.IGNORECASE)
+_GRAD_WINDOW = 80
+
+
+_CLAUSE_BREAK_RE = re.compile(r"[.;!?\n]|\s{2,}")
+
+
+def _in_grad_context(text: str, start: int) -> bool:
+    """True when the season+year at `start` sits in the same clause as graduation
+    language. Same CLAUSE, not just the last 80 chars: "You will graduate in fall 2027 or
+    spring 2028. This application is ONLY for Winter 2027" must keep Winter 2027, so the
+    window is cut at the last sentence break (or the double-space that clean_fragment
+    leaves between list items) before the match."""
+    window = text[max(0, start - _GRAD_WINDOW):start]
+    clause = _CLAUSE_BREAK_RE.split(window)[-1]
+    return bool(_GRAD_CONTEXT_RE.search(clause))
 
 
 def _age_from_date(posted_date: str):
@@ -89,12 +117,16 @@ def _cycle_label(title: str, jd: str) -> str:
     # Collect every candidate in order, then prefer one that is an actual target.
     from internship_scraper import TARGET_PERIODS_LOWER
     found: list[str] = []
-    for src in (title or "", jd or ""):
+    for src, is_jd in ((title or "", False), (jd or "", True)):
         if not src:
             continue
         for m in _CYCLE_RE.finditer(src):
+            if is_jd and _in_grad_context(src, m.start()):
+                continue
             found.append(f"{m.group(1).title()} {m.group(2)}")
         for m in _CYCLE_REV_RE.finditer(src):
+            if is_jd and _in_grad_context(src, m.start()):
+                continue
             found.append(f"{m.group(2).title()} {m.group(1)}")
     if not found:
         return ""

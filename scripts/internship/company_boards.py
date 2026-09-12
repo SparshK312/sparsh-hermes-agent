@@ -9,7 +9,7 @@ Schema per entry:
   name       display name
   tier       "S" | "A" | "B"  — brand tier (drives hotness; see hotness.py)
   ats_type   "greenhouse" | "lever" | "ashby" | "workable" | "workday" |
-             "smartrecruiters" | "manual"
+             "smartrecruiters" | "oracle" | "manual"
   + ats-specific identifiers:
      greenhouse:      token=<board_token>
      lever:           site=<site>
@@ -17,6 +17,8 @@ Schema per entry:
      workable:        account=<account_slug>
      workday:         host=<tenant.wdN.myworkdayjobs.com>, site=<site>
      smartrecruiters: company=<Company>
+     oracle:          host=<tenant.fa.<region>.oraclecloud.com>, site=<CX site number>
+                      (Oracle Cloud HCM "CandidateExperience" boards; public REST API)
      manual:          url=<careers page>   (no API → click-through only)
 
 To add a company: append a dict here, then `python curate.py --validate-boards`
@@ -134,6 +136,42 @@ BOARDS = [
     {"name": "Wealthsimple", "tier": "B", "ats_type": "ashby", "org": "wealthsimple"},
     {"name": "Affirm", "tier": "B", "ats_type": "greenhouse", "token": "affirm"},
 
+    # ── ADDED 2026-09-12 from the SWElist coverage audit (16 digests, Aug 27 - Sep 11,
+    #    diffed against the board). Every one of these had ZERO rows on any tab while
+    #    holding an open SWE/AI/PM intern req in the US or Canada on its own ATS —
+    #    all were tier C by absence from hotness.py, and tier C is deleted by the
+    #    wide net before any other check. Each token below was validated live the
+    #    same day (listing call + intern count). Tiers are B: funded, real, and a
+    #    rung below the A bar (Stripe/Datadog/Palantir). ───────────────────────
+    {"name": "Epic Games", "tier": "B", "ats_type": "greenhouse", "token": "epicgames"},
+    {"name": "Akuna Capital", "tier": "B", "ats_type": "greenhouse", "token": "akunacapital"},
+    {"name": "Tower Research Capital", "tier": "B", "ats_type": "greenhouse",
+     "token": "towerresearchcapital"},
+    {"name": "Domino Data Lab", "tier": "B", "ats_type": "greenhouse", "token": "dominodatalab"},
+    {"name": "Tanium", "tier": "B", "ats_type": "greenhouse", "token": "tanium"},
+    {"name": "Formlabs", "tier": "B", "ats_type": "greenhouse", "token": "formlabs"},
+    {"name": "Hudl", "tier": "B", "ats_type": "greenhouse", "token": "hudl"},
+    {"name": "Visier", "tier": "B", "ats_type": "greenhouse", "token": "visiersolutionsinc"},
+    {"name": "D2L", "tier": "B", "ats_type": "greenhouse", "token": "d2l"},
+    {"name": "Saronic", "tier": "B", "ats_type": "ashby", "org": "saronic"},
+    {"name": "Hadrian", "tier": "B", "ats_type": "ashby", "org": "hadrian-automation"},
+    {"name": "Bedrock Robotics", "tier": "B", "ats_type": "ashby", "org": "bedrock-robotics"},
+    # Oracle Cloud HCM boards. American Express was the single biggest miss in the
+    # audit: 57 rows on the Simplify feed, 29 of them in-lane (Software Engineer /
+    # AI Engineer / Digital PM interns under Enterprise Technology Services, 11 in
+    # NYC) — cut by the enrichment cap on every run for at least a week (the refresh
+    # log names it in "Most-dropped" six runs running). Tradeweb posted 10 SWE intern
+    # reqs in Jersey City on Sep 10. The REST endpoint was verified against all four
+    # tenants on 2026-09-12 (listing + detail; Amex paginates past 200).
+    {"name": "American Express", "tier": "B", "ats_type": "oracle",
+     "host": "egug.fa.us2.oraclecloud.com", "site": "CX_1"},
+    {"name": "Tradeweb", "tier": "B", "ats_type": "oracle",
+     "host": "ecnf.fa.us2.oraclecloud.com", "site": "CX"},
+    {"name": "Dell Technologies", "tier": "B", "ats_type": "oracle",
+     "host": "iawmqy.fa.ocs.oraclecloud.com", "site": "careers"},
+    {"name": "Honeywell", "tier": "B", "ats_type": "oracle",
+     "host": "ibqbjb.fa.ocs.oraclecloud.com", "site": "Honeywell"},
+
     # ── manual / custom (no public API) — click-through, ranked by brand ────
     {"name": "Tesla", "tier": "S", "ats_type": "manual", "url": "https://www.tesla.com/careers/search/?type=3"},
     {"name": "Apple", "tier": "S", "ats_type": "manual", "url": "https://jobs.apple.com/en-us/search?team=internships"},
@@ -143,6 +181,10 @@ BOARDS = [
     {"name": "Netflix", "tier": "S", "ats_type": "manual", "url": "https://explore.jobs.netflix.net/careers"},
     {"name": "Uber", "tier": "A", "ats_type": "manual", "url": "https://www.uber.com/us/en/careers/list/?query=intern"},
     {"name": "Rippling", "tier": "B", "ats_type": "manual", "url": "https://ats.rippling.com/rippling/jobs"},
+    # Added 2026-09-12. Avature, no public API. Tier A so hot_watch's S/A scope and the
+    # coverage digest both treat it as a target the moment the aggregators list it.
+    {"name": "Bloomberg", "tier": "A", "ats_type": "manual",
+     "url": "https://bloomberg.avature.net/careers/SearchJobs/intern"},
 ]
 
 

@@ -47,13 +47,21 @@ TIER_S = {
 }
 TIER_A = {
     # Added 2026-09-08. Tier C is not a ranking penalty, it is partial DELETION:
-    # wide_net_source.py drops every tier-C swelist row outright and the MAX_ENRICH=160
-    # truncation cuts by tier, so a company missing from this table loses its rows.
+    # wide_net_source.py keeps tier-C swelist rows OFF THE BOARD and the enrichment cap
+    # cuts by tier, so a company missing from this table loses its rows. Since
+    # 2026-09-12 those rows are not lost silently: coverage_digest.py reports every
+    # in-lane req at a tier-C company weekly, so a real employer missing from this
+    # table becomes a line in a Saturday message instead of an invisible hole.
     "blue origin", "postman", "five rings", "pdt partners",
     "stripe", "plaid", "mercury", "ramp", "brex", "robinhood",
     "vercel", "linear", "notion", "figma", "scale ai", "databricks",
     "perplexity", "cursor", "anysphere", "replit", "cohere", "mistral",
     "shopify", "mercor",
+    # Added 2026-09-12. Bloomberg is the largest NY engineering employer that runs a real
+    # SWE intern programme, and it was absent from EVERY table, so it scored tier C:
+    # hot_watch (tiers S/A) would never have fired when its 2027 reqs open. Avature ATS,
+    # no public API, so it reaches the board through the aggregators only.
+    "bloomberg",
     # added Jun 20 (user target list + probe hits)
     "adobe", "coinbase", "visa", "waymo", "mongodb", "datadog", "airbnb",
     "snowflake", "github",
@@ -86,6 +94,25 @@ TIER_B = {
     # so C is the right answer for them rather than a gap.
     "gallup", "semgrep", "viam", "talos", "retell ai",
     "coveo", "kinaxis",
+    # Added 2026-09-12 from a 16-digest SWElist audit (Aug 27 - Sep 11, 1,460 postings)
+    # diffed against the board. 79% of the in-lane digest rows were at companies the
+    # table did not name, so they defaulted to C and were deleted before any other
+    # check. Every name below was verified live on the employer's own ATS (or on the
+    # Simplify feed for the ones with no public API) with an open SWE/AI/PM intern req
+    # in the US or Canada, and every one matched exactly ONE company in a 1,162-name
+    # adversarial corpus. Roughly two groups:
+    #   US: American Express (29 tech intern reqs, 11 in NYC), Tradeweb (10 SWE reqs,
+    #   Jersey City), Epic Games, Akuna, Tower Research, Domino Data Lab, Tanium,
+    #   Formlabs (a WINTER 2027 AI Software req), Saronic, Hudl, Bedrock Robotics,
+    #   Whatnot, Hadrian, Charles Schwab, Honeywell, Garmin, Cisco, Dell, TI, Verizon.
+    #   Canada, his scarce Winter-2027 cycle: Loblaw, Intact, Nasdaq (Toronto),
+    #   Mackenzie, Visier, D2L, and TD -- the one Big Five bank still missing here.
+    "american express", "tradeweb", "epic games", "akuna", "tower research",
+    "domino data", "tanium", "formlabs", "saronic", "hudl", "bedrock robotics",
+    "whatnot", "hadrian", "charles schwab", "honeywell", "garmin", "cisco", "dell",
+    "texas instruments", "verizon",
+    "loblaw", "intact", "nasdaq", "mackenzie investments", "visier", "d2l",
+    "td bank", "td securities", "td",
     # added Jun 20
     "sofi", "zoox", "capital one", "pinterest", "reddit",
     # added Aug 18 — brands that appear via the wide net with no board wired
@@ -241,6 +268,9 @@ TIER_EXCEPTIONS = {
     # Collisions created by the 2026-09-08 tier additions, found by running every new
     # name against an adversarial corpus rather than by waiting for them to surface:
     "hp hood", "vanguard space systems", "micron solutions",
+    # 2026-09-12: "td" (TD Bank) is a single-word brand and TD SYNNEX, a distributor,
+    # would inherit B off it.
+    "td synnex",
 }
 
 

@@ -440,6 +440,209 @@ def test_sheet_dropdown_follows_the_vocabulary():
           bool(re.search(r"^\s*ensure_format\(sheet_id\)\s*$", after_if[:600], re.M)), True)
 
 
+
+# ── 2026-09-12: COVERAGE — what the board could not see ──────────────────────
+# A 16-digest SWElist audit (Aug 27 - Sep 11, 1,460 postings) found 79% of in-lane
+# postings at companies the tier table did not name. Tier C is deleted before any other
+# check, so American Express (29 tech intern reqs), Tradeweb (10), Epic Games, Akuna,
+# Domino, Tanium, Formlabs all had ZERO board rows. Five things changed, each guarded
+# below: the tier table names them (C1); the enrichment cap never cuts a target tier
+# (C2 — by Sep 12 it was cutting RTX and AMD, tier B, every run); SWElist links resolve
+# to the employer URL before dedup (C3 — the source of the Simplify-UUID duplicate rows);
+# a graduation date in a JD is not the work term (C4 — Domino ×2 and Palantir FDSE
+# Commercial NY were being rejected as "Spring 2028" roles); Oracle Cloud boards are
+# first-class (C5 — Amex, Tradeweb, Dell, Honeywell); and the weekly coverage digest
+# reports what the table still hides (C6).
+import json as _json
+
+
+def test_tier_table_names_the_audit_misses():
+    print("C1. tier table: the 2026-09-12 audit misses are named; look-alikes stay C")
+    for name, want in [
+        ("American Express", "B"), ("Tradeweb", "B"), ("Epic Games", "B"), ("Epic Systems", "C"),
+        ("Akuna Capital", "B"), ("Tower Research Capital", "B"), ("Tower Semiconductor", "C"),
+        ("Domino Data Lab", "B"), ("Domino's Pizza", "C"), ("Tanium", "B"), ("Formlabs", "B"),
+        ("Saronic Technologies", "B"), ("Hudl", "B"), ("Bedrock Robotics", "B"),
+        ("Bedrock Energy", "C"), ("WhatNot", "B"), ("Hadrian", "B"), ("Charles Schwab", "B"),
+        ("Honeywell", "B"), ("Garmin", "B"), ("Cisco", "B"), ("Dell Technologies", "B"),
+        ("Texas Instruments", "B"), ("Verizon Communications", "B"), ("Loblaw Companies", "B"),
+        ("Intact Financial", "B"), ("Nasdaq", "B"), ("Mackenzie Investments", "B"),
+        ("Visier Solutions", "B"), ("D2L", "B"), ("TD Bank", "B"), ("TD", "B"),
+        ("TD SYNNEX", "C"), ("Bloomberg", "A"),
+    ]:
+        check(f"tier {name}", brand_tier(name), want)
+
+
+def test_enrich_cap_never_cuts_target_tiers():
+    print("C2. enrichment cap: every S/A/B candidate is kept; tier C keeps a floor, freshest first")
+    import wide_net_source as W
+    from types import SimpleNamespace as NS
+    mk = lambda co, age: NS(company=co, age_days=age)                       # noqa: E731
+    sab = [mk("Stripe", i) for i in range(200)]                              # tier A
+    c = [mk(f"Nobody {i}", i) for i in range(300)]                           # tier C
+    keep, drop = W._apply_enrich_cap(sab + c)
+    check("nothing dropped is S/A/B", all(brand_tier(p.company) == "C" for p in drop), True)
+    check("every S/A/B candidate is kept", sum(1 for p in keep if p.company == "Stripe"), 200)
+    check("tier C keeps the floor when targets exceed the budget",
+          sum(1 for p in keep if p.company.startswith("Nobody")), W.MIN_NONBRAND_ENRICH)
+    keep2, drop2 = W._apply_enrich_cap(sab[:50] + c)
+    check("tier C gets the remainder of the budget", len(keep2), W.MAX_ENRICH)
+    check("order within tier C is preserved (the caller's freshness sort decides)",
+          [p.age_days for p in keep2 if p.company.startswith("Nobody")][:3], [0, 1, 2])
+    check("nothing is dropped when the budget is not hit", W._apply_enrich_cap(sab[:10] + c[:10])[1], [])
+    # source contract: the pure function must actually be what collect() runs
+    src = (Path(__file__).parent / "wide_net_source.py").read_text()
+    body = src[src.index("async def collect("):]
+    check("collect() applies the cap through _apply_enrich_cap",
+          "cand, dropped = _apply_enrich_cap(cand)" in body, True)
+    check("the old unconditional slice is gone", "cand = cand[:MAX_ENRICH]" not in body, True)
+    check("the dropped list still feeds the stale-check exemption",
+          "for _p in dropped:" in body and "CAPPED_OUT_IDS.add" in body, True)
+    gsrc = src[src.index("def _gather_postings"):src.index("def _apply_enrich_cap")]
+    check("_gather_postings sorts by (tier, age) so the tier-C budget rotates onto new rows",
+          "age_days" in gsrc[gsrc.index("cand.sort("):], True)
+
+
+def test_swelist_links_resolve_before_dedup():
+    print("C3. SWElist rows resolve to the employer URL before the id/triple dedup")
+    import simplify_resolve as R
+    fixture = ('<html><script id="__NEXT_DATA__" type="application/json">' + _json.dumps({
+        "props": {"pageProps": {"jobPosting": {
+            "title": "Credit Software Engineer Intern", "start_date": "2026-09-10T01:14:32",
+            "locations": [{"value": "Jersey City, NJ, USA"}, {"value": "Jersey City, NJ, USA"},
+                          {"value": "New York, NY, USA"}],
+            "job": {"company": {"name": "Tradeweb"}},
+            "url": "https://simplify.jobs/jobs/click/abc"}}}}) + '</script></html>')
+    info = R.parse_page(fixture)
+    check("locations joined and deduped", info["location"], "Jersey City, NJ, USA; New York, NY, USA")
+    check("posted date is a date", info["posted_date"], "2026-09-10")
+    check("company read", info["company"], "Tradeweb")
+    check("click url read", info["click_url"], "https://simplify.jobs/jobs/click/abc")
+    check("a non-Simplify page parses to {}", R.parse_page("<html>nope</html>"), {})
+    check("uuid_of finds the id, case-insensitively",
+          R.uuid_of("https://simplify.jobs/p/CFCF9DCD-330d-431b-8720-ccdbd7192fea?x=1"),
+          "cfcf9dcd-330d-431b-8720-ccdbd7192fea")
+    check("uuid_of on an employer url is empty", R.uuid_of("https://boards.greenhouse.io/x/jobs/1"), "")
+    check("aggregator hosts are not employers", R._is_employer_url("https://simplify.jobs/p/x"), False)
+    check("an ATS host is an employer", R._is_employer_url("https://jobs.lever.co/palantir/abc"), True)
+    check("resolve() on a non-Simplify url is a no-op", R.resolve("https://jobs.lever.co/x/y"), None)
+    src = (Path(__file__).parent / "wide_net_source.py").read_text()
+    g = src[src.index("def _gather_postings"):src.index("def _apply_enrich_cap")]
+    check("resolution runs BEFORE the cid is computed (or it can never match the repo row)",
+          g.index("simplify_resolve.resolve(") < g.index("cid = p.canonical_id or canonical_id(p.url)"), True)
+    check("the resolved url replaces the row's canonical id",
+          "p.canonical_id = canonical_id(hit[\"url\"])" in g, True)
+    check("tier-C swelist rows are never resolved (they are the digest's population)",
+          'brand_tier(p.company) != "C"' in g[:g.index("simplify_resolve.resolve(")], True)
+    check("newest newsletter rows get the budget first", "gmail = sorted(gmail" in g, True)
+    check("the cache is persisted at the end of the gather", "simplify_resolve.save_cache()" in g, True)
+
+
+def test_cycle_label_ignores_graduation_dates():
+    print("C4. cycle label: a graduation term is not the work term")
+    from brand_first_source import _cycle_label, _accept
+    import ats_router as A
+    check("Domino: 'Graduating in Spring 2028 or later' is not a Spring 2028 role",
+          _cycle_label("Software Engineer, Intern - Campus Recruiting 2027",
+                       "enterprise systems. Graduating in Spring 2028 or later, currently pursuing a Bachelor's"), "")
+    check("Palantir: 'Must be graduating in December 2027 or Spring 2028' is not a Spring 2028 role",
+          _cycle_label("Forward Deployed Software Engineer, Internship - Commercial",
+                       "What We Require: Must be graduating in December 2027 or Spring 2028. Strong skills."), "")
+    check("Databricks: the real term survives next to the graduation boilerplate",
+          _cycle_label("Software Engineering Intern (2027 Start) - Winter",
+                       "You will graduate in fall 2027 or spring 2028. This application is ONLY for Winter 2027 (January-April)"),
+          "Winter 2027")
+    check("a program-dates term is still read",
+          _cycle_label("SWE Intern", "Program dates: Summer 2027, 12 weeks in New York"), "Summer 2027")
+    check("the title term still wins", _cycle_label("SWE Intern - Summer 2027", "Graduating in Spring 2028"), "Summer 2027")
+    check("reversed order in the JD still reads", _cycle_label("SWE Intern", "Term: 2027 Summer"), "Summer 2027")
+    check("a title is never treated as graduation context",
+          _cycle_label("Intern, Class of Summer 2027 Program", ""), "Summer 2027")
+    rec = A.JobRecord(title="Software Engineer, Intern - Campus Recruiting 2027", location="New York",
+                      url="u", full_jd="Graduating in Spring 2028 or later, pursuing a Bachelor's")
+    check("the Domino req now passes _accept", _accept(rec), True)
+    rec2 = A.JobRecord(title="Software Engineer Intern", location="NY", url="u",
+                       full_jd="This internship runs Fall 2027.")
+    check("a real out-of-window term is still rejected", _accept(rec2), False)
+
+
+def test_oracle_boards_are_first_class():
+    print("C5. Oracle Cloud HCM boards fetch through the same gates as Workday")
+    import ats_router as A
+    from company_boards import BOARDS
+    check("fetcher registered", callable(A._BOARD_FETCHERS.get("oracle")), True)
+    check("detect_ats", A.detect_ats(
+        "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011015"), "oracle")
+    check("url parts", A._oracle_parts(
+        "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/26011015?utm_source=Simplify"),
+        ("egug.fa.us2.oraclecloud.com", "CX_1", "26011015"))
+    check("a non-oracle url has no parts", A._oracle_parts("https://boards.greenhouse.io/x/jobs/1"), None)
+    src = (Path(__file__).parent / "ats_router.py").read_text()
+    fb = src[src.index("async def fetch_board("):src.index("async def fetch_jd_record(")]
+    branch = fb[fb.index("if ats in ("):fb.index("return await fetcher(client, board, prefilter")]
+    check("fetch_board passes the LISTING prefilter to oracle (bounded detail calls)", '"oracle"' in branch, True)
+    fj = src[src.index("async def fetch_jd_record("):src.index("async def _single_workday(")]
+    check("the single-URL path routes oracle to the REST detail, not _single_manual", 'ats == "oracle"' in fj, True)
+    rec = A._oracle_record("h", "S", "1", {"Title": "T", "PrimaryLocation": "NYC", "PostedDate": "2026-09-10"},
+                           {"ExternalDescriptionStr": "<p>desc</p>", "ExternalQualificationsStr": "<p>quals</p>"})
+    check("record url", rec.url, "https://h/hcmUI/CandidateExperience/en/sites/S/job/1")
+    check("record jd joins the description sections", "desc" in rec.full_jd and "quals" in rec.full_jd, True)
+    check("record date", rec.posted_date, "2026-09-10")
+    check("record ats_type matches detect_ats", rec.ats_type, "oracle")
+    check("American Express board is wired as oracle",
+          any(b["name"] == "American Express" and b["ats_type"] == "oracle" for b in BOARDS), True)
+    check("board names are unique", len({b["name"] for b in BOARDS}), len(BOARDS))
+    check("every board's ats_type has a fetcher (or is manual)",
+          all(b["ats_type"] == "manual" or b["ats_type"] in A._BOARD_FETCHERS for b in BOARDS), True)
+
+
+def test_coverage_digest_partition():
+    print("C6. coverage digest: tier C with no store row -> report; S/A/B missing from the store -> gap")
+    import coverage_digest as CD
+    from types import SimpleNamespace as NS
+
+    def mk(co, title, loc, age=1, src="simplify-main", terms=""):
+        return NS(company=co, title=title, location=loc, age_days=age, terms=terms, source=src,
+                  posted_date="", canonical_id="", url=f"https://x/{co}/{title}".replace(" ", "-"))
+    store = {"a": {"machine": {"company": "Stripe", "role": "Software Engineer, Intern", "location": "Toronto"}},
+             "orphan": {"machine": {}, "human": {"status": "Applied"}},
+             "b": {"machine": {"company": "Qorvo", "role": "SWE Intern", "location": "NC"}}}
+    idx = CD.store_index(store)
+    check("identity-less orphans do not count as store presence", "" in idx["companies"], False)
+    check("the fixture's non-target company really is tier C", brand_tier("Shure"), "C")
+    rows = [mk("Shure", "Application Software Engineer Intern", "Niles, IL"),
+            mk("Shure", "Application Software Engineer Intern", "Niles, IL"),    # exact duplicate collapses
+            mk("Qorvo", "Software Engineer Intern", "NC"),                        # tier C but already in store
+            mk("Stripe", "Software Engineer, Intern", "Toronto"),                 # target, present by triple
+            mk("Lyft", "Software Engineer Intern, Backend (Summer 2027)", "San Francisco, CA"),  # target, missing
+            mk("Shure", "Marketing Intern", "IL"),                                # out of lane
+            mk("Shure", "C++ Developer Intern", "IL", age=30),                    # out of window
+            mk("Acme", "Software Engineer Intern - Fall 2027", "NYC"),            # period reject
+            mk("Shure", "Application Software Engineer Intern", "", src="swelist"),  # location-less twin
+            mk("Lyft", "Software Engineer Intern, Backend (Summer 2027)", "", src="swelist"),  # twin of the gap
+            mk("Stripe", "Software Engineer, Intern", "", src="swelist"),         # held by (company, title)
+            mk("Zed", "Embedded Software Engineer Intern", "Austin, TX"),         # firmware rule
+            mk("Zed", "Firmware Intern - Summer 2027", "Austin, TX")]             # firmware rule
+    nt, gaps = CD.partition(rows, idx, days=7)
+    check("firmware/embedded titles never reach the digest", "Zed" in nt, False)
+    check("a non-target company is reported once per distinct row", [(k, len(v)) for k, v in nt.items()], [("Shure", 1)])
+    check("a target company the store lacks is a gap", [p.company for p in gaps], ["Lyft"])
+    msg = CD.format_message(nt, gaps, 7, "2026-09-12 09:00 EDT")
+    check("the message names the gap", "Lyft ×1" in msg, True)
+    check("the message names the non-target company", "Shure ×1" in msg, True)
+    check("the message is bounded for Telegram", len(msg) <= CD.TELEGRAM_MAX + 80, True)
+    big = {f"Co {i}": [mk(f"Co {i}", "Software Engineer Intern", "NYC")] for i in range(120)}
+    check("a huge week still fits Telegram", len(CD.format_message(big, [], 7, "x")) <= CD.TELEGRAM_MAX + 80, True)
+    rep = CD.format_report(nt, gaps, 7, "2026-09-12 09:00 EDT")
+    check("the vault report carries frontmatter", rep.startswith("---\ntype: coverage-digest"), True)
+    check("the vault report lists the gap", "| Lyft | B |" in rep, True)
+    dsrc = (Path(__file__).resolve().parents[1] / "deploy.sh").read_text()
+    check("deploy.sh mirrors the cron wrapper",
+          "run_coverage_digest.sh ~/.hermes/scripts/run_coverage_digest.sh" in dsrc, True)
+    check("the cron wrapper runs the script",
+          "coverage_digest.py" in (Path(__file__).parent / "run_coverage_digest.sh").read_text(), True)
+
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -448,7 +651,13 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_cap_dropped_rows_are_never_struck,
            test_status_vocabulary_has_one_source,
            test_id_match_is_exact_and_refuses_ambiguity,
-           test_sheet_dropdown_follows_the_vocabulary):
+           test_sheet_dropdown_follows_the_vocabulary,
+           test_tier_table_names_the_audit_misses,
+           test_enrich_cap_never_cuts_target_tiers,
+           test_swelist_links_resolve_before_dedup,
+           test_cycle_label_ignores_graduation_dates,
+           test_oracle_boards_are_first_class,
+           test_coverage_digest_partition):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

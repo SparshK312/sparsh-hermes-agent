@@ -219,7 +219,9 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   cp scripts/internship/run_curate_vps.sh ~/.hermes/scripts/run_curate_vps.sh
   cp scripts/internship/run_hot_watch.sh  ~/.hermes/scripts/run_hot_watch.sh
   cp scripts/internship/run_revive_dead.sh ~/.hermes/scripts/run_revive_dead.sh
-  chmod +x ~/.hermes/scripts/run_curate_vps.sh ~/.hermes/scripts/run_hot_watch.sh ~/.hermes/scripts/run_revive_dead.sh
+  # Weekly coverage digest (2026-09-12): what the tier table hid this week.
+  cp scripts/internship/run_coverage_digest.sh ~/.hermes/scripts/run_coverage_digest.sh
+  chmod +x ~/.hermes/scripts/run_curate_vps.sh ~/.hermes/scripts/run_hot_watch.sh ~/.hermes/scripts/run_revive_dead.sh ~/.hermes/scripts/run_coverage_digest.sh
   # RETIRED 2026-08-26: internship_watch.sh -> internship_triage.py, the legacy
   # frontier watcher. Its cron job (internship-watcher) was disabled and last ran
   # 2026-06-21; the job record is removed and both files are deleted. Nothing

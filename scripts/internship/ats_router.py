@@ -14,7 +14,9 @@ Two entry points:
                                              (lane-2 + re-checking existing rows)
 
 Supported ATS (board-level JSON): greenhouse, lever, ashby, workable, workday,
-smartrecruiters. Oracle / iCIMS / custom (Tesla/Apple/Stripe) -> "manual":
+smartrecruiters, oracle (Oracle Cloud HCM CandidateExperience, added 2026-09-12 —
+American Express / Tradeweb / Dell / Honeywell). iCIMS / custom (Tesla/Apple/Stripe)
+-> "manual":
 no API, returned as a click-through record (ranked by brand, JD via plain-GET if
 the page is server-rendered, else left for the user to open).
 
@@ -57,6 +59,14 @@ MIN_USABLE_CHARS = 200         # below this after cleaning -> treat as no-JD
 WORKDAY_PAGE = 20              # CXS listing page size
 WORKDAY_MAX_PAGES = 5          # per search term (boards sort full-time first; search-driven)
 WORKDAY_SEARCH_TERMS = ["intern", "co-op", "university", "student"]
+# Oracle Cloud HCM ("CandidateExperience") boards. The listing is a GET with a
+# server-side keyword filter, 200 per page; `TotalJobsCount` is reported on every page.
+# Verified 2026-09-12 on four tenants: Amex 253 keyword hits (paginates), Tradeweb 53,
+# Dell 163, Honeywell 691. Detail is a second GET per requisition; the JD is split
+# across ExternalDescriptionStr / ExternalResponsibilitiesStr / ExternalQualificationsStr.
+ORACLE_PAGE = 200
+ORACLE_MAX_PAGES = 5
+ORACLE_SEARCH_TERMS = ["intern", "co-op"]
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 # 🔴 Accept-Encoding is pinned to gzip/deflate ON PURPOSE — do not drop `br` back in.
@@ -447,6 +457,85 @@ async def _board_workday(client, board, prefilter=None) -> list[JobRecord]:
     return [r for r in results if r]
 
 
+def _oracle_base(board) -> tuple[str, str, str]:
+    """Return (rest_base, host, site) for an Oracle Cloud HCM board config."""
+    host = board["host"]                       # e.g. egug.fa.us2.oraclecloud.com
+    return f"https://{host}/hcmRestApi/resources/latest", host, board["site"]
+
+
+def _oracle_posting_url(host: str, site: str, rid: str) -> str:
+    return f"https://{host}/hcmUI/CandidateExperience/en/sites/{site}/job/{rid}"
+
+
+def _oracle_record(host: str, site: str, rid: str, summary: dict, detail: dict) -> JobRecord:
+    """Build one JobRecord from a listing summary + (possibly empty) detail item."""
+    detail = detail or {}
+    jd = " ".join((detail.get(k) or "") for k in (
+        "ExternalDescriptionStr", "ExternalResponsibilitiesStr",
+        "ExternalQualificationsStr", "ShortDescriptionStr"))
+    return JobRecord(
+        title=detail.get("Title") or summary.get("Title", ""),
+        location=detail.get("PrimaryLocation") or summary.get("PrimaryLocation", ""),
+        url=_oracle_posting_url(host, site, rid),
+        full_jd=clean_fragment(jd),
+        posted_date=_iso_to_date(summary.get("PostedDate")
+                                 or detail.get("ExternalPostedStartDate") or ""),
+        ats_type="oracle",
+        req_id=rid,
+    )
+
+
+async def _board_oracle(client, board, prefilter=None) -> list[JobRecord]:
+    """Oracle Cloud HCM board: keyword-filtered listing pages, then one detail GET per
+    surviving requisition. Same shape as the Workday fetcher: prefilter on
+    (title, location) at the LISTING stage so the detail calls stay bounded."""
+    base, host, site = _oracle_base(board)
+    candidates: dict[str, dict] = {}
+    terms = board.get("search_terms", ORACLE_SEARCH_TERMS)
+    for term in terms:
+        total = None
+        for page in range(ORACLE_MAX_PAGES):
+            url = (f"{base}/recruitingCEJobRequisitions?onlyData=true"
+                   f"&expand=requisitionList.secondaryLocations"
+                   f"&finder=findReqs;siteNumber={site},limit={ORACLE_PAGE},"
+                   f"offset={page * ORACLE_PAGE},sortBy=POSTING_DATES_DESC,keyword={term}")
+            data, code = await _get_json(client, url)
+            if not data:
+                if page == 0 and term == terms[0] and not candidates:
+                    raise BoardFetchError(f"oracle {host}/{site} term={term!r}: HTTP {code}")
+                print(f"[ats_router] oracle {host}/{site} term={term!r}: page {page} "
+                      f"returned HTTP {code} — keeping the {len(candidates)} candidates "
+                      f"already collected, remainder LOST", file=sys.stderr)
+                break
+            items = data.get("items") or []
+            reqs = (items[0].get("requisitionList") if items else None) or []
+            if not reqs:
+                break
+            for r in reqs:
+                if prefilter and not prefilter(r.get("Title", ""), r.get("PrimaryLocation", "")):
+                    continue
+                rid = str(r.get("Id") or "")
+                if rid and rid not in candidates:
+                    candidates[rid] = r
+            if total is None:
+                total = int(items[0].get("TotalJobsCount") or 0)
+            if total and (page + 1) * ORACLE_PAGE >= total:
+                break
+
+    async def _detail(rid: str, summary: dict):
+        durl = (f"{base}/recruitingCEJobRequisitionDetails?onlyData=true&expand=all"
+                f"&finder=ById;Id=%22{rid}%22,siteNumber={site}")
+        data, code = await _get_json(client, durl)
+        det = ((data or {}).get("items") or [{}])[0] if data else {}
+        # a detail miss still yields a record: the listing has title/location/date, and
+        # the JD simply stays empty (renders as "click to verify") rather than the
+        # posting vanishing.
+        return _oracle_record(host, site, rid, summary, det)
+
+    results = await asyncio.gather(*[_detail(rid, r) for rid, r in candidates.items()])
+    return [r for r in results if r and r.title]
+
+
 def _sr_loc(p) -> str:
     loc = p.get("location", {}) or {}
     return ", ".join(x for x in [loc.get("city"), loc.get("region"), loc.get("country")] if x)
@@ -569,6 +658,7 @@ _BOARD_FETCHERS = {
     "workday": _board_workday,
     "smartrecruiters": _board_smartrecruiters,
     "amazon": _board_amazon,
+    "oracle": _board_oracle,
 }
 
 
@@ -639,7 +729,7 @@ async def fetch_board(client, board: dict, prefilter=None) -> list[JobRecord]:
         return []
 
     async def _attempt():
-        if ats in ("workday", "smartrecruiters"):
+        if ats in ("workday", "smartrecruiters", "oracle"):
             return await fetcher(client, board, prefilter or _default_prefilter)
         return await fetcher(client, board)
 
@@ -679,6 +769,8 @@ async def fetch_jd_record(client, url: str) -> JobRecord:
             rec = await _single_smartrecruiters(client, url)
         elif ats == "icims":
             rec = await _single_icims(client, url)
+        elif ats == "oracle":
+            rec = await _single_oracle(client, url)
         else:
             rec = await _single_manual(client, url, ats)
     except Exception as e:  # noqa: BLE001
@@ -920,6 +1012,41 @@ async def _single_smartrecruiters(client, url) -> JobRecord:
         full_jd=jd.strip()[:MAX_JD_CHARS],
         posted_date=_iso_to_date(data.get("releasedDate", "")), req_id=pid,
     )
+
+
+_ORACLE_URL_RE = re.compile(
+    r"^https?://(?P<host>[^/]+)/hcmUI/CandidateExperience/[a-z]{2}(?:-[A-Za-z]{2})?/sites/"
+    r"(?P<site>[^/]+)/(?:job|requisitions/preview)/(?P<rid>\d+)", re.I)
+
+
+def _oracle_parts(url: str) -> tuple[str, str, str] | None:
+    """(host, site, requisition id) from a CandidateExperience posting URL, else None."""
+    m = _ORACLE_URL_RE.match(url or "")
+    return (m.group("host"), m.group("site"), m.group("rid")) if m else None
+
+
+async def _single_oracle(client, url) -> JobRecord:
+    """Oracle Cloud HCM single posting via the same REST detail call the board fetcher
+    uses. An empty `items` list is how Oracle reports a closed requisition (the HTTP
+    status stays 200), so that — not the status code — is the dead signal."""
+    parts = _oracle_parts(url)
+    if not parts:
+        return await _single_manual(client, url, "oracle")
+    host, site, rid = parts
+    base = f"https://{host}/hcmRestApi/resources/latest"
+    durl = (f"{base}/recruitingCEJobRequisitionDetails?onlyData=true&expand=all"
+            f"&finder=ById;Id=%22{rid}%22,siteNumber={site}")
+    data, code = await _get_json(client, durl)
+    if data is None:
+        return JobRecord(url=url, ats_type="oracle", dead=code in (404, 410),
+                         error=f"oracle http {code}")
+    items = data.get("items") or []
+    if not items:
+        return JobRecord(url=url, ats_type="oracle", dead=True, error="oracle: requisition not found")
+    det = items[0]
+    rec = _oracle_record(host, site, rid, {}, det)
+    rec.url = url
+    return rec
 
 
 async def _single_icims(client, url) -> JobRecord:
