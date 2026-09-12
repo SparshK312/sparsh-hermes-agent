@@ -406,6 +406,40 @@ def test_id_match_is_exact_and_refuses_ambiguity():
     check("board._find no longer lowercases the id needle", 'want = needle[3:].strip().lower()' in brd, False)
 
 
+# ── VOCABULARY, PART 2: THE SHEET ────────────────────────────────────────────
+# 2026-09-12, an hour after the vocabulary test above went green: "Technical
+# Interview" was in every list in the code and NOT in the Sheet's dropdown, because
+# the dropdown lives in a validation rule that only ensure_format() writes, and
+# ensure_format is deliberately not per-refresh. The cell held the value, the
+# dropdown still listed the old twelve, the row rendered white. Sparsh caught it in
+# the UI. A change that reaches the code and not the surface he sees is not done.
+def test_sheet_dropdown_follows_the_vocabulary():
+    import re
+    print("V2. the Sheet's Status dropdown follows STATUS_OPTS")
+    from build_curated_xlsx import STATUS_OPTS
+    try:
+        from build_curated_gsheet import vocab_is_current
+    except Exception as exc:  # noqa: BLE001
+        FAIL_ = f"build_curated_gsheet import failed: {exc}"
+        check(FAIL_, True, False); return
+    check("exact list is current", vocab_is_current(list(STATUS_OPTS)), True)
+    old = [o for o in STATUS_OPTS if o != "Technical Interview"]
+    check("the pre-2026-09-12 list (no Technical Interview) is DRIFTED",
+          vocab_is_current(old), False)
+    check("a reordered list is drifted (order is the dropdown order)",
+          vocab_is_current(list(reversed(STATUS_OPTS))), False)
+    check("an unreadable rule counts as drifted, never as fine", vocab_is_current(None), False)
+    src = (Path(__file__).parent / "build_curated_gsheet.py").read_text()
+    wb = src[src.index("def write_board("):src.index("# ── formatting")]
+    check("write_board reads the live rule", "sheet_status_options(sheet_id)" in wb, True)
+    # The call must be a real statement on its own line, not the name inside a
+    # comment: the first version of this assertion stayed green with the call
+    # commented out because "ensure_format(sheet_id)" still appeared in the text.
+    after_if = wb[wb.index("if not vocab_is_current(live):"):] if "if not vocab_is_current(live):" in wb else ""
+    check("write_board re-applies ensure_format when drifted (uncommented statement)",
+          bool(re.search(r"^\s*ensure_format\(sheet_id\)\s*$", after_if[:600], re.M)), True)
+
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -413,7 +447,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_revive_has_a_blast_radius_cap,
            test_cap_dropped_rows_are_never_struck,
            test_status_vocabulary_has_one_source,
-           test_id_match_is_exact_and_refuses_ambiguity):
+           test_id_match_is_exact_and_refuses_ambiguity,
+           test_sheet_dropdown_follows_the_vocabulary):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

@@ -597,6 +597,18 @@ def write_board(store: dict, sheet_id: str = SHEET_ID_DEFAULT,
     for tab in TABS:
         counts[tab] = _sync_tab(sheet_id, tab, buckets[tab])
 
+    # 🔴 The Status dropdown and its colours live in a validation rule that only
+    # ensure_format() writes, and ensure_format is deliberately not per-refresh.
+    # So a vocabulary change (2026-09-12: "Technical Interview") reached every list
+    # in the code and never reached the Sheet: the cell held the value, the dropdown
+    # still listed the old twelve, and the row rendered white. One GET per refresh
+    # is cheap; re-apply the format only when the live rule disagrees with STATUS_OPTS.
+    live = sheet_status_options(sheet_id)
+    if not vocab_is_current(live):
+        print(f"[gsheet] Status vocabulary drifted: Sheet has {live}, code has "
+              f"{list(STATUS_OPTS)} — re-applying ensure_format()", file=sys.stderr)
+        ensure_format(sheet_id)
+
     values_update(sheet_id, f"{_q(TAB_META)}!A1:B6", [
         ["schema_version", SCHEMA_VERSION],
         ["generated_at", generated_at],
@@ -610,10 +622,43 @@ def write_board(store: dict, sheet_id: str = SHEET_ID_DEFAULT,
 
 # ── formatting ────────────────────────────────────────────────────────────────
 # Idempotent, and deliberately NOT part of write_board: it is ~40 batchUpdate
-# requests and none of it changes between runs. Call it when the layout changes.
+# requests and none of it changes between runs. Call it when the layout changes —
+# and write_board calls it on its own when the Status dropdown on the Sheet no
+# longer matches STATUS_OPTS (see vocab_is_current).
 from build_curated_xlsx import (  # noqa: E402  (palette lives with the xlsx board)
     PRIORITY_OPTS, STATUS_FILL, STATUS_OPTS, TIER_FILL,
 )
+
+
+def vocab_is_current(live_options) -> bool:
+    """True iff the Sheet's Status dropdown lists exactly STATUS_OPTS, in order.
+    Pure, so the invariant suite can exercise it. An unreadable rule (None) counts
+    as drifted: better one redundant ensure_format than a silently stale dropdown."""
+    if live_options is None:
+        return False
+    return [str(o) for o in live_options] == [str(o) for o in STATUS_OPTS]
+
+
+def sheet_status_options(sheet_id: str = SHEET_ID_DEFAULT):
+    """The option list of the Status column's validation rule on My Applications
+    (row 2), or None if there is no rule / the read fails."""
+    try:
+        col = _col_letter(_HEADERS[TAB_APPS].index("Status") + 1)
+        rng = f"{_q(TAB_APPS)}!{col}2"
+        info = _sheets("GET", f"?ranges={rng}&fields=sheets.data.rowData.values.dataValidation",
+                       sheet_id=sheet_id)
+        for sh in info.get("sheets", []):
+            for grid in sh.get("data", []):
+                for row in grid.get("rowData", []):
+                    for v in row.get("values", []):
+                        vals = (v.get("dataValidation", {}).get("condition", {})
+                                .get("values", []))
+                        if vals:
+                            return [x.get("userEnteredValue") for x in vals]
+        return None
+    except Exception as exc:  # noqa: BLE001
+        print(f"[gsheet] could not read the Status validation rule: {exc}", file=sys.stderr)
+        return None
 
 _WIDTHS = {
     TAB_QUEUE: {"🔥": 34, "Hot": 46, "Fit": 44, "Why": 260, "Tier": 44, "Priority": 70,
