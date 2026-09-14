@@ -29,6 +29,7 @@ SHEET_ID = "1Kkle7QoKsBMXihoslWjIoMDqKFznwxxA4Y_OgiqJpWI"
 GOOGLE_API = Path.home() / ".hermes/skills/productivity/google-workspace/scripts/google_api.py"
 VENV_PY = Path.home() / ".hermes/hermes-agent/venv/bin/python"
 DONE = {"applied", "oa", "phone screen", "onsite", "offer", "rejected",
+        "rejected after oa", "rejected after interview",
         "skip", "not a fit", "closed"}
 LIVE_PIPELINE = {"oa", "phone screen", "onsite", "offer"}
 

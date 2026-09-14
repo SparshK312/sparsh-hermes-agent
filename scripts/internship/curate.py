@@ -187,6 +187,7 @@ WIDE_STALE_STRIKES = 14          # ~1 week at 2 runs/day
 # Below this, treat lane 1 as collapsed and exempt its postings from striking.
 LANE1_MIN_HEALTHY = 25
 _ACTIONED = {"applied", "oa", "phone screen", "onsite", "offer", "rejected",
+             "rejected after oa", "rejected after interview",
              "networking", "on hold"}
 
 import re as _re  # noqa: E402

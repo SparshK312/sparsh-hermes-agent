@@ -40,7 +40,8 @@ row that had been vetted from one nobody had ever opened:
 
 Valid Status values (they are a dropdown on the Sheet; anything else will look broken):
   To Apply · Applied · OA · Phone Screen · Technical Interview · Onsite · Offer ·
-  Rejected · Networking · On Hold · Skip · Not a Fit · Closed
+  Rejected · Rejected after OA · Rejected after Interview · Networking · On Hold ·
+  Skip · Not a Fit · Closed
   (the list is STATUS_OPTS in build_curated_xlsx.py — one vocabulary, imported here)
 
 AFTER RUNNING: the change is live on the Sheet immediately. The JSON store catches up

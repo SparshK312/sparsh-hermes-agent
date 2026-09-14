@@ -496,6 +496,42 @@ def test_status_vocabulary_has_one_source():
           "for st in IN_PROCESS_STATUSES" in xl, True)
 
 
+# ── VOCABULARY, PART 3: REJECTED AFTER A ROUND ───────────────────────────────
+# 2026-09-14, Sparsh: "if we did an OA and THEN got rejected, is there a way to mark
+# that on the sheet… 'rejected after OA' or 'rejected after interview'". Two terminal
+# statuses that carry WHERE the funnel broke. Every consumer that buckets "rejected"
+# must see all three, or the new ones vanish from a count (the xlsx tile), get struck
+# as stale (curate), or are missed by the Hermes nudge (board_facts).
+def test_rejected_after_round_statuses():
+    import re
+    from build_curated_xlsx import (STATUS_OPTS, STATUS_FILL, STATUS_RANK,
+                                    REJECTED_STATUSES, classify_row)
+    print("V3. rejected-after-OA / -Interview are first-class terminal statuses")
+    for st in ("Rejected after OA", "Rejected after Interview"):
+        check(f"{st} is a status", st in STATUS_OPTS, True)
+        check(f"{st} has a colour", st in STATUS_FILL, True)
+        check(f"{st} ranks (sorts deterministically)", st in STATUS_RANK, True)
+        check(f"{st} is in REJECTED_STATUSES", st in REJECTED_STATUSES, True)
+        rec = {"machine": {"company": "X", "role": "Y"}, "human": {"status": st}}
+        check(f"{st} routes to My Applications, not Reviewed", classify_row(rec), "application")
+    check("REJECTED_STATUSES derives from the list", set(REJECTED_STATUSES),
+          {s for s in STATUS_OPTS if s.startswith("Rejected")})
+    check("ranks: after-Interview above after-OA above cold (deeper funnel first)",
+          STATUS_RANK["Rejected after Interview"] < STATUS_RANK["Rejected after OA"] < STATUS_RANK["Rejected"], True)
+    here = Path(__file__).parent
+    cur = (here / "curate.py").read_text()
+    m = re.search(r"^_ACTIONED = \{(.*?)\}", cur, re.M | re.S)
+    check("curate._ACTIONED holds both (else a live rejection row is struck as stale)",
+          bool(m) and "rejected after oa" in m.group(1) and "rejected after interview" in m.group(1), True)
+    bf = (here / "board_facts.py").read_text()
+    m = re.search(r"^DONE = \{(.*?)\}", bf, re.M | re.S)
+    check("board_facts.DONE holds both (else the nudge re-surfaces a closed row)",
+          bool(m) and "rejected after oa" in m.group(1) and "rejected after interview" in m.group(1), True)
+    xl = (here / "build_curated_xlsx.py").read_text()
+    check("xlsx summary counts every Rejected* with a wildcard, not the bare word",
+          'COUNTIF({rng},"Rejected*")' in xl and 'COUNTIF({rng},"Rejected")\'' not in xl, True)
+
+
 # ── ID MATCH ─────────────────────────────────────────────────────────────────
 # 2026-09-12: `board.py status "id:jobs.ashbyhq.com/sierra/<uuid>" Skip` marked the row
 # whose _id was `.../Sierra/<uuid>` (capital S). The id: branch lowercased both sides and
@@ -845,6 +881,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_revive_has_a_blast_radius_cap,
            test_cap_dropped_rows_are_never_struck,
            test_status_vocabulary_has_one_source,
+           test_rejected_after_round_statuses,
            test_id_match_is_exact_and_refuses_ambiguity,
            test_sheet_dropdown_follows_the_vocabulary,
            test_tier_table_names_the_audit_misses,

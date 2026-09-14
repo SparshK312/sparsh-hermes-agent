@@ -48,8 +48,17 @@ ID_HEADER = "_id"
 # test_board_invariants.py goes red.
 # "Technical Interview" added 2026-09-12 (Sparsh: Wealthsimple's 1-hour CoderPad round
 # "is not a phone screen") — it sits between the recruiter screen and the final round.
+# "Rejected after OA" / "Rejected after Interview" added 2026-09-14 (Sparsh: "if we did
+# an OA and THEN got rejected… 'rejected after OA' or 'rejected after interview' would
+# help me see that more clearly"). A rejection that came AFTER an assessment or a live
+# round is a different fact from a cold rejection: the first says the résumé cleared the
+# screen and the round did not, the second says nothing. Both are terminal; the summary
+# counts them with plain "Rejected" (COUNTIF "Rejected*").
 STATUS_OPTS = ["To Apply", "Applied", "OA", "Phone Screen", "Technical Interview", "Onsite",
-               "Offer", "Rejected", "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
+               "Offer", "Rejected", "Rejected after OA", "Rejected after Interview",
+               "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
+# Every terminal-no status, for consumers that need "he was turned down" as one bucket.
+REJECTED_STATUSES = tuple(s for s in STATUS_OPTS if s.startswith("Rejected"))
 # Statuses that mean "I looked at this and I'm not applying" -> Reviewed sheet, not the
 # active queue and NOT the applications sheet. Skip / Not a Fit = your judgment call;
 # Closed = dead (missed deadline / role pulled) that you never applied to.
@@ -80,6 +89,8 @@ STATUS_FILL = {"To Apply": ("FED7AA", "9A3412"),        # orange  — action nee
                "Offer": ("A7F3D0", "065F46"),           # green   — win
                "Networking": ("FBCFE8", "9D174D"),      # pink    — warm outreach
                "Rejected": ("FECACA", "991B1B"),        # red     — no
+               "Rejected after OA": ("FCA5A5", "7F1D1D"),         # deeper red — cleared the screen, lost the OA
+               "Rejected after Interview": ("F87171", "450A0A"),  # deepest red — lost a live round
                "Skip": ("F3F4F6", "6B7280"),            # cool gray
                "Not a Fit": ("E7E5E4", "57534E"),       # warm gray
                "Closed": ("FEE2E2", "B91C1C")}          # light red — dead/deadline
@@ -98,7 +109,8 @@ PRIO_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "": 4}
 # band and hotness only orders WITHIN a band.
 TIER_RANK = {"S": 0, "A": 1, "B": 2, "C": 3}
 STATUS_RANK = {"Offer": 0, "Onsite": 1, "Technical Interview": 2, "Phone Screen": 3, "OA": 4,
-               "Applied": 5, "Networking": 6, "On Hold": 7, "Rejected": 9}
+               "Applied": 5, "Networking": 6, "On Hold": 7,
+               "Rejected after Interview": 9, "Rejected after OA": 10, "Rejected": 11}
 
 
 def classify_row(rec: dict) -> str:
@@ -465,7 +477,9 @@ def _build_summary(wb, app_first, app_last, queue_count, reviewed_count, generat
         ("Applied", f'=COUNTIF({rng},"Applied")'),
         ("In process (OA+)", "=" + "+".join(f'COUNTIF({rng},"{st}")' for st in IN_PROCESS_STATUSES)),
         ("Offers", f'=COUNTIF({rng},"Offer")'),
-        ("Rejected", f'=COUNTIF({rng},"Rejected")'),
+        # wildcard: plain + after-OA + after-Interview, one tile (Excel and Sheets both honour *)
+        ("Rejected (all)", f'=COUNTIF({rng},"Rejected*")'),
+        ("  of which after an OA / interview", "=" + "+".join(f'COUNTIF({rng},"{st}")' for st in REJECTED_STATUSES if st != "Rejected")),
         ("Networking", f'=COUNTIF({rng},"Networking")'),
         ("", ""),
         ("REVIEWED", None),
