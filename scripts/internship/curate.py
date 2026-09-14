@@ -917,19 +917,34 @@ async def validate_boards() -> int:
         async def chk(b):
             if b["ats_type"] == "manual":
                 return b["name"], "manual", 0, 0
-            try:
-                recs = await A.fetch_board(c, b)
-                return (b["name"], b["ats_type"], len(recs),
-                        len([r for r in recs if A.default_intern_filter(r.title)]))
-            except Exception as e:  # noqa: BLE001
-                return b["name"], f"ERR {type(e).__name__}", -1, -1
+            # 🔴 RETRY ONCE ON ZERO (2026-09-14). This fires ~80 boards concurrently
+            # through asyncio.gather, and some employers rate-limit under that burst
+            # and answer with an empty list rather than an error. The old code read
+            # that transient zero as a verdict and printed "DEAD/EMPTY — fix token",
+            # which sent someone chasing two boards that were fine: CIBC reported
+            # DEAD while serving 13 postings incl. "2027 Summer Intern - Software
+            # Engineering", and Ciena while serving 17. Back-to-back runs named
+            # different victims each time, which is the signature of load, not of a
+            # broken token. A genuine zero is still a zero on the second ask.
+            for attempt in (1, 2):
+                try:
+                    recs = await A.fetch_board(c, b)
+                    if recs or attempt == 2:
+                        return (b["name"], b["ats_type"], len(recs),
+                                len([r for r in recs if A.default_intern_filter(r.title)]))
+                    await asyncio.sleep(2.0)
+                except Exception as e:  # noqa: BLE001
+                    if attempt == 2:
+                        return b["name"], f"ERR {type(e).__name__}", -1, -1
+                    await asyncio.sleep(2.0)
         for name, ats, roles, interns in await asyncio.gather(*[chk(b) for b in boards()]):
             flag = "✓" if roles > 0 else ("· manual" if ats == "manual" else "✗ DEAD")
             if roles == 0 and ats != "manual":
                 dead.append(name)
             print(f"{name:22} {ats:16} {roles:>6} {interns:>7}  {flag}")
     if dead:
-        print("\nDEAD/EMPTY — fix token in company_boards.py:", ", ".join(dead))
+        print("\nDEAD/EMPTY after a retry — investigate before editing a token:",
+              ", ".join(dead))
     return 0
 
 

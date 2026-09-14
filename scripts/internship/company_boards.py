@@ -51,8 +51,18 @@ BOARDS = [
     # them), which is why the "Sep 5 batch: … PayPal …" line in Action Items pointed at
     # a company with zero rows in a 353-row queue. Its SWE Intern req appeared in the
     # SWElist digest of 2026-09-05 and was invisible here. Workday, verified live.
-    {"name": "PayPal", "tier": "B", "ats_type": "workday",
-     "host": "paypal.wd1.myworkdayjobs.com", "site": "jobs"},
+    # 🔴 2026-09-14: the Workday board is GENUINELY empty, not mis-tokenized.
+    # Verified three ways: paypal.wd1.myworkdayjobs.com/jobs -> 0 postings on two
+    # isolated fetches; the shared-host form (wd1.myworkdaysite.com, tenant paypal,
+    # the shape that fixed Wells Fargo the same morning) -> 0; and the store's own
+    # PayPal rows carry a THIRD url, paypal.eightfold.ai. PayPal moved to Eightfold,
+    # which is not a supported ats_type here. Demoted to manual so it stops reporting
+    # as a broken token and is at least click-through visible.
+    # ⬜ The real fix is an "eightfold" ats_type -- Eightfold has a public jobs API and
+    # Microsoft uses it too (currently manual). That is a new integration, not a token
+    # edit, so it is recorded rather than smuggled into an unrelated change.
+    {"name": "PayPal", "tier": "B", "ats_type": "manual",
+     "url": "https://paypal.eightfold.ai/careers?query=intern"},
     {"name": "Databricks", "tier": "A", "ats_type": "greenhouse", "token": "databricks"},
     {"name": "Scale AI", "tier": "A", "ats_type": "greenhouse", "token": "scaleai"},
     {"name": "Vercel", "tier": "A", "ats_type": "greenhouse", "token": "vercel"},
