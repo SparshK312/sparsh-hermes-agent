@@ -686,6 +686,11 @@ async def refresh(notify: bool = False) -> int:
               f"{len(wide_net_source.CAPPED_OUT_IDS)} rows the enrichment cap dropped "
               f"(they are still in the feed; not looking at them is not evidence of death)",
               file=sys.stderr)
+    if wide_net_source._scraper.AGED_OUT_IDS:
+        print(f"[refresh] stale-check will EXEMPT the "
+              f"{len(wide_net_source._scraper.AGED_OUT_IDS)} rows the age filter skipped "
+              f"(still listed by the aggregators; a filtered row is not a missing row)",
+              file=sys.stderr)
 
     # SAFETY GUARD: a network-less cron run (DNS failures on a sleeping/just-woke Mac)
     # harvests ~nothing. WITHOUT this, the stale-check below would mark every posting
@@ -771,7 +776,13 @@ async def refresh(notify: bool = False) -> int:
         capped_out = (cid in wide_net_source.CAPPED_OUT_IDS
                       or wide_net_source._cap_triple(
                           m.get("company"), m.get("role"), m.get("location")
-                      ) in wide_net_source.CAPPED_OUT_TRIPLES)
+                      ) in wide_net_source.CAPPED_OUT_TRIPLES
+                      # (f2) the aggregator still lists it but MAX_AGE_DAYS skipped it —
+                      # same fact as the cap: we declined to look (2026-09-14, 177 rows)
+                      or cid in wide_net_source._scraper.AGED_OUT_IDS
+                      or wide_net_source._cap_triple(
+                          m.get("company"), m.get("role"), m.get("location")
+                      ) in wide_net_source._scraper.AGED_OUT_TRIPLES)
 
         # (g) 🔴 THE EMPLOYER'S ATS CONFIRMED IT CLOSED (added 2026-09-12). This is the one
         # dead signal that is evidence rather than absence: a real API answered "gone"

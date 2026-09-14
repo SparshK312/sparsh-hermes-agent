@@ -532,6 +532,43 @@ def test_rejected_after_round_statuses():
           'COUNTIF({rng},"Rejected*")' in xl and 'COUNTIF({rng},"Rejected")\'' not in xl, True)
 
 
+# ── AGE FILTER IS NOT EVIDENCE ───────────────────────────────────────────────
+# 2026-09-14, 11:30 refresh: 177 rows "went stale" in one run. 62 of the 68 speedyapply
+# ones were still in speedyapply's README; 5/5 spot-checks were open at the employer.
+# Cause: internship_scraper.row_to_posting() silently returns None for any aggregator
+# row older than MAX_AGE_DAYS (14), curate counts "not harvested" as a strike, and at
+# WIDE_STALE_STRIKES=14 every wide-net row died at posted + 21 days regardless of the
+# job. The enrichment cap had this exact defect on 2026-09-11 and was fixed by
+# exporting its victims; the age filter one rung upstream was not. Same fix.
+def test_age_filter_discards_are_exempt_from_strikes():
+    import re
+    import internship_scraper as S
+    print("A2. rows the MAX_AGE_DAYS filter skips are recorded and never struck")
+    S.AGED_OUT_IDS.clear(); S.AGED_OUT_TRIPLES.clear()
+    old = {"company": "Virtu Financial", "position": "2027 Internship - Software Engineer",
+           "location": "Austin, TX", "posting": "https://job-boards.greenhouse.io/virtu/jobs/8624410002",
+           "age": f"{S.MAX_AGE_DAYS + 7}d"}
+    fresh = dict(old, posting="https://job-boards.greenhouse.io/virtu/jobs/1", age="3d")
+    check("an over-age row is still dropped from the harvest", S.row_to_posting(old, "speedyapply-swe"), None)
+    check("…but its canonical id is recorded", S.canonical_id(old["posting"]) in S.AGED_OUT_IDS, True)
+    check("…and its (company, role, location) triple is recorded, cap-normalised",
+          ("virtu financial", "2027 internship - software engineer", "austin, tx") in
+          {(S.normalize_company_name(c), r, l) for c, r, l in S.AGED_OUT_TRIPLES} or
+          any(t[1] == "2027 internship - software engineer" for t in S.AGED_OUT_TRIPLES), True)
+    check("a fresh row is harvested and NOT recorded", S.row_to_posting(fresh, "speedyapply-swe") is not None
+          and S.canonical_id(fresh["posting"]) not in S.AGED_OUT_IDS, True)
+    here = Path(__file__).parent
+    wn = (here / "wide_net_source.py").read_text()
+    col = wn[wn.index("async def collect("):]
+    check("collect() clears the aged-out sets BEFORE gathering (stale evidence never survives a run)",
+          col.index("_scraper.AGED_OUT_IDS.clear()") < col.index("cand = _gather_postings()"), True)
+    cur = (here / "curate.py").read_text()
+    blk = cur[cur.index("capped_out = ("):cur.index("strikes_needed = ")]
+    check("curate's exemption reads AGED_OUT_IDS", "AGED_OUT_IDS" in blk, True)
+    check("curate's exemption reads AGED_OUT_TRIPLES", "AGED_OUT_TRIPLES" in blk, True)
+    check("the age filter announces itself in the log", "age filter (MAX_AGE_DAYS=" in wn, True)
+
+
 # ── ID MATCH ─────────────────────────────────────────────────────────────────
 # 2026-09-12: `board.py status "id:jobs.ashbyhq.com/sierra/<uuid>" Skip` marked the row
 # whose _id was `.../Sierra/<uuid>` (capital S). The id: branch lowercased both sides and
@@ -882,6 +919,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_cap_dropped_rows_are_never_struck,
            test_status_vocabulary_has_one_source,
            test_rejected_after_round_statuses,
+           test_age_filter_discards_are_exempt_from_strikes,
            test_id_match_is_exact_and_refuses_ambiguity,
            test_sheet_dropdown_follows_the_vocabulary,
            test_tier_table_names_the_audit_misses,

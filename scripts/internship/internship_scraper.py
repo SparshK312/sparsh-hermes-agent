@@ -785,6 +785,13 @@ def parse_html_table(raw: str, source_name: str) -> Iterator[Posting]:
 # ── Row → Posting normalization ───────────────────────────────────────────────
 
 
+# Rows the MAX_AGE_DAYS filter discarded THIS run — still listed by the aggregator,
+# not harvested. wide_net_source.collect() clears these before each gather and
+# curate.py's stale-check exempts them (a filtered row is not a missing row).
+AGED_OUT_IDS: set[str] = set()
+AGED_OUT_TRIPLES: set[tuple] = set()
+
+
 def row_to_posting(row: dict, source_name: str) -> Posting | None:
     """Map varied source schemas onto our normalized Posting record.
 
@@ -827,6 +834,22 @@ def row_to_posting(row: dict, source_name: str) -> Posting | None:
 
     age_days = parse_age_days(age_text)
     if age_days is None or age_days > MAX_AGE_DAYS:
+        # 🔴 RECORD THE DISCARD (2026-09-14). This filter is a cost control, and the
+        # curated board's stale-check reads "not harvested" as a strike. Left silent,
+        # the two form a countdown: every aggregator row dies at posted + MAX_AGE_DAYS
+        # + 7 days regardless of whether the job is open. Measured 2026-09-14: one
+        # run struck 177 rows; 62 of the 68 speedyapply ones were still in the README
+        # and 5/5 spot-checks were open at the employer. Same class as the enrichment
+        # cap fixed 2026-09-11 — "declining to look is not evidence."
+        if age_days is not None and age_days > MAX_AGE_DAYS:
+            _url = extract_first_url(apply_text)
+            if _url:
+                AGED_OUT_IDS.add(canonical_id(_url))
+            AGED_OUT_TRIPLES.add((
+                normalize_company_name(re.sub(r"<[^>]+>|\*+|\[|\]\([^)]*\)", "", company).strip()),
+                re.sub(r"\s+", " ", re.sub(r"<[^>]+>|\*+", "", title)).strip().lower(),
+                re.sub(r"\s+", " ", re.sub(r"<[^>]+>", ", ", location)).strip().lower(),
+            ))
         return None
 
     # Scrub leftover markdown/HTML from text fields.

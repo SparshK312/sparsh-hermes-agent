@@ -23,6 +23,7 @@ from pathlib import Path
 import ats_router as A
 from brand_first_source import _age_from_date, _cycle_label
 from hotness import brand_tier, normalize_company_name, role_lane
+import internship_scraper as _scraper  # noqa: E402  (AGED_OUT_* sets)
 from internship_scraper import (
     SOURCES,
     canonical_id,
@@ -237,6 +238,9 @@ async def collect(client=None) -> list[dict]:
     CAPPED_OUT_IDS.clear()
     CAPPED_OUT_TRIPLES.clear()
     CONFIRMED_DEAD_IDS.clear()
+    # the age filter's discards live in the scraper module; same clear-first rule
+    _scraper.AGED_OUT_IDS.clear()
+    _scraper.AGED_OUT_TRIPLES.clear()
     cand = _gather_postings()
     # 🔴 ANNOUNCE THE CAP (2026-09-08). This truncation was silent, and the amount
     # it silently discarded was not small: a live measurement on 2026-09-08 found
@@ -248,6 +252,11 @@ async def collect(client=None) -> list[dict]:
     # ones each time, and then takes stale-strikes for never being harvested.
     # CLAUDE.md: "Any limit must log when it is reached. A result set that exactly
     # equals your cap is a red flag, never a coincidence."
+    if _scraper.AGED_OUT_IDS:
+        print(f"[wide-net] age filter (MAX_AGE_DAYS={_scraper.MAX_AGE_DAYS}) skipped "
+              f"{len(_scraper.AGED_OUT_IDS)} rows still listed by the aggregators — "
+              f"exported for the stale-check; not looking is not evidence of death",
+              file=sys.stderr)
     cand, dropped = _apply_enrich_cap(cand)
     if dropped:
         from collections import Counter
