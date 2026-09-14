@@ -27,6 +27,8 @@ USAGE
 from __future__ import annotations
 
 import argparse
+
+from hotness import is_ai_native
 import json
 import os
 import sys
@@ -106,12 +108,23 @@ def main() -> int:
     ap.add_argument("--per-company", type=int, default=2)
     ap.add_argument("--unscored", action="store_true",
                     help="the no-JD lane the fit pass could not read — verify by hand")
+    ap.add_argument("--ai-native", action="store_true",
+                    help="only companies on the AI layer (see hotness.AI_NATIVE) — "
+                         "the thesis lane, as opposed to the floor-securing volume")
     a = ap.parse_args()
 
     items = rows(a.min_fit, a.cycle, a.unscored)
+    if a.ai_native:
+        # 🔴 Computed from the company name, NOT read off the record. A stored flag
+        # would be absent from every row not re-scored since deploy and this filter
+        # would silently drop them — the trap this file's own header documents for
+        # fit_score. is_ai_native() is pure, so it is correct on day one.
+        items = [m for m in items if is_ai_native(m.get("company") or "")]
     kept, overflow = rank(items, a.per_company, a.limit)
 
     label = "UNSCORED (no JD — verify manually)" if a.unscored else f"fit >= {a.min_fit}"
+    if a.ai_native:
+        label += " · 🤖 AI-NATIVE ONLY"
     print(f"# Apply-now worklist — {label}"
           f"{' · ' + a.cycle if a.cycle else ''}")
     print(f"\n{len(items)} in pool · showing {len(kept)} "

@@ -325,6 +325,126 @@ def test_cap_dropped_rows_are_never_struck():
           "_cap_triple(" in expr, True)
 
 
+# ── 2026-09-14: THE AI-NATIVE LANE ───────────────────────────────────────────
+# Every assertion below corresponds to a defect the adversarial review of the
+# plan actually found in the plan, before any of it shipped.
+def test_ai_native_is_orthogonal_to_tier():
+    """D1. The flag must not perturb tier. Mutation: make brand_tier read AI_NATIVE."""
+    import hotness
+    names = ["Anthropic", "Cursor", "Cohere", "Mercor", "TD Bank", "Amazon",
+             "Abridge", "Bland", "Waabi", "Pika", "CoreWeave", "Tenstorrent",
+             "Scotiabank", "Nobody Inc"]
+    before = {n: hotness.brand_tier(n) for n in names}
+    saved = hotness.AI_NATIVE
+    try:
+        hotness.AI_NATIVE = set()
+        after = {n: hotness.brand_tier(n) for n in names}
+    finally:
+        hotness.AI_NATIVE = saved
+    check("ai-native flag does not change any tier", after, before)
+
+
+def test_ai_native_respects_every_tier_exception():
+    """D2. TIER_EXCEPTIONS was EXACT-MATCH, so variants escaped it and inherited the
+    brand's tier. Measured on HEAD before the fix: 'Sierra Nevada' -> C (caught) but
+    'Sierra Nevada Corp (SNC)' -> A (escaped), for an employer whose postings require
+    US citizenship. Mutation: revert _is_excepted to `nn in TIER_EXCEPTIONS`."""
+    from hotness import TIER_EXCEPTIONS, brand_tier, is_ai_native
+    for ex in sorted(TIER_EXCEPTIONS):
+        check(f"exception {ex!r} is tier C", brand_tier(ex), "C")
+        check(f"exception {ex!r} is not ai-native", is_ai_native(ex), False)
+    for variant in ("Sierra Nevada Corp (SNC)", "Mercury Systems, Inc. (MRCY)",
+                    "Sierra Wireless", "Harvey Nash", "Runway Growth Capital",
+                    "Cognition Therapeutics", "Modal Health"):
+        check(f"variant {variant!r} is tier C", brand_tier(variant), "C")
+        check(f"variant {variant!r} is not ai-native", is_ai_native(variant), False)
+
+
+def test_ai_native_entries_use_the_feed_name():
+    """D3. THE ONE THAT WOULD HAVE SHIPPED A SILENT NO-OP. The feed writes 'Bland';
+    a 'bland ai' entry takes _name_matches' multi-word phrase branch and can never
+    fire on a one-word name, so the row would stay tier C taking stale-strikes while
+    the change reported success. Mutation: change the AI_NATIVE entry to 'bland ai'."""
+    from hotness import is_ai_native, brand_tier, _name_matches
+    for feed_name in ("Bland", "Abridge", "Waabi", "Pika", "CoreWeave",
+                      "Tenstorrent", "Cursor", "Cohere", "Anthropic"):
+        check(f"feed name {feed_name!r} is ai-native", is_ai_native(feed_name), True)
+        check(f"feed name {feed_name!r} is not tier C", brand_tier(feed_name) != "C", True)
+    # the exact failure mode, asserted directly
+    check("'bland ai' cannot match the feed's 'bland'",
+          _name_matches("bland ai", "bland", {"bland"}), False)
+    for nonai in ("TD Bank", "Scotiabank", "Amazon", "BMO", "Intact"):
+        check(f"{nonai!r} is not ai-native", is_ai_native(nonai), False)
+
+
+def test_ai_native_members_are_never_tier_c():
+    """D4. Tier C is partial DELETION (wide-net drops C swelist rows, the enrich cap
+    cuts C). An AI-native company at tier C is a flag on a row that never renders.
+    Mutation: add 'nobody' to AI_NATIVE."""
+    from hotness import AI_NATIVE, brand_tier
+    offenders = sorted(n for n in AI_NATIVE if brand_tier(n) == "C")
+    check("no AI_NATIVE member sits at tier C", offenders, [])
+
+
+def test_tier_and_ai_native_entries_are_normalized():
+    """D5. An unnormalized entry can never match, because lookups normalize first."""
+    from hotness import TIER_S, TIER_A, TIER_B, AI_NATIVE
+    from internship_scraper import normalize_company_name as nz
+    bad = sorted(n for n in (TIER_S | TIER_A | TIER_B | AI_NATIVE) if nz(n) != n)
+    check("every tier/AI_NATIVE entry is already normalized", bad, [])
+
+
+def test_ai_native_marker_never_reaches_a_human_column():
+    """D6. THE LAUNDERING RULE. read_back_human() reads Status/Applied/Notes/Priority
+    and assigns them to human[...]; a machine value there becomes a decision he never
+    made (a fabricated 'Closed' once hid ~96 live postings). The marker belongs in
+    Why, which is display-only. Mutation: emit the marker into Notes or Status."""
+    from build_curated_xlsx import _fit_cells, _HUMAN_BY_HEADER
+    check("Why is not a human-readback column",
+          any(h.lower() == "why" for h in _HUMAN_BY_HEADER), False)
+    # The negative above only means something if the map is genuinely populated --
+    # an empty _HUMAN_BY_HEADER would make it vacuously true. Anchor on a column
+    # that MUST be read back, so a renamed/emptied map fails loudly here.
+    check("status IS a human-readback column (the map is real)",
+          any(h.lower() == "status" for h in _HUMAN_BY_HEADER), True)
+    _, why, _k = _fit_cells({"company": "Cohere", "fit_score": 88,
+                             "fit_why": "strong", "full_jd": "x"})
+    check("marker lands in the Why text", why.startswith("🤖"), True)
+
+
+def test_ai_native_marker_composes_with_the_stale_marker():
+    """D7. Two machine markers must coexist; neither may clobber the other. Covers all
+    four _fit_cells kinds. Mutation: make the marker a suffix, or overwrite why."""
+    from build_curated_xlsx import _fit_cells
+    cases = {
+        "scored": {"company": "Cohere", "fit_score": 88, "fit_why": "strong", "full_jd": "x"},
+        "disq":   {"company": "Bland", "fit_disqualifier": "grad date", "fit_why": "2029", "full_jd": "x"},
+        "nojd":   {"company": "Waabi", "full_jd": ""},
+        "none":   {"company": "Pika", "full_jd": "x"},
+    }
+    for kind, m in cases.items():
+        _, why, k = _fit_cells(m)
+        check(f"{kind}: kind unchanged", k, kind)
+        check(f"{kind}: marker present", why.startswith("🤖"), True)
+        stale = ("❌ posting went stale — " + (why or "")).strip(" —")
+        check(f"{kind}: stale prefix preserved", stale.startswith("❌ posting went stale"), True)
+        check(f"{kind}: ai marker survives the stale prefix", "🤖" in stale, True)
+    _, why_plain, _ = _fit_cells({"company": "TD Bank", "fit_score": 70,
+                                  "fit_why": "ok", "full_jd": "x"})
+    check("non-AI row carries no marker", "🤖" in why_plain, False)
+
+
+def test_worklist_computes_ai_native_at_the_edge():
+    """D8. A STORED flag would be absent from every row not re-scored since deploy and
+    the filter would silently exclude them — the trap worklist's own header documents
+    for fit_score. Source-anchored because the defect is structural, not behavioural.
+    Mutation: change worklist to read m.get('ai_native')."""
+    src = (Path(__file__).resolve().parent / "worklist.py").read_text()
+    check("worklist calls is_ai_native(", "is_ai_native(" in src, True)
+    check("worklist does not read a stored ai_native key",
+          "get(\"ai_native\")" in src or "['ai_native']" in src, False)
+
+
 # ── VOCABULARY ───────────────────────────────────────────────────────────────
 # 2026-09-12: the Status vocabulary was enumerated in FOUR places (board.VALID, the
 # Sheet's dropdown via STATUS_OPTS, curate's in-pipeline set, the xlsx "In process"
@@ -734,7 +854,15 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_oracle_boards_are_first_class,
            test_coverage_digest_partition,
            test_url_variants_and_unlocated_twins_collapse,
-           test_confirmed_dead_rows_die_now):
+           test_confirmed_dead_rows_die_now,
+           test_ai_native_is_orthogonal_to_tier,
+           test_ai_native_respects_every_tier_exception,
+           test_ai_native_entries_use_the_feed_name,
+           test_ai_native_members_are_never_tier_c,
+           test_tier_and_ai_native_entries_are_normalized,
+           test_ai_native_marker_never_reaches_a_human_column,
+           test_ai_native_marker_composes_with_the_stale_marker,
+           test_worklist_computes_ai_native_at_the_edge):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

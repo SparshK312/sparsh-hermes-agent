@@ -111,6 +111,29 @@ TIER_B = {
     "domino data", "tanium", "formlabs", "saronic", "hudl", "bedrock robotics",
     "whatnot", "hadrian", "charles schwab", "honeywell", "garmin", "cisco", "dell",
     "texas instruments", "verizon",
+    # 🔴 2026-09-14, AI-native lane. Written as the FEED writes them (see AI_NATIVE).
+    # Each verified on the employer's own ATS, not on a third-party programme guide:
+    #   abridge  Ashby `abridge`, 40 postings, "Software Engineer, Intern" OPEN -- and
+    #            its two store rows were already DEAD at fail_count 22 and 41 while the
+    #            employer's board showed the req open (the Capital One / Lyft failure).
+    #   waabi    Lever `waabi`, "Research Internship/Co-op" + "2026 Intern, PhD
+    #            Research Scientist", both TORONTO -- his scarcest cycle.
+    #   pika     Ashby `pika`, "Research Intern (BS/MS/PhD)" OPEN.
+    #   bland    Ashby `bland`, "Machine Learning Intern" OPEN. Voice AI = his domain,
+    #            and the vault's follow-up register holds a warm COO contact there.
+    #   coreweave B, NOT A: the "145-intern cohort" claim came from a third-party
+    #            programme guide, and its own Greenhouse board returns 295 postings and
+    #            ZERO intern/co-op/university titles. Wired so a real cohort is SEEN.
+    # Etched was CONSIDERED AND DROPPED: its target reqs ("Inference Intern",
+    # "Performance Tools Intern", "Supercomputing Intern") all return None from
+    # role_lane() -- a hard reject -- so a tier change would buy nothing.
+    #
+    # 🔴 AND THERE ARE NO NAMES HERE ON PURPOSE. All six (abridge, waabi, pika,
+    # bland, coreweave, tenstorrent) are declared in company_boards.py, and
+    # brand_tier() resolves _BOARD_TIERS BEFORE these sets -- so a line here would
+    # be DEAD CODE and exactly the drift the comment at _board_tiers warns about.
+    # Measured: deleting all five from TIER_B leaves every one of them resolving
+    # to B off the board. The board is the single source of truth; keep it that way.
     "loblaw", "intact", "nasdaq", "mackenzie investments", "visier", "d2l",
     "td bank", "td securities", "td",
     # added Jun 20
@@ -271,7 +294,88 @@ TIER_EXCEPTIONS = {
     # 2026-09-12: "td" (TD Bank) is a single-word brand and TD SYNNEX, a distributor,
     # would inherit B off it.
     "td synnex",
+    # 🔴 2026-09-14. The Aug-18 AI block (sierra/harvey/glean/cognition/modal/runway)
+    # predates the adversarial-corpus check introduced 2026-09-08, so it was never run
+    # against look-alikes. Every name below was VERIFIED returning tier A on HEAD before
+    # being added here. None are in the current store, so this is insurance rather than
+    # a live repair -- but the AI-native flag reads the same names, and "🤖 Harvey Nash"
+    # (a recruiting firm) on his thesis-filtered board is exactly the kind of wrong the
+    # marker must not produce.
+    "sierra wireless", "harvey nash", "harvey mudd college", "harvey mudd",
+    "runway growth capital", "cognition therapeutics", "modal health",
 }
+
+
+def words0(nn: str) -> set[str]:
+    return set(nn.split())
+
+
+def _is_excepted(nn: str, words: set[str]) -> bool:
+    """Is this normalized name one of the known look-alikes?
+
+    🔴 PHRASE-MATCHED, NOT SET MEMBERSHIP (fixed 2026-09-14). This was
+    `nn in TIER_EXCEPTIONS`, an exact-match test, so any VARIANT of an excepted
+    name escaped it and inherited the brand's tier anyway. Measured on HEAD:
+        "Sierra Nevada"            -> "sierra nevada"       -> C   ✅ caught
+        "Sierra Nevada Corp (SNC)" -> "sierra nevada snc"   -> A   ❌ escaped
+        "Mercury Systems, Inc."    -> "mercury systems mrcy"-> A   ❌ escaped
+    Sierra Nevada's postings state "U.S. Citizenship status IS REQUIRED", so the
+    escape promoted an employer he cannot apply to into the top of the queue --
+    the precise harm the exception list was created to prevent.
+    """
+    return any(_name_matches(ex, nn, words) for ex in TIER_EXCEPTIONS)
+
+
+# ── AI-NATIVE LANE (2026-09-14) ───────────────────────────────────────────────
+# ORTHOGONAL TO TIER, and deliberately so. Tier answers "how prestigious is this
+# brand." This answers a SECOND, independent question -- "does this row serve the
+# AI-layer thesis" (vault: Career Thesis - The AI Layer). A company can be AI-native
+# at any tier: Anthropic is S, Retell is B, TD is neither.
+#
+# Why not just promote these to S, which is what was asked for:
+#   A -> S buys exactly +10 hotness (BRAND_SCORE 80->100 at W_BRAND 0.50) and a
+#   sort-rank bump. NOTHING ELSE -- hot_watch fires on S *and* A, curate's `elite`
+#   set is S *or* A, and _apply_enrich_cap protects S/A/B alike. Meanwhile the
+#   TikTok/ByteDance note above records what pushing a high-volume lane into S
+#   actually did: 20 of the top 30 rows. The real reason AI companies sit low is
+#   REQ VOLUME (Amazon posts hundreds, a 60-person company posts two), and no
+#   number of tier points fixes that. A flag + a filter does.
+#
+# 🔴 ENTRIES ARE WRITTEN AS THE FEED WRITES THE COMPANY, NOT AS DISPLAY NAMES.
+# "Bland AI" normalizes to the TWO words "bland ai", which takes _name_matches'
+# phrase-regex branch and can never fire on the feed's one-word "Bland" -- a
+# SILENT NO-OP that would leave the row at tier C taking stale-strikes toward
+# death at 14 while the change reported success. Verified before writing this:
+#   _name_matches("bland ai", "bland") -> False
+#   _name_matches("bland",    "bland") -> True
+# Same trap for "etched" (feed: Etched.ai) and "pika" (feed: Pika Labs).
+AI_NATIVE = {
+    # frontier labs (tier S)
+    "openai", "anthropic", "xai", "deepmind", "google deepmind",
+    # AI-native product / infra / tooling (tier A)
+    "cursor", "anysphere", "elevenlabs", "cognition", "harvey", "decagon",
+    "sierra", "glean", "perplexity", "replit", "mistral", "cohere",
+    "scale ai", "databricks", "together ai", "modal", "baseten", "runway",
+    "mercor",
+    # tier B, added with their ATS boards 2026-09-14
+    "retell ai", "coreweave", "tenstorrent", "abridge", "waabi", "pika", "bland",
+}
+
+
+def is_ai_native(company: str) -> bool:
+    """Does this company sit on the AI layer? Orthogonal to brand_tier().
+
+    Mirrors brand_tier's resolution order for the parts that matter: normalize,
+    then reject known look-alikes, then whole-word/phrase match. Without the
+    exception check, "Sierra Nevada" would be flagged AI-native off "sierra".
+    """
+    nn = normalize_company_name(company)
+    if not nn:
+        return False
+    w = words0(nn)
+    if _is_excepted(nn, w):
+        return False
+    return any(_name_matches(n, nn, w) for n in AI_NATIVE)
 
 
 def brand_tier(company: str) -> str:
@@ -294,7 +398,7 @@ def brand_tier(company: str) -> str:
     #   Meta Materials -> S off "meta". Apple Bank -> S off "apple".
     #   Citadel Credit Union -> A off "citadel". Unity Health Toronto (a hospital) -> B.
     #   Square Enix -> A off "square". Brunswick Mercury Marine -> A off "mercury".
-    if nn in TIER_EXCEPTIONS:
+    if _is_excepted(nn, words0(nn)):
         return "C"
 
     words = set(nn.split())

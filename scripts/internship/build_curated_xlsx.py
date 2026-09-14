@@ -34,6 +34,10 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
 from openpyxl.utils import get_column_letter
 
+# hotness owns the AI-native lane; _fit_cells computes the 🤖 marker at the
+# render edge rather than reading a stored flag (see _fit_cells docstring).
+from hotness import is_ai_native
+
 SCHEMA_VERSION = 3
 ID_HEADER = "_id"
 
@@ -256,17 +260,31 @@ def _is_disq(m: dict) -> bool:
 
 def _fit_cells(m: dict):
     """Return (fit_display, why_display, kind) for a machine record.
-    kind ∈ {'disq','scored','nojd','none'} drives the cell styling."""
+    kind ∈ {'disq','scored','nojd','none'} drives the cell styling.
+
+    🤖 marks an AI-native company (2026-09-14). Two deliberate choices:
+
+    1. It goes in **Why**, which is DISPLAY-ONLY. It must never reach Status,
+       Notes, Priority or Applied -- read_back_human() reads those and assigns
+       them to human[...], which is how a machine-invented "Closed" once hid
+       ~96 live postings. See _review_status's docstring for that measurement.
+    2. It is computed HERE, at the render edge, from the company name -- NOT
+       stored on the record. A stored flag would be missing from every row not
+       re-scored since deploy, and any filter reading it would silently exclude
+       them: exactly the trap worklist.py's header documents for fit_score.
+       Computing at the edge means the flag is right on day one.
+    """
     dq = m.get("fit_disqualifier") or "none"
     score = m.get("fit_score")
     why = m.get("fit_why") or ""
+    bot = "🤖 " if is_ai_native(m.get("company") or "") else ""
     if dq not in ("none", "", None):
-        return "❌", f"❌ {dq} — {why}".strip(" —"), "disq"
+        return "❌", (bot + f"❌ {dq} — {why}".strip(" —")), "disq"
     if isinstance(score, (int, float)) or (isinstance(score, str) and str(score).isdigit()):
-        return int(score), why, "scored"
+        return int(score), (bot + why).rstrip(), "scored"
     if not (m.get("full_jd") or "").strip():
-        return "👀", "⚠️ AI couldn't read this — no JD (bot-blocked). Click Apply to check it yourself.", "nojd"
-    return "", "", "none"
+        return "👀", bot + "⚠️ AI couldn't read this — no JD (bot-blocked). Click Apply to check it yourself.", "nojd"
+    return "", bot.rstrip(), "none"
 
 
 def _queue_sort_key(rec):

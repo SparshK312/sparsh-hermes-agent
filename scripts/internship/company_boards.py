@@ -201,6 +201,30 @@ BOARDS = [
     # coverage digest both treat it as a target the moment the aggregators list it.
     {"name": "Bloomberg", "tier": "A", "ats_type": "manual",
      "url": "https://bloomberg.avature.net/careers/SearchJobs/intern"},
+
+    # ── AI-native lane, added 2026-09-14 ──────────────────────────────────────
+    # These are wired to their OWN ATS rather than left to the aggregators, which
+    # is the fix this repo has now made three times (Capital One, Lyft, and now
+    # Abridge -- whose two store rows were DEAD at fail_count 22 and 41 while its
+    # own board showed "Software Engineer, Intern" OPEN). A tier entry alone only
+    # changes ranking; it does not make a company observable.
+    # Every org/token below was confirmed by a read-only fetch on 2026-09-14.
+    {"name": "Abridge", "tier": "B", "ats_type": "ashby", "org": "abridge"},
+    {"name": "Pika", "tier": "B", "ats_type": "ashby", "org": "pika"},
+    # NOTE the name is "Bland", not "Bland AI": the feed writes the company as
+    # "Bland", and a two-word name would normalize to "bland ai" and never match
+    # it. Keeping both sides on "bland" is what lets lane-1 and lane-2 rows
+    # collapse to one company instead of minting a duplicate.
+    {"name": "Bland", "tier": "B", "ats_type": "ashby", "org": "bland"},
+    {"name": "Waabi", "tier": "B", "ats_type": "lever", "site": "waabi"},
+    # CoreWeave is B and not A on purpose: its own board returned 295 postings and
+    # ZERO intern titles on 2026-09-14. The board is wired so that when a cohort
+    # does open it is SEEN, rather than tiered on a third-party programme guide.
+    {"name": "CoreWeave", "tier": "B", "ats_type": "greenhouse", "token": "coreweave"},
+    # Toronto HQ -- AI-native x Winter-2027 x his home city, the scarcest cell on
+    # the board. Its university board is a separate Greenhouse token.
+    {"name": "Tenstorrent", "tier": "B", "ats_type": "greenhouse",
+     "token": "tenstorrentuniversity"},
 ]
 
 
