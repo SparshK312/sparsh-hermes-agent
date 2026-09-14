@@ -378,7 +378,10 @@ async def _board_workable(client, board) -> list[JobRecord]:
 def _workday_base(board) -> tuple[str, str, str]:
     """Return (origin, tenant, site) from a workday board config."""
     host = board["host"]                       # e.g. nvidia.wd5.myworkdayjobs.com
-    tenant = host.split(".")[0]
+    # Shared-host tenants (wd1.myworkdaysite.com/wday/cxs/<tenant>/<site>) carry the
+    # tenant in the PATH, not the hostname -- host.split gives "wd1". Wells Fargo was the
+    # first (2026-09-14); an explicit key beats guessing from the host.
+    tenant = board.get("tenant") or host.split(".")[0]
     site = board["site"]
     return f"https://{host}", tenant, site
 
@@ -447,7 +450,7 @@ async def _board_workday(client, board, prefilter=None) -> list[JobRecord]:
         return JobRecord(
             title=info.get("title") or jp.get("title", ""),
             location=info.get("location") or jp.get("locationsText", ""),
-            url=info.get("externalUrl") or f"{origin}/{site}{ext}",
+            url=info.get("externalUrl") or f"{board.get('public_base', origin + '/' + site)}{ext}",
             full_jd=clean_fragment(info.get("jobDescription", "")),
             posted_date=_iso_to_date(info.get("startDate", "")) or _posted_ago_to_date(info.get("postedOn", "")),
             ats_type="workday",

@@ -72,7 +72,7 @@ TIER_B = {
     # TORONTO, which is his scarcest cycle in his home city, and CIBC was the only one
     # the table knew. Quant firms are B rather than A because their listed peers
     # (Jane Street, Citadel, DRW, IMC, HRT) are the A bar and these sit a rung below.
-    "royal bank of canada", "rbc", "bank of montreal", "bmo", "manulife", "cae", "telus", "general motors", "sony", "ge aerospace", "ge healthcare", "rtx", "raytheon", "micron", "motorola solutions", "hp", "hpe", "hewlett packard", "caterpillar", "johnson & johnson", "pimco", "vanguard", "gartner", "workiva", "appian", "freddie mac", "fannie mae", "ancestry", "virtu financial", "chicago trading", "belvedere trading", "hyannis port", "dv trading", "garda capital",
+    "royal bank of canada", "rbc", "bank of montreal", "bmo", "manulife", "cae", "telus", "general motors", "sony", "ge aerospace", "ge healthcare", "rtx", "raytheon", "micron", "motorola solutions", "hp", "hpe", "hewlett packard", "caterpillar", "johnson & johnson", "pimco", "vanguard", "gartner", "workiva", "appian", "freddie mac", "fannie mae", "ancestry", "virtu financial", "chicago trading", "belvedere trading", "hyannis port", "dv trading", "garda capital", "wells fargo",
     # "campbell" (single word) is REQUIRED by the _name_matches boundary fix: the board
     # name "Campbell's" normalizes to "campbell s", which only ever matched "Campbell
     # Soup" via the unbounded substring that fix removed. Verified to cover Campbell's,

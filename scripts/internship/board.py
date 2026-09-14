@@ -20,7 +20,7 @@ USAGE
   board.py applied  <match> [--date YYYY-MM-DD] [--notes "..."]
   board.py status   <match> "<Status>" [--notes "..."]
   board.py note     <match> "<text>"
-  board.py priority <match> <P0|P1|P2|P3|clear>
+  board.py priority <match> <P0|P1|P2|P3|clear> [--notes "..."]
   board.py show     <match>
   board.py list-live
 
@@ -232,6 +232,12 @@ def main() -> int:
             sys.exit(f"priority must be P0, P1, P2, P3 or clear -- got {sys.argv[3]!r}. "
                      "Anything else renders as broken (it is a dropdown on the Sheet).")
         _set(tab, row, headers, "Priority", val)
+        # --notes in the same call, like `status` and `applied`: a priority without the
+        # reason it was set is the "reviewed vs never opened" ambiguity the column exists
+        # to remove, and a second round trip per row doubles a 280-row triage pass
+        # (added 2026-09-13).
+        if _arg("--notes"):
+            _set(tab, row, headers, "Notes", _arg("--notes"))
         print(f"\u2705 priority {val or '(cleared)'} -- {g('Company')} -- {g('Role')[:48]}")
         return 0
 

@@ -96,6 +96,12 @@ BOARDS = [
     # that is open.
     {"name": "Capital One", "tier": "B", "ats_type": "workday",
      "host": "capitalone.wd12.myworkdayjobs.com", "site": "Capital_One"},
+    # Added 2026-09-14: two 2027 Technology Summer Internship (Software Engineering) reqs
+    # posted that morning, one closing in four days, and the company was not in the
+    # table at all (tier C -> invisible). Shared-host Workday: tenant is in the path.
+    {"name": "Wells Fargo", "tier": "B", "ats_type": "workday",
+     "host": "wd1.myworkdaysite.com", "tenant": "wf", "site": "WellsFargoJobs",
+     "public_base": "https://wd1.myworkdaysite.com/recruiting/wf/WellsFargoJobs"},
     {"name": "Ciena", "tier": "B", "ats_type": "workday",
      "host": "ciena.wd5.myworkdayjobs.com", "site": "Careers"},
     {"name": "DPR Construction", "tier": "B", "ats_type": "workday",
