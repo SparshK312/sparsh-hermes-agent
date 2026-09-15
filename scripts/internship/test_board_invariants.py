@@ -189,15 +189,15 @@ def test_grouping_cannot_undo_the_sort():
     check("On Hold sinks below another company's C row",
           out[-1]["human"]["status"], "On Hold")
 
-    # A P0 DOES lift the whole company block above a tier-S company, and that is
-    # INTENDED, not a defect -- Sparsh, 2026-09-05: "if they're the same company, they
-    # should be put next to each other, EVEN IF THAT BREAKS THE SCORE." Company blocking
-    # and strict tier order genuinely conflict; his pin wins. Asserted so the behaviour
-    # is deliberate and nobody "fixes" it later by accident.
-    rows = [row("Big", "S"), row("Small", "C", prio="P0"), row("Small", "C")]
+    # 2026-09-05 -> 2026-09-15 a P0 lifted its whole company block above every tier-S
+    # company (priority was the first sort key). REVERSED 2026-09-15 on his instruction
+    # ("it should read from S to A to B to C"): tier is the first live key, priority
+    # ranks within a tier. Company blocking still holds -- a company has one tier, so a
+    # block can never straddle a tier band. Asserted both ways so neither drifts back.
+    rows = [row("Big", "S"), row("Small", "C", prio="P0"), row("Small", "C"), row("Other", "C")]
     out = _group_by_company(sorted(rows, key=_queue_sort_key))
-    check("a P0 pins its company block to the top, siblings included",
-          [r["machine"]["company"] for r in out], ["Small", "Small", "Big"])
+    check("a tier-C P0 leads its tier but never a tier-S company",
+          [r["machine"]["company"] for r in out], ["Big", "Small", "Small", "Other"])
 
     # a disqualified row must not be pulled up by its company block
     rows = [row("Acme", "S"), row("Acme", "S", dq="phd-required"), row("Zeta", "B")]
@@ -260,6 +260,17 @@ def test_queue_sort():
     check("order", order, ["S", "A", "B", "C", "S/hold"])
     check("a high-hotness C never outranks a low-hotness S",
           sorted([r("C", 99), r("S", 1)], key=_queue_sort_key)[0]["machine"]["tier"], "S")
+    # 2026-09-15: the exact case he saw -- a tier-B P0 (Viam) above a tier-S P1 (Tesla)
+    def rp(tier, prio, hot=50):
+        return {"machine": {"tier": tier, "hotness": hot, "fit_disqualifier": "none"},
+                "human": {"status": "", "priority_override": prio}}
+    check("a tier-B P0 never outranks a tier-S P1",
+          [x["machine"]["tier"] for x in sorted([rp("B", "P0"), rp("S", "P1")], key=_queue_sort_key)],
+          ["S", "B"])
+    check("within a tier, P0 leads P1 leads unreviewed",
+          [x["human"]["priority_override"] for x in
+           sorted([rp("A", ""), rp("A", "P1"), rp("A", "P0")], key=_queue_sort_key)],
+          ["P0", "P1", ""])
 
 
 # ── DEFECT 9 ─────────────────────────────────────────────────────────────────

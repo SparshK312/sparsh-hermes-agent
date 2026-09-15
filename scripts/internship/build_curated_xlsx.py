@@ -306,18 +306,23 @@ def _queue_sort_key(rec):
     # within a priority band: active To-Apply first, then On Hold (parked), then
     # disqualified rows sink to the bottom -- all still visible/filterable.
     tier = TIER_RANK.get(str(m.get("tier") or "").strip().upper(), 4)
-    # ORDER MATTERS: on_hold stays ABOVE tier so a parked row sinks no matter how good
-    # its brand is -- the two Amazon On Hold reqs are tier S and would otherwise lead
-    # the board ("we can keep the 2 Amazon ones that are on hold at the bottom, that is
-    # fine" -- Sparsh, 2026-09-08).
-    return (PRIO_RANK.get(prio, 4), 1 if _is_disq(m) else 0, on_hold, tier,
+    # ORDER MATTERS, and it changed 2026-09-15. TIER is the first live key: the board
+    # reads S -> A -> B -> C top to bottom ("it should read from S to A to B to C" --
+    # Sparsh, 2026-09-15, after a tier-B P0 (Viam) sat above a tier-S P1 (Tesla)).
+    # PRIORITY ranks WITHIN a tier -- a P0 leads its tier, it no longer leads the board.
+    # (2026-09-05 -> 2026-09-15 the key was priority-first; the tab header claimed
+    # tier-first the whole time.) on_hold and disqualified still sink below every tier,
+    # brand notwithstanding -- the Amazon On Hold reqs are tier S and would otherwise
+    # lead ("we can keep the 2 Amazon ones that are on hold at the bottom" -- 2026-09-08,
+    # reaffirmed 2026-09-15: "the amazon ones on hold can stay on hold thats fine").
+    return (1 if _is_disq(m) else 0, on_hold, tier, PRIO_RANK.get(prio, 4),
             -int(m.get("hotness", 0) or 0))
 
 
 def _build_queue(ws, rows):
     _title_block(ws, len(QUEUE_HEADERS),
                  "🔥 Curated Queue — brand-ranked open intern roles",
-                 "Ranked by TIER (S -> A -> B -> C), then Hotness within a tier. Fit = AI read of the JD (hover a Role "
+                 "Ranked by TIER (S -> A -> B -> C), then Priority (P0 first), then Hotness within a tier. Fit = AI read of the JD (hover a Role "
                  "cell for the JD). ❌ = disqualified (still shown, sunk). Set Status to move a row.")
     hdr = 3; first = 4
     _header(ws, QUEUE_HEADERS, QUEUE_WIDTHS, hdr)

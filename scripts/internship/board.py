@@ -28,8 +28,9 @@ USAGE
   are REFUSED rather than guessed — writing a status onto the wrong posting is worse
   than not writing it.
 
-PRIORITY is the FIRST sort key, ahead of hotness and fit, so a P0 row -- and since
-2026-09-05 its whole company block -- floats to the top of the queue. Convention set
+PRIORITY ranks WITHIN a tier (since 2026-09-15; it was the first key 2026-09-05 -> 09-15):
+the queue reads S -> A -> B -> C, and inside each tier a P0 row -- and its whole company
+block -- floats to the top of that tier. Convention set
 2026-09-05, because the column had sat ENTIRELY EMPTY and there was no way to tell a
 row that had been vetted from one nobody had ever opened:
 
