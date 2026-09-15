@@ -244,7 +244,15 @@ _SWE_KEYWORDS = ("software", "swe", "sde", "sdet", "backend", "back-end",
                  #     "'Product Engineer' is SWE, not PM", but nothing
                  #     implemented it, so it fell through to None.
                  "product engineer", "security engineer", "mobile app",
-                 "simulation", "forward deployed", "autonomy")
+                 "simulation", "forward deployed", "autonomy",
+                 # 🔴 Added 2026-09-15. Two AI-native-startup title conventions that name
+                 # no technology and so fell through to None and were dropped before the
+                 # store: Etched "Core Engineering Intern" (the special-projects team --
+                 # agentic systems, full-stack; the board was wired that afternoon and
+                 # rendered 2 of its 14 intern reqs, not this one) and Pace "Member of
+                 # Technical Staff, Intern" (the OpenAI/Anthropic-style generic engineer
+                 # title). Both surfaced only through the SWElist digest; both staged.
+                 "core engineering", "member of technical staff", "technical staff")
 
 # AWS/cloud field-technical roles. Not SWE, and deliberately NOT scored as such.
 # They exist here for one reason: role_lane() returned None for every "Solutions

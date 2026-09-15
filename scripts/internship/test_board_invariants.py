@@ -902,6 +902,30 @@ def test_url_variants_and_unlocated_twins_collapse():
     check("collapsed count", n, 2)
 
 
+def test_ai_native_titles_have_a_lane_and_unclassified_are_exported():
+    """C9 (2026-09-15): Etched's "Core Engineering Intern" and Pace's "Member of
+    Technical Staff, Intern" name no technology, so role_lane() returned None and
+    brand_first_source._accept() dropped them before the store -- Etched's board was
+    wired that afternoon and rendered 2 of its 14 intern reqs, not the one he applied
+    to. Two guarantees: (a) those conventions classify as SWE; (b) any intern-titled
+    S/A/B posting that still has no lane is EXPORTED per run, not dropped silently."""
+    print("C9. AI-native title conventions classify; unclassified S/A/B titles are exported")
+    from hotness import role_lane
+    import brand_first_source as B
+    check("Core Engineering Intern -> SWE", role_lane("Core Engineering Intern"), "SWE")
+    check("Member of Technical Staff, Intern -> SWE",
+          role_lane("Member of Technical Staff, Intern"), "SWE")
+    check("brand_first_source exposes UNCLASSIFIED_TITLES", hasattr(B, "UNCLASSIFIED_TITLES"), True)
+    bsrc = (Path(__file__).parent / "brand_first_source.py").read_text()
+    body = bsrc[bsrc.index("async def collect("):]
+    check("UNCLASSIFIED_TITLES is cleared per run before the boards are gathered",
+          body.index("UNCLASSIFIED_TITLES.clear()") < body.index("asyncio.gather"), True)
+    one = bsrc[bsrc.index("async def _one_board("):bsrc.index("async def collect(")]
+    check("_one_board records an intern-titled S/A/B posting with no lane",
+          "UNCLASSIFIED_TITLES.append" in one and "role_lane(r.title) is None" in one, True)
+    check("collect() prints the unclassified list", "UNCLASSIFIED_TITLES:" in body and "NOT adopted" in body, True)
+
+
 def test_confirmed_dead_rows_die_now():
     print("C8. a req the employer's ATS confirmed closed dies this run, not after 14 strikes")
     import wide_net_source as W
@@ -941,6 +965,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_coverage_digest_partition,
            test_url_variants_and_unlocated_twins_collapse,
            test_confirmed_dead_rows_die_now,
+           test_ai_native_titles_have_a_lane_and_unclassified_are_exported,
            test_ai_native_is_orthogonal_to_tier,
            test_ai_native_respects_every_tier_exception,
            test_ai_native_entries_use_the_feed_name,

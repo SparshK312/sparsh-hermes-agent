@@ -205,6 +205,15 @@ def _to_record(rec: A.JobRecord, company: str, tier: str) -> dict:
 # Recording the failures lets curate.py skip striking those postings.
 FAILED_BOARDS: set[str] = set()
 
+# 🔴 Added 2026-09-15. Intern-titled postings at a tier-S/A/B board that role_lane()
+# could not classify. Until now these were dropped with NO trace -- the exact gap the
+# comment in _accept() has described since 2026-09-05 ("The fix is to LOG those for
+# review"). Etched's "Core Engineering Intern" (agentic systems, full-stack) vanished
+# this way the same afternoon its board was wired, and was found only because the
+# SWElist digest listed it. Exported per run and printed by collect(); the rows are
+# NOT pushed onto the board (that fallback was tried and removed the same day).
+UNCLASSIFIED_TITLES: list[tuple[str, str, str]] = []   # (company, title, url)
+
 
 async def _one_board(client, board: dict) -> list[dict]:
     if board.get("ats_type") == "manual":
@@ -223,11 +232,15 @@ async def _one_board(client, board: dict) -> list[dict]:
         FAILED_BOARDS.add(board["name"])
         return []
     out = []
+    tier = board.get("tier", "C")
     for r in recs:
         if not r.title or not r.url:
             continue
-        if _accept(r, board.get("tier", "C")):
-            out.append(_to_record(r, board["name"], board.get("tier", "C")))
+        if _accept(r, tier):
+            out.append(_to_record(r, board["name"], tier))
+        elif (tier in ("S", "A", "B") and A.default_intern_filter(r.title)
+              and role_lane(r.title) is None):
+            UNCLASSIFIED_TITLES.append((board["name"], r.title, r.url))
     return out
 
 
@@ -237,6 +250,7 @@ async def collect(client=None) -> list[dict]:
     if own_client:
         client = A.make_client()
     FAILED_BOARDS.clear()          # per-run; curate.py reads it right after
+    UNCLASSIFIED_TITLES.clear()
     getattr(A, "BOARD_FETCH_FAILURES", set()).clear()
     try:
         results = await asyncio.gather(*[_one_board(client, b) for b in boards()])
@@ -251,6 +265,12 @@ async def collect(client=None) -> list[dict]:
         print(f"[brand-first] {len(FAILED_BOARDS)} board(s) failed this run — their "
               f"postings are EXEMPT from the stale-check: "
               f"{', '.join(sorted(FAILED_BOARDS))}", file=sys.stderr)
+
+    if UNCLASSIFIED_TITLES:
+        names = ", ".join(f"{c}: {t}" for c, t, _ in UNCLASSIFIED_TITLES[:12])
+        print(f"[brand-first] {len(UNCLASSIFIED_TITLES)} intern-titled posting(s) at S/A/B "
+              f"boards had NO lane and were NOT adopted (review; add a keyword to "
+              f"hotness if one is real): {names}", file=sys.stderr)
 
     seen: set[str] = set()
     deduped: list[dict] = []
