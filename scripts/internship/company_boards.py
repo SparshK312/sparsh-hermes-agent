@@ -249,6 +249,11 @@ BOARDS = [
     # 2 Summer-2027 SWE intern reqs (US hubs, Toronto), both staged Sep 15.
     {"name": "Superhuman", "tier": "B", "ats_type": "ashby",
      "org": "Superhuman%20Platform%20Inc"},
+    # Etched (transformer-inference chips, Sohu; hundreds of millions raised): 15 intern
+    # reqs on the Ashby board, 14 of them chip/firmware/DFT/mech and one software-lane
+    # req -- Core Engineering Intern (agentic systems, full-stack, 0-to-1), posted
+    # 2026-09-15 and staged the same day. Only an aggregator row existed before.
+    {"name": "Etched", "tier": "B", "ats_type": "ashby", "org": "etched"},
 ]
 
 
