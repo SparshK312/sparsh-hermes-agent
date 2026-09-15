@@ -235,6 +235,20 @@ BOARDS = [
     # the board. Its university board is a separate Greenhouse token.
     {"name": "Tenstorrent", "tier": "B", "ats_type": "greenhouse",
      "token": "tenstorrentuniversity"},
+    # Added 2026-09-15 after he applied / staged at all three and asked whether the board
+    # reflected it -- it could not: none was named here, so tier C by default, boards
+    # never polled, zero rows. Each token validated live the same afternoon.
+    # Duolingo (NASDAQ: DUOL): 83 postings on the Greenhouse board, 3 interns Sep 15
+    # (SWE NYC/Pittsburgh/Seattle, APM Pittsburgh, Thrive). Staged the first two.
+    {"name": "Duolingo", "tier": "B", "ats_type": "greenhouse", "token": "duolingo"},
+    # Kensho (S&P Global's AI arm): Workday, shared spgi tenant with its own site.
+    # 5 postings, 2 Summer-2027 interns (MLE 331714 staged Sep 14; SWE 331717).
+    {"name": "Kensho", "tier": "B", "ats_type": "workday",
+     "host": "spgi.wd5.myworkdayjobs.com", "site": "Kensho_Careers"},
+    # Superhuman (Grammarly + Superhuman): Ashby org slug carries spaces, URL-encoded.
+    # 2 Summer-2027 SWE intern reqs (US hubs, Toronto), both staged Sep 15.
+    {"name": "Superhuman", "tier": "B", "ats_type": "ashby",
+     "org": "Superhuman%20Platform%20Inc"},
 ]
 
 
