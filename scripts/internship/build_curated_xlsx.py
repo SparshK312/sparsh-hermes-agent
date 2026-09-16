@@ -54,7 +54,13 @@ ID_HEADER = "_id"
 # round is a different fact from a cold rejection: the first says the résumé cleared the
 # screen and the round did not, the second says nothing. Both are terminal; the summary
 # counts them with plain "Rejected" (COUNTIF "Rejected*").
-STATUS_OPTS = ["To Apply", "Applied", "OA", "Phone Screen", "Technical Interview", "Onsite",
+# "OA" split into "OA - To Do" / "OA - Done" on 2026-09-16 (Sparsh: "make it more clear
+# in the status which OA has been done and which one nah and like requires action").
+# One value was covering two opposite states: on that date 8 rows read "OA" and 5 of them
+# needed nothing — the 3 outstanding ones (DRW, Snowflake, Intact) were indistinguishable
+# from the 5 already sat. "To Do" carries the To Apply orange; "Done" keeps the OA sky.
+STATUS_OPTS = ["To Apply", "Applied", "OA - To Do", "OA - Done", "Phone Screen",
+               "Technical Interview", "Onsite",
                "Offer", "Rejected", "Rejected after OA", "Rejected after Interview",
                "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
 # Every terminal-no status, for consumers that need "he was turned down" as one bucket.
@@ -66,10 +72,12 @@ REVIEWED_STATUSES = {"skip", "not a fit", "closed"}
 # Statuses that mean a real application is IN FLIGHT (he has acted on the row). curate's
 # stale-check exempts these from the strike rule: an employer's board often drops a req
 # the moment they stop accepting candidates, which is usually right after he applies.
-PIPELINE_STATUSES = {"Applied", "OA", "Phone Screen", "Technical Interview", "Onsite",
+PIPELINE_STATUSES = {"Applied", "OA - To Do", "OA - Done", "Phone Screen",
+                     "Technical Interview", "Onsite",
                      "Offer", "Networking", "On Hold"}
 # The interview funnel proper, for the "In process (OA+)" summary tile.
-IN_PROCESS_STATUSES = ("OA", "Phone Screen", "Technical Interview", "Onsite")
+IN_PROCESS_STATUSES = ("OA - To Do", "OA - Done", "Phone Screen",
+                       "Technical Interview", "Onsite")
 PRIORITY_OPTS = ["", "P0", "P1", "P2", "P3"]
 LANE_OPTS = ["AI/ML", "SWE", "Data", "PM", "Other"]
 CYCLE_OPTS = ["Fall 2026", "Winter 2027", "Spring 2027", "Summer 2027", "Summer 2026", "TBD"]
@@ -82,7 +90,8 @@ SLATE = "1F2937"; WHITE = "FFFFFF"
 STATUS_FILL = {"To Apply": ("FED7AA", "9A3412"),        # orange  — action needed
                "On Hold": ("E2E8F0", "334155"),         # slate   — parked / waiting on something
                "Applied": ("BFDBFE", "1E40AF"),         # blue    — in the pipeline
-               "OA": ("BAE6FD", "075985"),              # sky
+               "OA - To Do": ("FED7AA", "9A3412"),      # orange  — ACTION NEEDED, same as To Apply
+               "OA - Done": ("BAE6FD", "075985"),       # sky     — sat, awaiting their result
                "Phone Screen": ("C7D2FE", "3730A3"),    # indigo
                "Technical Interview": ("E9D5FF", "6B21A8"),  # purple — between screen and final
                "Onsite": ("DDD6FE", "5B21B6"),          # violet
@@ -108,8 +117,9 @@ PRIO_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "": 4}
 # tier-S Palantir req at hot 72 sat below tier-A rows at hot 74-90. Tier is now the
 # band and hotness only orders WITHIN a band.
 TIER_RANK = {"S": 0, "A": 1, "B": 2, "C": 3}
-STATUS_RANK = {"Offer": 0, "Onsite": 1, "Technical Interview": 2, "Phone Screen": 3, "OA": 4,
-               "Applied": 5, "Networking": 6, "On Hold": 7,
+STATUS_RANK = {"Offer": 0, "Onsite": 1, "Technical Interview": 2, "Phone Screen": 3,
+               "OA - To Do": 4, "OA - Done": 5,
+               "Applied": 6, "Networking": 7, "On Hold": 8,
                "Rejected after Interview": 9, "Rejected after OA": 10, "Rejected": 11}
 
 
@@ -177,8 +187,11 @@ def check_lock(path: str | Path) -> None:
 
 
 # ── read-back ─────────────────────────────────────────────────────────────────
+# "due" added 2026-09-16: the deadline on anything he owes (an OA window, a form).
+# HUMAN-owned like the rest of this map — nothing machine-derived may be rendered into
+# it, or the read-back turns a guess into a decision (see _review_status, 2026-09-08).
 _HUMAN_BY_HEADER = {"status": "status", "priority": "priority_override",
-                    "applied": "applied_date", "notes": "notes"}
+                    "applied": "applied_date", "notes": "notes", "due": "due"}
 
 
 def read_back_human(path: str | Path) -> dict[str, dict]:
@@ -410,9 +423,9 @@ def _build_queue(ws, rows):
     return last
 
 
-APP_HEADERS = [ID_HEADER, "Status", "Company", "Role", "Lane", "Location", "Cycle",
+APP_HEADERS = [ID_HEADER, "Status", "Due", "Company", "Role", "Lane", "Location", "Cycle",
                "Apply", "Applied", "Source / Referral", "Notes"]
-APP_WIDTHS = [2, 13, 18, 40, 8, 20, 12, 8, 12, 18, 38]
+APP_WIDTHS = [2, 15, 11, 18, 40, 8, 20, 12, 8, 12, 18, 38]
 
 
 def _build_apps(ws, rows):
@@ -431,7 +444,8 @@ def _build_apps(ws, rows):
     for i, rec in enumerate(rows):
         r = first + i
         m, h = rec["machine"], rec["human"]
-        vals = [rec["_cid"], h.get("status", ""), m.get("company", ""), m.get("role", ""),
+        vals = [rec["_cid"], h.get("status", ""), h.get("due", ""),
+                m.get("company", ""), m.get("role", ""),
                 m.get("lane", ""), m.get("location", ""), m.get("cycle", ""),
                 ("Apply ↗" if m.get("url") else ""), h.get("applied_date", ""),
                 m.get("source", ""), h.get("notes", "")]
@@ -439,14 +453,14 @@ def _build_apps(ws, rows):
             c = ws.cell(row=r, column=j, value=v)
             c.border = BORDER
             c.font = Font(size=10)
-            c.alignment = Alignment(vertical="center", wrap_text=(j in (4, 11)))
+            c.alignment = Alignment(vertical="center", wrap_text=(j in (5, 12)))
         sf = STATUS_FILL.get(vals[1])
         if sf:
             sc = ws.cell(row=r, column=2)
             sc.fill = PatternFill("solid", fgColor=sf[0])
             sc.font = Font(bold=True, size=10, color=sf[1])
         if m.get("url"):
-            ac = ws.cell(row=r, column=8)
+            ac = ws.cell(row=r, column=9)
             ac.hyperlink = m["url"]
             ac.font = Font(size=10, color="2563EB", underline="single")
             ac.alignment = Alignment(horizontal="center", vertical="center")

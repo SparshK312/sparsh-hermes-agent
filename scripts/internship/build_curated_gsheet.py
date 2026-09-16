@@ -269,7 +269,7 @@ def _col_letter(n: int) -> str:
 
 
 _HUMAN_BY_HEADER = {"status": "status", "priority": "priority_override",
-                    "applied": "applied_date", "notes": "notes"}
+                    "applied": "applied_date", "notes": "notes", "due": "due"}
 
 TABS = (TAB_QUEUE, TAB_APPS, TAB_REVIEWED)
 _HEADERS = {TAB_QUEUE: QUEUE_HEADERS, TAB_APPS: APP_HEADERS, TAB_REVIEWED: REVIEW_HEADERS}
@@ -457,7 +457,11 @@ def _row_values(tab: str, rec: dict) -> list:
             "Source": m.get("source", ""),
         })
     elif tab == TAB_APPS:
-        common.update({"Applied": h.get("applied_date", ""),
+        # "Due" is HUMAN-owned and read back as such: render ONLY what he put there.
+        # Never a computed deadline — a machine value in a read-back column becomes a
+        # permanent fake decision on the next refresh (2026-09-08, 279 fake "Closed").
+        common.update({"Due": h.get("due", ""),
+                       "Applied": h.get("applied_date", ""),
                        "Source / Referral": m.get("source", "")})
     elif tab == TAB_REVIEWED:
         # Status carries ONLY what he set. A posting that merely went stale shows that in

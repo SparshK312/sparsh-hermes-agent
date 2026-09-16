@@ -507,6 +507,70 @@ def test_status_vocabulary_has_one_source():
           "for st in IN_PROCESS_STATUSES" in xl, True)
 
 
+# ── VOCABULARY, PART 4: EVERY STATUS MUST BE CLASSIFIED ──────────────────────
+# 2026-09-16. Splitting "OA" into "OA - To Do" / "OA - Done" meant touching FIVE
+# constants (STATUS_OPTS, PIPELINE_STATUSES, IN_PROCESS_STATUSES, STATUS_FILL,
+# STATUS_RANK). Missing PIPELINE_STATUSES specifically is not a cosmetic bug: that set
+# is what EXEMPTS a row from the stale-strike rule, so an unclassified live stage gets
+# struck as dead — the exact failure that killed 177 live rows on 2026-09-14 and 265 on
+# 2026-09-11. The weak form of this check ("the new values are in the set") only
+# protects today's change. The strong form is an EXHAUSTIVE PARTITION: every status
+# must be declared live, terminal-no, reviewed, or not-yet-applied. A status that is
+# none of those is a status nobody classified, and it fails here rather than silently
+# on the board two weeks later.
+def test_every_status_is_classified():
+    from build_curated_xlsx import (STATUS_OPTS, PIPELINE_STATUSES, REJECTED_STATUSES,
+                                    REVIEWED_STATUSES, IN_PROCESS_STATUSES, STATUS_RANK)
+    print("V4. every status is classified (partition, not spot-check)")
+    NOT_YET_APPLIED = {"To Apply"}
+    reviewed = {s for s in STATUS_OPTS if s.lower() in REVIEWED_STATUSES}
+    classified = PIPELINE_STATUSES | set(REJECTED_STATUSES) | reviewed | NOT_YET_APPLIED
+    check("no status is left unclassified (would be struck as stale)",
+          sorted(set(STATUS_OPTS) - classified), [])
+    check("no bucket names a status that does not exist",
+          sorted(classified - set(STATUS_OPTS)), [])
+    # The buckets are mutually exclusive: a live status that is also terminal would make
+    # the strike-exemption and the rejection filter disagree about the same row.
+    check("live and terminal-no do not overlap",
+          sorted(PIPELINE_STATUSES & set(REJECTED_STATUSES)), [])
+    check("live and reviewed do not overlap", sorted(PIPELINE_STATUSES & reviewed), [])
+
+    # the OA split itself, and the property that motivated it
+    check("OA is split, not one value", "OA" not in STATUS_OPTS, True)
+    for v in ("OA - To Do", "OA - Done"):
+        check(f"{v} exists", v in STATUS_OPTS, True)
+        check(f"{v} is exempt from the stale strike", v in PIPELINE_STATUSES, True)
+        check(f"{v} is in the interview funnel", v in IN_PROCESS_STATUSES, True)
+    check("an outstanding OA sorts ABOVE one already sat",
+          STATUS_RANK["OA - To Do"] < STATUS_RANK["OA - Done"], True)
+    check("a sat OA still outranks a bare Applied",
+          STATUS_RANK["OA - Done"] < STATUS_RANK["Applied"], True)
+
+
+# ── DUE IS A HUMAN COLUMN ────────────────────────────────────────────────────
+# 2026-09-16. "Due" holds the deadline on anything he owes. It is read back as human,
+# so the 2026-09-08 rule binds: a machine-derived value rendered into a read-back
+# column becomes a permanent fake decision on the next refresh (that defect put a
+# fabricated "Closed" on 279 rows, 96 of which the scraper knew were alive).
+def test_due_is_human_owned_and_never_computed():
+    import re
+    from build_curated_xlsx import APP_HEADERS, _HUMAN_BY_HEADER
+    print("V5. Due is human-owned")
+    check("Due is a column on the applications tab", "Due" in APP_HEADERS, True)
+    check("Due sits next to Status, not buried at the end",
+          APP_HEADERS.index("Due") - APP_HEADERS.index("Status"), 1)
+    check("Due is read back as a human field", _HUMAN_BY_HEADER.get("due"), "due")
+    here = Path(__file__).parent
+    gs = (here / "build_curated_gsheet.py").read_text()
+    check("the renderer writes Due ONLY from the human dict",
+          bool(re.search(r'"Due":\s*h\.get\("due", ""\)', gs)), True)
+    # the laundering shape: any fallback that fills Due with something computed
+    check("no computed fallback on Due",
+          bool(re.search(r'"Due":\s*h\.get\("due",\s*""\)\s*or\s', gs)), False)
+    brd = (here / "board.py").read_text()
+    check("board.py can set Due", "--due" in brd, True)
+
+
 # ── VOCABULARY, PART 3: REJECTED AFTER A ROUND ───────────────────────────────
 # 2026-09-14, Sparsh: "if we did an OA and THEN got rejected, is there a way to mark
 # that on the sheet… 'rejected after OA' or 'rejected after interview'". Two terminal
@@ -954,6 +1018,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_cap_dropped_rows_are_never_struck,
            test_status_vocabulary_has_one_source,
            test_rejected_after_round_statuses,
+           test_every_status_is_classified,
+           test_due_is_human_owned_and_never_computed,
            test_age_filter_discards_are_exempt_from_strikes,
            test_id_match_is_exact_and_refuses_ambiguity,
            test_sheet_dropdown_follows_the_vocabulary,
