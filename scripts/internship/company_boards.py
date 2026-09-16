@@ -254,6 +254,21 @@ BOARDS = [
     # req -- Core Engineering Intern (agentic systems, full-stack, 0-to-1), posted
     # 2026-09-15 and staged the same day. Only an aggregator row existed before.
     {"name": "Etched", "tier": "B", "ats_type": "ashby", "org": "etched"},
+    # Added 2026-09-16 from the SWElist 9/16 cross-check: four in-lane reqs he is
+    # staging today at companies the table never named (tier C by default, never
+    # polled, so only aggregator rows -- or none -- existed). Tokens validated live.
+    # Rilla (AI sales coaching, NYC, GV/Bessemer; 1,000+ customers): 30 postings,
+    # 3 interns -- SWE Intern "2028 Grads" (staged), Generalist, Product Designer.
+    {"name": "Rilla", "tier": "B", "ats_type": "ashby", "org": "rilla"},
+    # Gecko Robotics (infrastructure-inspection robots + AI data platform, NYC/PGH):
+    # 23 postings, 4 interns -- Full Stack SWE NYC (staged), AI/ML NYC, two off-lane.
+    {"name": "Gecko Robotics", "tier": "B", "ats_type": "ashby", "org": "gecko-robotics"},
+    # Hometap (Boston fintech, home-equity investment): 2 postings, 1 intern -- the
+    # Spring-2027 Full Stack co-op, a Winter-cycle req (staged).
+    {"name": "Hometap", "tier": "B", "ats_type": "greenhouse", "token": "hometapjobs"},
+    # SingleStore (distributed SQL database, SF): 38 postings, 2 identical SWE Intern
+    # reqs (8205514 staged, 8154399 its twin).
+    {"name": "SingleStore", "tier": "B", "ats_type": "greenhouse", "token": "singlestore"},
 ]
 
 
