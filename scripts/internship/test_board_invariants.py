@@ -979,6 +979,13 @@ def test_ai_native_titles_have_a_lane_and_unclassified_are_exported():
     check("Core Engineering Intern -> SWE", role_lane("Core Engineering Intern"), "SWE")
     check("Member of Technical Staff, Intern -> SWE",
           role_lane("Member of Technical Staff, Intern"), "SWE")
+    # 2026-09-17: Decagon "Engineering Intern (Summer 2027)" -- a title that BEGINS with
+    # "Engineering Intern" is SWE; the same words behind a discipline prefix are not.
+    check("Engineering Intern (Summer 2027) -> SWE", role_lane("Engineering Intern (Summer 2027)"), "SWE")
+    check("Engineering Internship -> SWE", role_lane("Engineering Internship"), "SWE")
+    check("Quality Engineering Intern is NOT adopted by the bare rule",
+          role_lane("Quality Engineering Intern") == "SWE", False)
+    check("Manufacturing Engineering Intern stays rejected", role_lane("Manufacturing Engineering Intern"), None)
     check("brand_first_source exposes UNCLASSIFIED_TITLES", hasattr(B, "UNCLASSIFIED_TITLES"), True)
     bsrc = (Path(__file__).parent / "brand_first_source.py").read_text()
     body = bsrc[bsrc.index("async def collect("):]

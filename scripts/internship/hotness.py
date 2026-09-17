@@ -444,6 +444,9 @@ def is_hard_negative(title: str) -> bool:
     return any(neg in t for neg in _HARD_NEGATIVES)
 
 
+_BARE_ENGINEERING_INTERN = re.compile(r"^\s*engineering intern(ship)?\b")
+
+
 def role_lane(title: str) -> str | None:
     """Return display lane ('AI/ML'|'Data'|'SWE'|'PM'|'Other') or None to reject.
 
@@ -456,6 +459,15 @@ def role_lane(title: str) -> str | None:
     for neg in _HARD_NEGATIVES:
         if neg in t:
             return None
+    # 🔴 Added 2026-09-17. A title that BEGINS with "Engineering Intern" -- Decagon's
+    # "Engineering Intern (Summer 2027)", the generalist-engineer convention at
+    # software-only startups -- names no technology and fell through to None, so the
+    # board polled Decagon's freshly wired Ashby board and adopted nothing (the same
+    # shape as Etched "Core Engineering Intern" on 09-15). Anchored at the start on
+    # purpose: a bare substring would also adopt "Quality Engineering Intern" /
+    # "Manufacturing Engineering Intern" wherever the prefix is not a hard negative.
+    if _BARE_ENGINEERING_INTERN.match(t):
+        return "SWE"
     has_eng = any(k in t for k in _SWE_KEYWORDS) or any(k in t for k in _AIML_KEYWORDS)
     if any(k in t for k in _PM_KEYWORDS) and not has_eng:
         return "PM"
