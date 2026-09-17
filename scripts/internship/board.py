@@ -18,7 +18,7 @@ Machine fields (store owns): everything else — never hand-edit those.
 
 USAGE
   board.py applied  <match> [--date YYYY-MM-DD] [--notes "..."]
-  board.py status   <match> "<Status>" [--due YYYY-MM-DD] [--notes "..."]
+  board.py status   <match> "<Status>" [--due YYYY-MM-DD|clear] [--notes "..."]
   board.py note     <match> "<text>"
   board.py priority <match> <P0|P1|P2|P3|clear> [--notes "..."]
   board.py show     <match>
@@ -193,8 +193,12 @@ def main() -> int:
         # --due writes the deadline for anything he now owes (an OA window, a form).
         # Only on the tabs that carry the column; _set warns rather than silently
         # dropping the write when a tab has no such column (2026-09-05 rule).
-        if _arg("--due"):
-            _set(tab, row, headers, "Due", _arg("--due"))
+        due = _arg("--due")
+        if due:
+            # `--due clear` empties the cell, matching `priority <m> clear`. The Sheet is
+            # authoritative including blanks (2026-09-05), so a cleared Due clears in the
+            # store too. Needed because an "OA - Done" row must NOT carry a deadline.
+            _set(tab, row, headers, "Due", "" if due.lower() == "clear" else due)
         # 🔴 An application with no date is a silent data loss (added 2026-09-05).
         # `board.py applied` stamps today's date; `board.py status <m> "Applied"` did
         # not — and "Applied" is in the status vocabulary, so it is the natural thing
