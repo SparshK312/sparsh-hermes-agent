@@ -269,6 +269,21 @@ BOARDS = [
     # SingleStore (distributed SQL database, SF): 38 postings, 2 identical SWE Intern
     # reqs (8205514 staged, 8154399 its twin).
     {"name": "SingleStore", "tier": "B", "ats_type": "greenhouse", "token": "singlestore"},
+    # Added 2026-09-17. Visa had been tier A BY NAME in hotness.py since the July expansion
+    # with no board here, so its reqs only ever arrived through the aggregators -- and on
+    # 2026-09-16 Simplify carried ten Visa SWE-intern reqs (five real "Software Engineer,
+    # Intern - 2027" sites + five Sophomore Program twins) while the Sheet held only the
+    # APM row. Workday tenant `visa`, site `Visa`; 497 postings, list endpoint verified.
+    {"name": "Visa", "tier": "A", "ats_type": "workday",
+     "host": "visa.wd5.myworkdayjobs.com", "site": "Visa"},
+    # Decagon (customer-support AI agents; a16z/Accel/Coatue/Index): 144 postings on the
+    # Ashby board, one intern req -- Engineering Intern (Summer 2027), posted Aug 20,
+    # never on the board because the company was never named. Staged 2026-09-17.
+    {"name": "Decagon", "tier": "B", "ats_type": "ashby", "org": "decagon"},
+    # Emergent Labs (autonomous coding agents; YC/Khosla/SoftBank, $130M ARR): 34 postings,
+    # one SWE intern req (4323651009, SF). Staged 2026-09-17 with the "Fresh graduates"
+    # line flagged for his call.
+    {"name": "Emergent Labs", "tier": "B", "ats_type": "greenhouse", "token": "emergentlabsinc"},
 ]
 
 
