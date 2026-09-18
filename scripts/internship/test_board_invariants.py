@@ -996,6 +996,9 @@ def test_ai_native_titles_have_a_lane_and_unclassified_are_exported():
     check("Amazon queries include 'internship <next year>'", f"internship {_dt.now().year + 1}" in qs, True)
     check("Amazon queries include the literal 'software development engineer internship'",
           "software development engineer internship" in qs, True)
+    check("Amazon queries include 'solutions architect intern' (AWSI SA req, 2026-09-18)",
+          "solutions architect intern" in qs, True)
+    check("a Solutions Architect intern title has a lane", role_lane("Solutions Architect Intern, AWSI - 2027") is not None, True)
     check("brand_first_source exposes UNCLASSIFIED_TITLES", hasattr(B, "UNCLASSIFIED_TITLES"), True)
     bsrc = (Path(__file__).parent / "brand_first_source.py").read_text()
     body = bsrc[bsrc.index("async def collect("):]

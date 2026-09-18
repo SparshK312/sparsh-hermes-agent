@@ -655,7 +655,12 @@ def _amazon_default_queries() -> list[str]:
             "software development engineer internship",
             f"internship {y}", f"internship {y + 1}",
             "machine learning intern", "data engineer intern",
-            "product manager intern"]
+            "product manager intern",
+            # 2026-09-18: the AWSI "Solutions Architect Intern, AWSI - 2027" req (10550494,
+            # posted Sep 16) is returned by NONE of the queries above -- not even
+            # "internship 2027". SA is a lane he has asked about twice (09-09, 09-18);
+            # role_lane() already classifies it ("Other").
+            "solutions architect intern"]
 
 
 def _amazon_date(s: str) -> str:
