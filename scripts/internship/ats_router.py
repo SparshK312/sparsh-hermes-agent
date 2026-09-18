@@ -617,9 +617,7 @@ async def _board_lever_impl(client, board) -> list[JobRecord]:
 async def _board_amazon(client, board) -> list[JobRecord]:
     """amazon.jobs search.json — public JSON search. Drive with intern queries,
     union + dedup by job_path. Rich payload (quals + description)."""
-    queries = board.get("queries", ["software engineer intern", "software dev engineer intern",
-                                    "machine learning intern", "data engineer intern",
-                                    "product manager intern"])
+    queries = board.get("queries", _amazon_default_queries())
     out: dict[str, JobRecord] = {}
     base = "https://www.amazon.jobs/en/search.json"
     for q in queries:
@@ -641,6 +639,23 @@ async def _board_amazon(client, board) -> list[JobRecord]:
                 ats_type="amazon", req_id=str(j.get("id_icims") or j.get("id", "")),
             )
     return list(out.values())
+
+
+def _amazon_default_queries() -> list[str]:
+    """🔴 2026-09-18: amazon.jobs search does NOT stem "Internship" to "intern". The
+    general "Software Development Engineer Internship - Summer 2027 (USA)" req
+    (10552937, posted 2026-09-17 -- the one the Ashish referral had been parked on
+    since Aug 24) was invisible to every intern-worded query here, while
+    "internship 2027" returned it AND the three specialised 2027 reqs. Measured:
+    "software engineer intern" 13 hits (no 10552937) · "internship 2027" 41 hits
+    (has it) · "2027" 403 hits (has it). The year forms are computed so this does
+    not silently go stale next cycle."""
+    y = datetime.now().year
+    return ["software engineer intern", "software dev engineer intern",
+            "software development engineer internship",
+            f"internship {y}", f"internship {y + 1}",
+            "machine learning intern", "data engineer intern",
+            "product manager intern"]
 
 
 def _amazon_date(s: str) -> str:

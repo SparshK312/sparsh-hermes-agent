@@ -986,6 +986,16 @@ def test_ai_native_titles_have_a_lane_and_unclassified_are_exported():
     check("Quality Engineering Intern is NOT adopted by the bare rule",
           role_lane("Quality Engineering Intern") == "SWE", False)
     check("Manufacturing Engineering Intern stays rejected", role_lane("Manufacturing Engineering Intern"), None)
+    # 2026-09-18: amazon.jobs does not stem "Internship"; the general SDE Internship
+    # Summer 2027 (USA) req was invisible to every intern-worded query. The Amazon
+    # board must carry an "internship <year>" query for this year AND next.
+    import ats_router as A
+    from datetime import datetime as _dt
+    qs = A._amazon_default_queries()
+    check("Amazon queries include 'internship <this year>'", f"internship {_dt.now().year}" in qs, True)
+    check("Amazon queries include 'internship <next year>'", f"internship {_dt.now().year + 1}" in qs, True)
+    check("Amazon queries include the literal 'software development engineer internship'",
+          "software development engineer internship" in qs, True)
     check("brand_first_source exposes UNCLASSIFIED_TITLES", hasattr(B, "UNCLASSIFIED_TITLES"), True)
     bsrc = (Path(__file__).parent / "brand_first_source.py").read_text()
     body = bsrc[bsrc.index("async def collect("):]
