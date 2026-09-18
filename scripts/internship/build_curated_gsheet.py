@@ -391,10 +391,14 @@ def _group_by_company(rows: list[dict]) -> list[dict]:
     disqualified) are grouped separately and appended after everything else. Company
     blocks and his 2026-09-05 request survive; the band structure survives too.
     """
+    # 🔁 2026-09-18: On Hold is NO LONGER a sunk band. It sorts at the end of its own
+    # tier (see _queue_sort_key) and groups with its company like any live row, because
+    # the Amazon holds became the general 2027 SDE reqs and he wants them "near the top
+    # instead of at the bottom". Only disqualified rows sink below every tier now. A
+    # company has one tier, so a block still cannot straddle a tier band.
     def sunk(r) -> bool:
-        h, m = r.get("human") or {}, r.get("machine") or {}
-        return ((h.get("status") or "").strip().lower() == "on hold"
-                or (m.get("fit_disqualifier") or "none") not in ("none", "", None))
+        m = r.get("machine") or {}
+        return (m.get("fit_disqualifier") or "none") not in ("none", "", None)
 
     def blocks(subset: list[dict]) -> list[dict]:
         groups: dict[str, list[dict]] = {}

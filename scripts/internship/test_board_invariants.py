@@ -183,11 +183,17 @@ def test_grouping_cannot_undo_the_sort():
                             "fit_disqualifier": dq},
                 "human": {"status": status, "priority_override": prio}}
 
-    # an On Hold row at a company that ALSO has live rows must still sink
+    # 2026-09-18: an On Hold row stays INSIDE its tier band (after the tier's live rows),
+    # so a tier-S hold sits above a tier-C live row; it no longer sinks below every tier.
     rows = [row("Acme", "S"), row("Acme", "S", status="On Hold"), row("Zeta", "C")]
     out = _group_by_company(sorted(rows, key=_queue_sort_key))
-    check("On Hold sinks below another company's C row",
-          out[-1]["human"]["status"], "On Hold")
+    check("a tier-S On Hold row sits above another company's C row",
+          [r["machine"]["company"] + ("/hold" if r["human"]["status"] == "On Hold" else "") for r in out],
+          ["Acme", "Acme/hold", "Zeta"])
+    # ...but never above a live row of its own tier at another company
+    rows = [row("Acme", "S", status="On Hold"), row("Beta", "S")]
+    out = _group_by_company(sorted(rows, key=_queue_sort_key))
+    check("a tier-S On Hold row sits below a tier-S live row", out[0]["machine"]["company"], "Beta")
 
     # 2026-09-05 -> 2026-09-15 a P0 lifted its whole company block above every tier-S
     # company (priority was the first sort key). REVERSED 2026-09-15 on his instruction
@@ -248,16 +254,21 @@ def test_revive_has_a_blast_radius_cap():
 
 
 def test_queue_sort():
-    """His instruction: S at the top, then A, B, C — and the two Amazon On Hold reqs
-    (both tier S) parked at the bottom regardless."""
-    print("5. queue sorts by tier, with On Hold sunk below everything")
+    """His instruction (2026-09-15): S at the top, then A, B, C. On Hold was parked at
+    the bottom regardless until 2026-09-18, when the general Amazon reqs went on hold
+    and he asked for them near the top: a hold now sits at the END OF ITS TIER."""
+    print("5. queue sorts by tier, with On Hold at the end of its own tier")
     def r(tier, hot=50, status=""):
         return {"machine": {"tier": tier, "hotness": hot, "fit_disqualifier": "none"},
                 "human": {"status": status, "priority_override": ""}}
     rows = [r("C", 99), r("B", 10), r("S", 1), r("A", 50), r("S", 100, "On Hold")]
     order = [x["machine"]["tier"] + ("/hold" if x["human"]["status"] == "On Hold" else "")
              for x in sorted(rows, key=_queue_sort_key)]
-    check("order", order, ["S", "A", "B", "C", "S/hold"])
+    check("order", order, ["S", "S/hold", "A", "B", "C"])
+    check("a disqualified row still sinks below an On Hold row of a lower tier",
+          [x["machine"]["tier"] for x in sorted(
+              [{"machine": {"tier": "S", "hotness": 90, "fit_disqualifier": "phd-required"}, "human": {"status": "", "priority_override": ""}},
+               r("C", 5, "On Hold")], key=_queue_sort_key)], ["C", "S"])
     check("a high-hotness C never outranks a low-hotness S",
           sorted([r("C", 99), r("S", 1)], key=_queue_sort_key)[0]["machine"]["tier"], "S")
     # 2026-09-15: the exact case he saw -- a tier-B P0 (Viam) above a tier-S P1 (Tesla)

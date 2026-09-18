@@ -324,18 +324,23 @@ def _queue_sort_key(rec):
     # Sparsh, 2026-09-15, after a tier-B P0 (Viam) sat above a tier-S P1 (Tesla)).
     # PRIORITY ranks WITHIN a tier -- a P0 leads its tier, it no longer leads the board.
     # (2026-09-05 -> 2026-09-15 the key was priority-first; the tab header claimed
-    # tier-first the whole time.) on_hold and disqualified still sink below every tier,
-    # brand notwithstanding -- the Amazon On Hold reqs are tier S and would otherwise
-    # lead ("we can keep the 2 Amazon ones that are on hold at the bottom" -- 2026-09-08,
-    # reaffirmed 2026-09-15: "the amazon ones on hold can stay on hold thats fine").
-    return (1 if _is_disq(m) else 0, on_hold, tier, PRIO_RANK.get(prio, 4),
+    # tier-first the whole time.) Disqualified rows still sink below every tier.
+    # 🔁 ON HOLD CHANGED 2026-09-18: it now sorts WITHIN its tier, after that tier's live
+    # rows, instead of below every tier. From 2026-09-08 ("we can keep the 2 Amazon ones
+    # that are on hold at the bottom") through 2026-09-15 the Amazon holds were two
+    # specialised reqs; on 2026-09-18 the general SDE reqs (USA + CAN) and the AWSI SA
+    # req went on hold for the same referral and the seven tier-S rows were split
+    # between the top and the bottom of the board by render timing. Sparsh: "fix the
+    # board so amazon is all near the top instead of at the bottom." A hold is a parked
+    # tier-S row, not a demoted one.
+    return (1 if _is_disq(m) else 0, tier, on_hold, PRIO_RANK.get(prio, 4),
             -int(m.get("hotness", 0) or 0))
 
 
 def _build_queue(ws, rows):
     _title_block(ws, len(QUEUE_HEADERS),
                  "🔥 Curated Queue — brand-ranked open intern roles",
-                 "Ranked by TIER (S -> A -> B -> C), then Priority (P0 first), then Hotness within a tier. Fit = AI read of the JD (hover a Role "
+                 "Ranked by TIER (S -> A -> B -> C), then Priority (P0 first), then Hotness within a tier; On Hold rows sit at the end of their tier. Fit = AI read of the JD (hover a Role "
                  "cell for the JD). ❌ = disqualified (still shown, sunk). Set Status to move a row.")
     hdr = 3; first = 4
     _header(ws, QUEUE_HEADERS, QUEUE_WIDTHS, hdr)
