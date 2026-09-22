@@ -11,6 +11,7 @@ Pure functions only: no network, no live store, runs in under a second. Exit 0 =
 
 Run:  <venv>/bin/python test_board_invariants.py
 """
+import re
 import sys
 from pathlib import Path
 
@@ -1189,6 +1190,23 @@ def test_show_answers_instead_of_refusing():
     check("_find's refusal lists candidates via _lines (which carry id:)", "_lines(hits)" in fnd, True)
     check("_lines prints the id: handle", "id:{g('_id')}" in brd, True)
 
+
+# ── A READ IS THE WHOLE TAB ───────────────────────────────────────────────────
+# 2026-09-21. board.py fetched every tab as A1:<last>500. Reviewed was at 1,277 rows
+# and Apply Now at 492, so ~780 Reviewed rows could not be found by show/status —
+# reported as "NOT ON THE BOARD" — and the queue was eight rows from the same silent
+# miss. The rule from CLAUDE.md: a cap that does not announce itself is a data-loss
+# bug. The read is now unbounded; this pins that no fixed row count comes back.
+def test_board_reads_whole_tabs():
+    print("R2. board.py reads whole tabs, never the first N rows")
+    src = (Path(__file__).parent / "board.py").read_text()
+    # The two LOOKUP reads (the id: path and _fetch_tabs). `list-live` reads the top
+    # of the queue on purpose and is not a lookup.
+    lookups = re.findall(r'rows_by_tab\[tab\] = G\.values_get\(.*?_col_letter\(len\(h\)\)\}(\d*)"',
+                         src, flags=re.S)
+    check("both lookup reads exist", len(lookups), 2)
+    check("neither lookup read carries a fixed row cap", lookups, ["", ""])
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -1220,7 +1238,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_ai_native_marker_never_reaches_a_human_column,
            test_ai_native_marker_composes_with_the_stale_marker,
            test_worklist_computes_ai_native_at_the_edge,
-           test_show_answers_instead_of_refusing):
+           test_show_answers_instead_of_refusing,
+           test_board_reads_whole_tabs):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

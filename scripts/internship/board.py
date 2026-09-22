@@ -100,7 +100,7 @@ def _find(needle: str):
         for tab in TABS:
             h = G._HEADERS[tab]
             rows_by_tab[tab] = G.values_get(G.SHEET_ID_DEFAULT,
-                                            f"{G._q(tab)}!A1:{G._col_letter(len(h))}500")
+                                            f"{G._q(tab)}!A1:{G._col_letter(len(h))}")
         hits = find_by_id(want, rows_by_tab)
         if not hits:
             sys.exit(f"no row has _id exactly {want!r}. Try: board.py show <fragment>")
@@ -138,8 +138,13 @@ def _fetch_tabs():
     rows_by_tab, headers_by_tab = {}, {}
     for tab in TABS:
         h = G._HEADERS[tab]
+        # 🔴 The whole tab, never a fixed row count. This read `A1:L500` until
+        # 2026-09-21, when Reviewed stood at 1,277 rows and Apply Now at 492: every
+        # Reviewed row past 500 was invisible to show/status — "NOT ON THE BOARD" for
+        # a row that was on the board — and the queue was eight rows from the same
+        # silent miss. A cap that does not announce itself is a data-loss bug.
         rows_by_tab[tab] = G.values_get(G.SHEET_ID_DEFAULT,
-                                        f"{G._q(tab)}!A1:{G._col_letter(len(h))}500")
+                                        f"{G._q(tab)}!A1:{G._col_letter(len(h))}")
         headers_by_tab[tab] = h
     return rows_by_tab, headers_by_tab
 
