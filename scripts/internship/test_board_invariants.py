@@ -1041,6 +1041,73 @@ def test_confirmed_dead_rows_die_now():
     check("it marks dead with a signed reason", 'dead_reason"] = f"ATS confirmed closed' in blk, True)
 
 
+
+# ── A READ IS AN ANSWER, NOT A REFUSAL ────────────────────────────────────────
+# 2026-09-21, 21:49–22:04 ET: a Telegram turn asked "did I already apply to all of
+# these" for 13 pasted titles. board.py show matched the whole fragment as a substring,
+# so "BS MS" missed "BS/MS" and "SWE" missed "Software Engineer"; every miss was exit 1 +
+# "no row matches … be more specific"; and the agent's way of being more specific was to
+# reword the fragment. 41 Sonnet calls, $1.34, stopped only by the 40-tool-turn guardrail.
+# Every one of those calls was a read, and the rows it wanted — with their statuses —
+# were on the Sheet the whole time. The rule: a WRITE refuses ambiguity and says which
+# rows and how to address one exactly; a READ never refuses, it lists what it found.
+def test_show_answers_instead_of_refusing():
+    from board_match import find_rows, GENERIC_TOKENS
+    print("R. board.py show answers on a miss; writes refuse with the id: to use next")
+    H_APP = ["_id", "Status", "Company", "Role", "Location", "Applied", "Notes"]
+    H_REV = ["_id", "Status", "Company", "Role", "Location", "Notes"]
+    rows = {"My Applications": [H_APP,
+                ["waymo/8193731", "Applied", "Waymo", "2027 Summer Intern, BS/MS, Software Engineer", "Mountain View", "2026-09-14", ""],
+                ["figma/6143238004", "OA - Done", "Figma", "Software Engineer Intern", "SF", "2026-09-14", ""],
+                ["figma/6152695004", "Applied", "Figma", "Software Engineer Intern - Multiple Teams", "SF", "2026-09-14", ""]],
+            "Reviewed": [H_REV,
+                ["amazon/10554586", "Not a Fit", "Amazon", "2027 Software Dev Engineer Intern - United Kingdom", "London",
+                 "UK; same SWE intern JD shape as Figma"],
+                ["figma/6178857004", "Not a Fit", "Figma", "Data Science Intern (2027)", "SF", ""]]}
+    hdr = {t: r[0] for t, r in rows.items()}
+    ids = lambda hits: [h[3][0] for h in hits]  # noqa: E731
+
+    # (a) the retyped title resolves: punctuation the human dropped is not a miss
+    mode, hits = find_rows("Waymo 2027 Summer Intern BS MS Software Engineer", rows, hdr)
+    check("BS MS finds the BS/MS row, by every-word match", (mode, ids(hits)), ("tokens", ["waymo/8193731"]))
+    # (b) an abbreviation the row does not contain still lands on the company's rows
+    mode, hits = find_rows("Figma SWE Intern", rows, hdr)
+    check("SWE -> nearest, every Figma row", mode, "nearest")
+    check("nearest is ranked by identity columns, so a NOTE naming Figma does not qualify",
+          "amazon/10554586" in ids(hits), False)
+    check("nearest returns all three Figma rows", sorted(ids(hits)),
+          ["figma/6143238004", "figma/6152695004", "figma/6178857004"])
+    # (c) a company with no row is 'none', an answer — never an exception
+    check("unknown company -> none, []", find_rows("Together AI Software Engineer Intern", rows, hdr), ("none", []))
+    # (d) a fragment made only of generic words cannot 'nearest'-match anything
+    check("generic words are generic", {"intern", "software", "engineer", "summer", "2027"} <= GENERIC_TOKENS, True)
+    check("'Software Engineer Intern Summer 2027' has no distinctive word, so no nearest guess",
+          find_rows("Intern Summer 2027", rows, hdr)[0] in ("none", "tokens"), True)
+    check("but 'Intern 2027' still every-word-matches the rows that carry both", 
+          find_rows("Intern 2027", rows, hdr)[0], "tokens")
+    # (e) the historical whole-fragment substring still wins, on any column
+    check("substring of the URL still addresses the row", find_rows("6152695004", rows, hdr)[0], "exact")
+    check("empty needle is none, not every row", find_rows("   ", rows, hdr), ("none", []))
+
+    # (f) board.py must route SHOW through find_rows and never through the refusing
+    # _find; anchored on the calls, not on prose. Mutation: route show via _find -> red.
+    brd = (Path(__file__).parent / "board.py").read_text()
+    show = brd[brd.index('if cmd == "show":'):]
+    show = show[:show.index("needle = sys.argv[2]")]
+    check("show resolves every fragment with find_rows", "mode, hits = find_rows(needle, rows_by_tab, headers_by_tab)" in show, True)
+    check("show handles the miss as text ('NOT ON THE BOARD'), not an exit", "NOT ON THE BOARD" in show, True)
+    check("show never calls the refusing _find", "_find(" in show, False)
+    check("show never sys.exit()s", "sys.exit" in show, False)
+    check("show takes many fragments", "for needle in sys.argv[2:]" in show, True)
+    check("the old dead-end message is gone", "Try: board.py list-live" in brd, False)
+    # (g) writes still refuse, and the refusal carries the id: for the next attempt
+    fnd = brd[brd.index("def _find("):brd.index("def _fetch_tabs(")]
+    check("_find accepts a unique exact or every-word hit only",
+          'if mode in ("exact", "tokens") and len(hits) == 1:' in fnd, True)
+    check("_find refuses everything else", "sys.exit(1)" in fnd, True)
+    check("_find's refusal lists candidates via _lines (which carry id:)", "_lines(hits)" in fnd, True)
+    check("_lines prints the id: handle", "id:{g('_id')}" in brd, True)
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -1070,7 +1137,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_tier_and_ai_native_entries_are_normalized,
            test_ai_native_marker_never_reaches_a_human_column,
            test_ai_native_marker_composes_with_the_stale_marker,
-           test_worklist_computes_ai_native_at_the_edge):
+           test_worklist_computes_ai_native_at_the_edge,
+           test_show_answers_instead_of_refusing):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:
