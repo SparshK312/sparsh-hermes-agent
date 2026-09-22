@@ -664,6 +664,55 @@ def test_ago_is_display_only_and_never_read_back():
           "assert len(vals) == len(APP_HEADERS)" in xl, True)
 
 
+# ── A "manual" BOARD IS A TODO, NOT A FACT ────────────────────────────────────
+# 2026-09-22. company_boards had Rippling as ats_type "manual", which only ever
+# meant "nobody wrote a fetcher" — but every consumer reads it as "cannot be
+# fetched". Rippling had FOUR live intern reqs (two Bachelor-eligible) and the board
+# held none, while `board.py show "Rippling"` returned eight rows that were all OTHER
+# employers hosting on ats.rippling.com: a company-name search answered entirely by
+# the ATS vendor's other customers. api.rippling.com is public and needs no key.
+# This pins the wiring, and pins that "manual" stays rare and reviewed.
+def test_rippling_board_is_wired_not_manual():
+    import ats_router as A
+    import company_boards as CB
+    print("W1. Rippling is a fetched board, and 'manual' is a reviewed exception")
+    boards = CB.boards() if callable(getattr(CB, "boards", None)) else None
+    if boards is None:
+        boards = next(v for v in vars(CB).values()
+                      if isinstance(v, list) and v and isinstance(v[0], dict)
+                      and any(d.get("name") == "Rippling" for d in v))
+    rip = next((b for b in boards if b.get("name") == "Rippling"), None)
+    check("Rippling is on the board list", rip is not None, True)
+    check("Rippling is NOT ats_type manual", (rip or {}).get("ats_type"), "rippling")
+    check("Rippling carries the slug its fetcher needs", (rip or {}).get("slug"), "rippling")
+    check("a rippling fetcher is registered", "rippling" in A._BOARD_FETCHERS, True)
+
+    src = (Path(__file__).parent / "ats_router.py").read_text()
+    check("rippling is dispatched WITH a prefilter (610 postings, detail calls are "
+          "per-req so the listing must be filtered first)",
+          '"workday", "smartrecruiters", "oracle", "rippling"' in src, True)
+    # The listing repeats one req once per location; without the uuid key a 3-city
+    # posting becomes three board rows.
+    check("the fetcher dedups by uuid", "candidates.setdefault(uuid, j)" in src, True)
+    # description is a dict of named HTML sections; str()-ing it yields a python
+    # repr and the requirement lines never reach the JD.
+    check("the fetcher concatenates the description dict rather than str()-ing it",
+          'blob = " ".join(v for v in desc.values() if isinstance(v, str))' in src, True)
+
+    # 'manual' means a human opens the URL, and every consumer treats it as "cannot
+    # be fetched". The set is PINNED so adding one is a deliberate edit to this test
+    # rather than a shrug during a busy session — which is exactly how Rippling sat
+    # unfetched with four live intern reqs. Each of these is a genuine hard case
+    # (bot-blocked or no public API), NOT a todo: Rippling was the odd one out.
+    # ⚠️ These nine are therefore visible ONLY through the aggregators. A req that
+    # Simplify/SWElist miss at any of them is invisible by construction.
+    manual = sorted(b.get("name") for b in boards if b.get("ats_type") == "manual")
+    check("the manual set is exactly the nine known-hard boards",
+          manual, ["Apple", "Bloomberg", "Google", "Meta", "Microsoft",
+                   "Netflix", "PayPal", "Tesla", "Uber"])
+    check("Rippling is no longer among them", "Rippling" in manual, False)
+
+
 # ── VOCABULARY, PART 3: REJECTED AFTER A ROUND ───────────────────────────────
 # 2026-09-14, Sparsh: "if we did an OA and THEN got rejected, is there a way to mark
 # that on the sheet… 'rejected after OA' or 'rejected after interview'". Two terminal
@@ -1218,6 +1267,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_every_status_is_classified,
            test_due_is_human_owned_and_never_computed,
            test_ago_is_display_only_and_never_read_back,
+           test_rippling_board_is_wired_not_manual,
            test_age_filter_discards_are_exempt_from_strikes,
            test_id_match_is_exact_and_refuses_ambiguity,
            test_sheet_dropdown_follows_the_vocabulary,

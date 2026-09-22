@@ -352,6 +352,79 @@ async def _board_ashby(client, board) -> list[JobRecord]:
     return out
 
 
+async def _board_rippling(client, board, prefilter_fn=None) -> list[JobRecord]:
+    """Rippling's own ATS (ats.rippling.com), used here for Rippling itself.
+
+    Two stages, like Workday: the board endpoint returns every posting but NO job
+    description (uuid / name / department / url / workLocation only), so the JD
+    needs one detail call per req. Rippling's board carries ~610 postings, so the
+    prefilter runs at the LISTING stage and only survivors are detail-fetched.
+
+    🔴 Added 2026-09-22 because `ats_type: "manual"` was hiding the whole company.
+    Rippling had four live intern reqs and the board held none of them, while
+    `board.py show "Rippling"` returned eight rows that were all OTHER employers
+    hosting their ATS on ats.rippling.com — a company-name search answered entirely
+    by the ATS vendor's other customers. The "manual" flag was stale, not a
+    limitation: this API is public and needs no key.
+    """
+    slug = board.get("slug") or board.get("org") or "rippling"
+    data, code = await _get_json(
+        client, f"https://api.rippling.com/platform/api/ats/v1/board/{slug}/jobs")
+    if not data:
+        raise BoardFetchError(f"rippling {slug}: HTTP {code}")
+    # The listing is a bare list, not an object.
+    listing = data if isinstance(data, list) else data.get("jobs", [])
+
+    def _loc(job) -> str:
+        wl = job.get("workLocations") or job.get("workLocation") or []
+        if isinstance(wl, dict):
+            wl = [wl]
+        if isinstance(wl, str):
+            return wl
+        parts = []
+        for w in wl:
+            v = (w.get("label") or w.get("city") or "") if isinstance(w, dict) else str(w)
+            if v and v not in parts:
+                parts.append(v)
+        return ", ".join(parts)
+
+    # One row per uuid: the listing repeats a multi-location req once per location.
+    candidates: dict[str, dict] = {}
+    for j in listing:
+        uuid = j.get("uuid")
+        title = j.get("name") or j.get("title") or ""
+        if not uuid or not title:
+            continue
+        if prefilter_fn and not prefilter_fn(title, _loc(j)):
+            continue
+        candidates.setdefault(uuid, j)
+
+    async def _detail(uuid, j):
+        d, dcode = await _get_json(
+            client, f"https://api.rippling.com/platform/api/ats/v1/board/{slug}/jobs/{uuid}")
+        if not d:
+            return None
+        desc = d.get("description")
+        if isinstance(desc, dict):
+            # description is a dict of named HTML sections (company / role / ...);
+            # concatenate in insertion order so the requirement lines survive.
+            blob = " ".join(v for v in desc.values() if isinstance(v, str))
+        else:
+            blob = desc or ""
+        return JobRecord(
+            title=d.get("name") or j.get("name", ""),
+            location=_loc(d) or _loc(j),
+            url=d.get("url") or j.get("url", ""),
+            full_jd=clean_fragment(blob),
+            posted_date=_iso_to_date(str(d.get("createdOn") or "")),
+            ats_type="rippling",
+            req_id=str(uuid),
+        )
+
+    results = await asyncio.gather(*[_detail(u, j) for u, j in candidates.items()])
+    return [r for r in results if r]
+
+
 async def _board_workable(client, board) -> list[JobRecord]:
     account = board["account"]
     data, code = await _get_json(
@@ -682,6 +755,7 @@ _BOARD_FETCHERS = {
     "smartrecruiters": _board_smartrecruiters,
     "amazon": _board_amazon,
     "oracle": _board_oracle,
+    "rippling": _board_rippling,
 }
 
 
@@ -752,7 +826,7 @@ async def fetch_board(client, board: dict, prefilter=None) -> list[JobRecord]:
         return []
 
     async def _attempt():
-        if ats in ("workday", "smartrecruiters", "oracle"):
+        if ats in ("workday", "smartrecruiters", "oracle", "rippling"):
             return await fetcher(client, board, prefilter or _default_prefilter)
         return await fetcher(client, board)
 

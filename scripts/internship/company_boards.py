@@ -206,7 +206,11 @@ BOARDS = [
     {"name": "Microsoft", "tier": "S", "ats_type": "manual", "url": "https://careers.microsoft.com/v2/global/en/students"},
     {"name": "Netflix", "tier": "S", "ats_type": "manual", "url": "https://explore.jobs.netflix.net/careers"},
     {"name": "Uber", "tier": "A", "ats_type": "manual", "url": "https://www.uber.com/us/en/careers/list/?query=intern"},
-    {"name": "Rippling", "tier": "B", "ats_type": "manual", "url": "https://ats.rippling.com/rippling/jobs"},
+    # 2026-09-22: was ats_type "manual", which hid four live intern reqs (two of them
+    # Bachelor-eligible) behind a flag that only meant "nobody wrote a fetcher".
+    # api.rippling.com exposes the board publicly; see ats_router._board_rippling.
+    {"name": "Rippling", "tier": "B", "ats_type": "rippling", "slug": "rippling",
+     "url": "https://ats.rippling.com/rippling/jobs"},
     # Added 2026-09-12. Avature, no public API. Tier A so hot_watch's S/A scope and the
     # coverage digest both treat it as a target the moment the aggregators list it.
     {"name": "Bloomberg", "tier": "A", "ats_type": "manual",
