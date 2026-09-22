@@ -41,6 +41,8 @@ import sys
 from pathlib import Path
 
 from build_curated_xlsx import (  # single source of truth for routing + ranking
+    AGO_DATE_AFTER,
+    AGO_WEEKS_FROM,
     APP_HEADERS,
     ID_HEADER,
     QUEUE_HEADERS,
@@ -466,6 +468,7 @@ def _row_values(tab: str, rec: dict) -> list:
         # permanent fake decision on the next refresh (2026-09-08, 279 fake "Closed").
         common.update({"Due": h.get("due", ""),
                        "Applied": h.get("applied_date", ""),
+                       "Ago": "",          # rewritten as a live formula in _sync_tab
                        "Source / Referral": m.get("source", "")})
     elif tab == TAB_REVIEWED:
         # Status carries ONLY what he set. A posting that merely went stale shows that in
@@ -567,7 +570,39 @@ def _sync_tab(sheet_id: str, tab: str, records: list[dict]) -> int:
         if links:
             values_update(sheet_id, f"{_q(tab)}!{col}{FIRST_DATA_ROW}:{col}{end_row}",
                           links, raw=False)
+
+    # "Ago" — the friendly twin of Applied ("today", "3 days ago", "2 weeks ago",
+    # the date itself past 60 days), as a LIVE formula rather than a rendered string
+    # so it is still true at 11 PM on a day whose refreshes ran at 08:00 and 18:00,
+    # and so a date `board.py` stamps directly on this tab shows up at once. The
+    # Applied cell itself is untouched: it is read back as applied_date, and the
+    # friendly string must never land there (2026-09-08).
+    if "Ago" in headers and "Applied" in headers and ordered:
+        col = _col_letter(headers.index("Ago") + 1)
+        formula = ago_formula(_col_letter(headers.index("Applied") + 1))
+        values_update(sheet_id, f"{_q(tab)}!{col}{FIRST_DATA_ROW}:{col}{end_row}",
+                      [[formula] for _ in ordered], raw=False)
     return len(ordered)
+
+
+def ago_formula(applied_col: str) -> str:
+    """The Ago cell's formula, for any row. Pure; the invariant suite pins it.
+
+    Reads the Applied cell of ITS OWN row via INDEX(col, ROW()) — never a relative
+    reference — so a sort he does by hand can never leave a cell describing another
+    row's date. Thresholds are AGO_WEEKS_FROM / AGO_DATE_AFTER, the same constants
+    applied_ago() uses for the xlsx, so the two renderers cannot drift apart.
+    TODAY() is the spreadsheet's own clock: ensure_format() pins it to SHEET_TZ,
+    because the Sheet was created in Etc/GMT, where "today" ends at 8 PM Toronto —
+    exactly when most of his applications go out.
+    """
+    v = f"INDEX(${applied_col}:${applied_col},ROW())"
+    return ("=IFERROR(LET(v," + v + ",d,TODAY()-DATEVALUE(v),"
+            "IF(d<0,v,IF(d=0,\"today\",IF(d=1,\"yesterday\","
+            f"IF(d<{AGO_WEEKS_FROM},d&\" days ago\","
+            f"IF(d<={AGO_DATE_AFTER},ROUND(d/7)&\" weeks ago\","
+            "TEXT(DATEVALUE(v),\"mmm d, yyyy\"))))))),"
+            "TO_TEXT(" + v + "))")
 
 
 def write_board(store: dict, sheet_id: str = SHEET_ID_DEFAULT,
@@ -612,9 +647,14 @@ def write_board(store: dict, sheet_id: str = SHEET_ID_DEFAULT,
     # still listed the old twelve, and the row rendered white. One GET per refresh
     # is cheap; re-apply the format only when the live rule disagrees with STATUS_OPTS.
     live = sheet_status_options(sheet_id)
+    tz = sheet_timezone(sheet_id)
     if not vocab_is_current(live):
         print(f"[gsheet] Status vocabulary drifted: Sheet has {live}, code has "
               f"{list(STATUS_OPTS)} — re-applying ensure_format()", file=sys.stderr)
+        ensure_format(sheet_id)
+    elif tz != SHEET_TZ:
+        print(f"[gsheet] spreadsheet timezone is {tz!r}, not {SHEET_TZ!r} — the Ago "
+              f"column would flip a day early; re-applying ensure_format()", file=sys.stderr)
         ensure_format(sheet_id)
 
     values_update(sheet_id, f"{_q(TAB_META)}!A1:B6", [
@@ -674,7 +714,7 @@ _WIDTHS = {
                 "Cycle": 92, "Posted": 88, "Age": 46, "Apply": 68, "Source": 90,
                 "Notes": 240},
     TAB_APPS: {"Status": 104, "Company": 140, "Role": 300, "Lane": 62, "Location": 160,
-               "Cycle": 92, "Apply": 68, "Applied": 92, "Source / Referral": 140,
+               "Cycle": 92, "Apply": 68, "Applied": 92, "Ago": 96, "Source / Referral": 140,
                "Notes": 320},
     TAB_REVIEWED: {"Status": 96, "Company": 140, "Role": 290, "Lane": 62,
                    "Location": 150, "Cycle": 92, "Fit": 44, "Why": 250, "Apply": 68,
@@ -689,10 +729,28 @@ def _rgb(hex6: str) -> dict:
             "blue": int(h[4:6], 16) / 255}
 
 
+# The spreadsheet's clock. Every TODAY()/NOW() on the Sheet — the Ago column above
+# all — evaluates in this zone. The Sheet was created in Etc/GMT (found 2026-09-21),
+# where "today" would have ended at 8 PM Toronto and every evening application read
+# "yesterday" the moment it was marked.
+SHEET_TZ = "America/Toronto"
+
+
+def sheet_timezone(sheet_id: str = SHEET_ID_DEFAULT):
+    """The spreadsheet's timeZone property, or None if the read fails."""
+    try:
+        info = _sheets("GET", "?fields=properties.timeZone", sheet_id=sheet_id)
+        return (info.get("properties") or {}).get("timeZone")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[gsheet] could not read the spreadsheet timezone: {exc}", file=sys.stderr)
+        return None
+
+
 def ensure_format(sheet_id: str = SHEET_ID_DEFAULT) -> int:
     """Header styling, frozen row, hidden _id, widths, wrapping, Status/Priority
-    dropdowns, and per-status colour rules. Safe to re-run: existing conditional
-    rules on the managed tabs are dropped first so they cannot accumulate."""
+    dropdowns, per-status colour rules, and the spreadsheet timezone. Safe to
+    re-run: existing conditional rules on the managed tabs are dropped first so
+    they cannot accumulate."""
     info = _sheets("GET", "?fields=sheets.properties,sheets.conditionalFormats",
                    sheet_id=sheet_id)
     meta = {}
@@ -700,7 +758,8 @@ def ensure_format(sheet_id: str = SHEET_ID_DEFAULT) -> int:
         p = s["properties"]
         meta[p["title"]] = (p["sheetId"], len(s.get("conditionalFormats", []) or []))
 
-    reqs: list[dict] = []
+    reqs: list[dict] = [{"updateSpreadsheetProperties": {
+        "properties": {"timeZone": SHEET_TZ}, "fields": "timeZone"}}]
     for tab in TABS:
         if tab not in meta:
             continue

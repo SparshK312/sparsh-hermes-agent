@@ -582,6 +582,87 @@ def test_due_is_human_owned_and_never_computed():
     check("board.py can set Due", "--due" in brd, True)
 
 
+# ── AGO IS DISPLAY-ONLY ───────────────────────────────────────────────────────
+# 2026-09-21, Sparsh: "make [Applied] more user friendly, so it says like 'today' or
+# '2 days ago' or '2 weeks ago' ... past lets say 60 days then just simply write the
+# actual date ... don't want to break stuff, so if [we] just wanna make another
+# column". A NEW column, because Applied is read back as applied_date: a friendly
+# string rendered into Applied would be read back as the date and the real date
+# would be gone in one refresh (the 2026-09-08 laundering shape). The Sheet gets a
+# live formula (so it is still right at 11 PM, and a date board.py stamps shows at
+# once); the xlsx gets applied_ago(); both use the same two thresholds. And the
+# Sheet's clock is pinned to Toronto — it was Etc/GMT, where "today" ended at 8 PM.
+def test_ago_is_display_only_and_never_read_back():
+    import re
+    from datetime import date, timedelta
+    from build_curated_xlsx import (APP_HEADERS, _HUMAN_BY_HEADER, applied_ago,
+                                    AGO_WEEKS_FROM, AGO_DATE_AFTER)
+    from build_curated_gsheet import ago_formula, SHEET_TZ, TAB_APPS, _row_values
+    print("V6. Ago is display-only, never read back, one rule for both renderers")
+    check("Ago is a column on the applications tab", "Ago" in APP_HEADERS, True)
+    check("Ago sits immediately right of Applied",
+          APP_HEADERS.index("Ago") - APP_HEADERS.index("Applied"), 1)
+    check("Ago is NOT a human field — the read-back cannot see it",
+          "ago" in _HUMAN_BY_HEADER, False)
+    check("Applied is still read back as applied_date",
+          _HUMAN_BY_HEADER.get("applied"), "applied_date")
+
+    t = date(2026, 9, 21)
+    table = ((0, "today"), (1, "yesterday"), (2, "2 days ago"), (13, "13 days ago"),
+             (14, "2 weeks ago"), (20, "3 weeks ago"), (60, "9 weeks ago"),
+             (61, "Jul 22, 2026"), (200, "Mar 5, 2026"))
+    for days, want in table:
+        check(f"applied {days} days ago -> {want!r}",
+              applied_ago((t - timedelta(days=days)).isoformat(), t), want)
+    check("blank stays blank", applied_ago("", t), "")
+    check("a non-date is shown as typed, never hidden", applied_ago("soon", t), "soon")
+    check("a future date is shown raw", applied_ago("2026-12-01", t), "2026-12-01")
+    check("thresholds are what the docstring says", (AGO_WEEKS_FROM, AGO_DATE_AFTER), (14, 60))
+
+    # The Sheet formula: same thresholds, same shape, reads its OWN row's Applied.
+    # (Evaluated live on 2026-09-21 against applied_ago() on 12 inputs: 0 differences.)
+    f = ago_formula("J")
+    check("formula is a formula", f.startswith("=IFERROR(LET("), True)
+    check("formula carries the days threshold", f"d<{AGO_WEEKS_FROM}," in f, True)
+    check("formula carries the date threshold", f"d<={AGO_DATE_AFTER}," in f, True)
+    check("formula reads the Applied cell of its own row (sort-safe, not relative)",
+          f.count("INDEX($J:$J,ROW())"), 2)
+    check("formula has the four labels",
+          all(x in f for x in ('"today"', '"yesterday"', '" days ago"', '" weeks ago"')), True)
+    check("formula shows a non-date as typed", f.endswith("TO_TEXT(INDEX($J:$J,ROW())))"), True)
+
+    # The renderer: Applied raw from the human dict, Ago blank in the grid (the
+    # formula overlay fills it), and nothing computed ever lands in Applied.
+    here = Path(__file__).parent
+    gs = (here / "build_curated_gsheet.py").read_text()
+    check("Applied is rendered ONLY from the human dict",
+          bool(re.search(r'"Applied":\s*h\.get\("applied_date", ""\)', gs)), True)
+    check("no fallback fills Applied",
+          bool(re.search(r'"Applied":\s*h\.get\("applied_date",\s*""\)\s*or\s', gs)), False)
+    check("the Ago overlay targets the Ago column, keyed by header",
+          'col = _col_letter(headers.index("Ago") + 1)' in gs, True)
+    row = _row_values(TAB_APPS, {"_cid": "c", "machine": {"company": "C", "role": "R"},
+                                 "human": {"status": "Applied", "applied_date": "2026-09-01"}})
+    check("row has one cell per header", len(row), len(APP_HEADERS))
+    check("Applied cell holds the raw ISO date", row[APP_HEADERS.index("Applied")], "2026-09-01")
+    check("Ago cell is blank in the grid (the formula overlay owns it)",
+          row[APP_HEADERS.index("Ago")], "")
+
+    # The clock. TODAY() is the spreadsheet's, and ensure_format pins it.
+    check("the Sheet's clock is Toronto", SHEET_TZ, "America/Toronto")
+    check("ensure_format enforces the timezone",
+          '"properties": {"timeZone": SHEET_TZ}, "fields": "timeZone"' in gs, True)
+    check("write_board re-applies the format when the timezone drifts",
+          "elif tz != SHEET_TZ:" in gs, True)
+
+    # The xlsx twin renders the same column in the same slot.
+    xl = (here / "build_curated_xlsx.py").read_text()
+    check("xlsx renders Ago via applied_ago",
+          'applied_ago(h.get("applied_date", ""), date.today())' in xl, True)
+    check("xlsx row length is asserted against the headers",
+          "assert len(vals) == len(APP_HEADERS)" in xl, True)
+
+
 # ── VOCABULARY, PART 3: REJECTED AFTER A ROUND ───────────────────────────────
 # 2026-09-14, Sparsh: "if we did an OA and THEN got rejected, is there a way to mark
 # that on the sheet… 'rejected after OA' or 'rejected after interview'". Two terminal
@@ -1118,6 +1199,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_rejected_after_round_statuses,
            test_every_status_is_classified,
            test_due_is_human_owned_and_never_computed,
+           test_ago_is_display_only_and_never_read_back,
            test_age_filter_discards_are_exempt_from_strikes,
            test_id_match_is_exact_and_refuses_ambiguity,
            test_sheet_dropdown_follows_the_vocabulary,

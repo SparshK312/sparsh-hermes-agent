@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -429,8 +430,45 @@ def _build_queue(ws, rows):
 
 
 APP_HEADERS = [ID_HEADER, "Status", "Due", "Company", "Role", "Lane", "Location", "Cycle",
-               "Apply", "Applied", "Source / Referral", "Notes"]
-APP_WIDTHS = [2, 15, 11, 18, 40, 8, 20, 12, 8, 12, 18, 38]
+               "Apply", "Applied", "Ago", "Source / Referral", "Notes"]
+APP_WIDTHS = [2, 15, 11, 18, 40, 8, 20, 12, 8, 12, 13, 18, 38]
+
+# ── "Ago": the friendly twin of Applied ──────────────────────────────────────
+# 2026-09-21, Sparsh: "make it more user friendly, so it says like 'today' or
+# '2 days ago' or '2 weeks ago' ... if it is past lets say 60 days then just simply
+# write the actual date". It is a NEW column, not a reformat of Applied, because
+# Applied is read back as applied_date (see _HUMAN_BY_HEADER): a friendly string
+# rendered INTO Applied would be read back as the date and the real date would be
+# gone within one refresh — the 2026-09-08 laundering shape. "Ago" is not in
+# _HUMAN_BY_HEADER, so the read-back cannot see it by construction.
+# The Sheet renders it as a live formula (build_curated_gsheet.ago_formula) built
+# from these same two thresholds; the xlsx renders this function's output.
+AGO_WEEKS_FROM = 14   # 0 "today" · 1 "yesterday" · 2–13 "N days ago"
+AGO_DATE_AFTER = 60   # 14–60 "N weeks ago" · older: the date itself
+
+
+def applied_ago(applied: str, today: date) -> str:
+    """The Ago cell for one Applied value. Pure. A blank stays blank; anything
+    that is not an ISO date is returned as-is so a typo is shown, never hidden."""
+    s = (applied or "").strip()
+    if not s:
+        return ""
+    try:
+        d = date.fromisoformat(s)
+    except ValueError:
+        return s
+    n = (today - d).days
+    if n < 0:
+        return s
+    if n == 0:
+        return "today"
+    if n == 1:
+        return "yesterday"
+    if n < AGO_WEEKS_FROM:
+        return f"{n} days ago"
+    if n <= AGO_DATE_AFTER:
+        return f"{round(n / 7)} weeks ago"
+    return f"{d.strftime('%b')} {d.day}, {d.year}"
 
 
 def _build_apps(ws, rows):
@@ -453,12 +491,17 @@ def _build_apps(ws, rows):
                 m.get("company", ""), m.get("role", ""),
                 m.get("lane", ""), m.get("location", ""), m.get("cycle", ""),
                 ("Apply ↗" if m.get("url") else ""), h.get("applied_date", ""),
+                applied_ago(h.get("applied_date", ""), date.today()),
                 m.get("source", ""), h.get("notes", "")]
+        # Positional, so a header added without its value would shift every column
+        # after it under the wrong heading. Fail loudly instead.
+        assert len(vals) == len(APP_HEADERS), (len(vals), APP_HEADERS)
         for j, v in enumerate(vals, start=1):
             c = ws.cell(row=r, column=j, value=v)
             c.border = BORDER
             c.font = Font(size=10)
-            c.alignment = Alignment(vertical="center", wrap_text=(j in (5, 12)))
+            c.alignment = Alignment(vertical="center",
+                                    wrap_text=(j in (5, APP_HEADERS.index("Notes") + 1)))
         sf = STATUS_FILL.get(vals[1])
         if sf:
             sc = ws.cell(row=r, column=2)
