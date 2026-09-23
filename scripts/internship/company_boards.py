@@ -204,7 +204,13 @@ BOARDS = [
     {"name": "Google", "tier": "S", "ats_type": "manual", "url": "https://www.google.com/about/careers/applications/jobs/results/?employment_type=INTERN"},
     {"name": "Meta", "tier": "S", "ats_type": "manual", "url": "https://www.metacareers.com/jobs?is_intern=true"},
     {"name": "Microsoft", "tier": "S", "ats_type": "manual", "url": "https://careers.microsoft.com/v2/global/en/students"},
-    {"name": "Netflix", "tier": "S", "ats_type": "manual", "url": "https://explore.jobs.netflix.net/careers"},
+    # 2026-09-22: promoted from "manual" after the audit of all nine manual boards.
+    # Eightfold board, public, no key. Apple/Bloomberg/Meta/Microsoft/PayPal/Tesla/Uber
+    # were probed the same day and stay manual (401/403/404 or HTML only).
+    {"name": "Netflix", "tier": "S", "ats_type": "eightfold",
+     "api_base": "https://explore.jobs.netflix.net/api/apply/v2/jobs",
+     "domain": "netflix.com",
+     "url": "https://explore.jobs.netflix.net/careers"},
     {"name": "Uber", "tier": "A", "ats_type": "manual", "url": "https://www.uber.com/us/en/careers/list/?query=intern"},
     # 2026-09-22: was ats_type "manual", which hid four live intern reqs (two of them
     # Bachelor-eligible) behind a flag that only meant "nobody wrote a fetcher".

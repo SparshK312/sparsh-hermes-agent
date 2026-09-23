@@ -425,6 +425,103 @@ async def _board_rippling(client, board, prefilter_fn=None) -> list[JobRecord]:
     return [r for r in results if r]
 
 
+EIGHTFOLD_PAGE = 10        # server-side cap; num=100 still returns 10 (measured 2026-09-22)
+EIGHTFOLD_MAX_PAGES = 80   # 800 postings; Netflix sits at ~480
+
+
+async def _board_eightfold(client, board, prefilter_fn=None) -> list[JobRecord]:
+    """Eightfold-hosted boards (Netflix today; PayPal is Eightfold too but 403s us).
+
+    Two stages: the listing carries no usable JD (`job_description` is empty there),
+    so survivors of the prefilter get one detail call each.
+
+    🔴 THE PAGE SIZE IS CAPPED AT 10 SERVER-SIDE AND DOES NOT SAY SO — `num=100`
+    returns 10 and reports count=480. Paging is mandatory, and the page budget
+    below ANNOUNCES itself when exhausted rather than silently truncating, per the
+    standing rule that a cap whose discards are read as data is a timer.
+
+    🔴 We deliberately do NOT use the API's own `query=intern`: it is fuzzy, and on
+    2026-09-22 it returned 4 results of which one was "Pan-APAC Communications
+    Manager" — so it both admits noise and gives no assurance it is exhaustive.
+    Enumerate, then filter with our own title rules.
+    """
+    base = board.get("api_base")
+    domain = board.get("domain")
+    if not base or not domain:
+        raise BoardFetchError(f"eightfold {board.get('name')}: needs api_base + domain")
+
+    seen: dict[str, dict] = {}
+    total = None
+    pages_used = 0
+    for page in range(EIGHTFOLD_MAX_PAGES):
+        url = (f"{base}?domain={domain}&start={page * EIGHTFOLD_PAGE}"
+               f"&num={EIGHTFOLD_PAGE}")
+        data, code = await _get_json(client, url)
+        if not data:
+            if page == 0:
+                raise BoardFetchError(f"eightfold {domain}: HTTP {code}")
+            break
+        if total is None:
+            total = int(data.get("count") or 0)
+        batch = data.get("positions") or []
+        if not batch:
+            break
+        pages_used = page + 1
+        for jp in batch:
+            pid = str(jp.get("id") or "")
+            if pid:
+                seen.setdefault(pid, jp)
+        if total and len(seen) >= total:
+            break
+    if total and len(seen) < total:
+        print(f"[ats_router] eightfold {domain}: PAGE BUDGET EXHAUSTED — enumerated "
+              f"{len(seen)} of {total} postings in {pages_used} pages. The remainder "
+              f"was NOT looked at and must not be read as 'no such role'. Raise "
+              f"EIGHTFOLD_MAX_PAGES.", file=sys.stderr)
+
+    def _loc(jp) -> str:
+        v = jp.get("location") or ""
+        if not v:
+            locs = jp.get("locations") or []
+            v = "; ".join(str(x) for x in locs[:3])
+        return str(v).replace(",", ", ")
+
+    candidates = [jp for jp in seen.values()
+                  if not prefilter_fn or prefilter_fn(jp.get("name", ""), _loc(jp))]
+
+    async def _detail(jp):
+        pid = str(jp.get("id"))
+        d, _ = await _get_json(client, f"{base}/{pid}?domain={domain}")
+        jd = ((d or {}).get("job_description") or jp.get("job_description") or "")
+        return JobRecord(
+            title=jp.get("name", ""),
+            location=_loc(jp),
+            url=(jp.get("canonicalPositionUrl")
+                 or f"https://{domain.split('.')[0]}.eightfold.ai/careers?pid={pid}"),
+            full_jd=clean_fragment(jd),
+            posted_date=_epoch_to_date(jp.get("t_create") or jp.get("t_update")),
+            ats_type="eightfold",
+            req_id=str(jp.get("display_job_id") or jp.get("ats_job_id") or pid),
+        )
+
+    results = await asyncio.gather(*[_detail(jp) for jp in candidates])
+    return [r for r in results if r]
+
+
+def _epoch_to_date(v) -> str:
+    """Eightfold timestamps are unix seconds (sometimes ms). '' when unusable."""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return ""
+    if n > 10_000_000_000:      # milliseconds
+        n //= 1000
+    if n <= 0:
+        return ""
+    import datetime as _dt
+    return _dt.datetime.utcfromtimestamp(n).strftime("%Y-%m-%d")
+
+
 async def _board_workable(client, board) -> list[JobRecord]:
     account = board["account"]
     data, code = await _get_json(
@@ -756,6 +853,7 @@ _BOARD_FETCHERS = {
     "amazon": _board_amazon,
     "oracle": _board_oracle,
     "rippling": _board_rippling,
+    "eightfold": _board_eightfold,
 }
 
 
@@ -826,7 +924,7 @@ async def fetch_board(client, board: dict, prefilter=None) -> list[JobRecord]:
         return []
 
     async def _attempt():
-        if ats in ("workday", "smartrecruiters", "oracle", "rippling"):
+        if ats in ("workday", "smartrecruiters", "oracle", "rippling", "eightfold"):
             return await fetcher(client, board, prefilter or _default_prefilter)
         return await fetcher(client, board)
 

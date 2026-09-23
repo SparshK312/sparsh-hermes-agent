@@ -707,10 +707,39 @@ def test_rippling_board_is_wired_not_manual():
     # ⚠️ These nine are therefore visible ONLY through the aggregators. A req that
     # Simplify/SWElist miss at any of them is invisible by construction.
     manual = sorted(b.get("name") for b in boards if b.get("ats_type") == "manual")
-    check("the manual set is exactly the nine known-hard boards",
+    check("the manual set is exactly the eight AUDITED-hard boards",
           manual, ["Apple", "Bloomberg", "Google", "Meta", "Microsoft",
-                   "Netflix", "PayPal", "Tesla", "Uber"])
+                   "PayPal", "Tesla", "Uber"])
     check("Rippling is no longer among them", "Rippling" in manual, False)
+    check("Netflix is no longer among them (Eightfold, wired 2026-09-22)",
+          "Netflix" in manual, False)
+
+    # Netflix: the second board rescued from "manual" the same day.
+    nf = next((b for b in boards if b.get("name") == "Netflix"), None)
+    check("Netflix is an eightfold board", (nf or {}).get("ats_type"), "eightfold")
+    check("Netflix carries the two fields its fetcher needs",
+          bool((nf or {}).get("api_base") and (nf or {}).get("domain")), True)
+    check("an eightfold fetcher is registered", "eightfold" in A._BOARD_FETCHERS, True)
+    check("eightfold is dispatched WITH a prefilter", '"rippling", "eightfold"' in src, True)
+    # The page size is capped at 10 SERVER-SIDE while reporting count=480, so a
+    # single request silently sees 2% of the board.
+    # 🔴 Assert the VALUE, not the source substring: "EIGHTFOLD_PAGE = 10" is a
+    # substring of "EIGHTFOLD_PAGE = 100", so the grep version of this check passed
+    # while the defect was reintroduced (caught in mutation N2, 2026-09-22 — the
+    # same shape CLAUDE.md records for the file-wide substring check).
+    check("eightfold page size is 10 — the API caps num server-side and reports "
+          "count=480 anyway, so a bigger number silently sees 2% of the board",
+          A.EIGHTFOLD_PAGE, 10)
+    check("the page budget covers Netflix's ~480 postings",
+          A.EIGHTFOLD_PAGE * A.EIGHTFOLD_MAX_PAGES >= 480, True)
+    check("the page budget announces itself instead of truncating silently",
+          "PAGE BUDGET EXHAUSTED" in src, True)
+    # The API's own query=intern is fuzzy: on 2026-09-22 it returned 4 hits, one of
+    # them "Pan-APAC Communications Manager". Enumerate, then filter with our rules.
+    body = src.split("async def _board_eightfold")[1].split("def _epoch_to_date")[0]
+    url_lines = [l for l in body.splitlines() if "url = (" in l or "&num=" in l or "&start=" in l]
+    check("the listing URL carries start+num and NOT the API's fuzzy query param",
+          bool(url_lines) and not any("query=" in l for l in url_lines), True)
 
 
 # ── VOCABULARY, PART 3: REJECTED AFTER A ROUND ───────────────────────────────
