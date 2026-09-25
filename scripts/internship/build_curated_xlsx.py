@@ -55,30 +55,13 @@ ID_HEADER = "_id"
 # round is a different fact from a cold rejection: the first says the résumé cleared the
 # screen and the round did not, the second says nothing. Both are terminal; the summary
 # counts them with plain "Rejected" (COUNTIF "Rejected*").
-# "OA" split into "OA - To Do" / "OA - Done" on 2026-09-16 (Sparsh: "make it more clear
-# in the status which OA has been done and which one nah and like requires action").
-# One value was covering two opposite states: on that date 8 rows read "OA" and 5 of them
-# needed nothing — the 3 outstanding ones (DRW, Snowflake, Intact) were indistinguishable
-# from the 5 already sat. "To Do" carries the To Apply orange; "Done" keeps the OA sky.
-STATUS_OPTS = ["To Apply", "Applied", "OA - To Do", "OA - Done", "Phone Screen",
-               "Technical Interview", "Onsite",
-               "Offer", "Rejected", "Rejected after OA", "Rejected after Interview",
-               "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
-# Every terminal-no status, for consumers that need "he was turned down" as one bucket.
-REJECTED_STATUSES = tuple(s for s in STATUS_OPTS if s.startswith("Rejected"))
-# Statuses that mean "I looked at this and I'm not applying" -> Reviewed sheet, not the
-# active queue and NOT the applications sheet. Skip / Not a Fit = your judgment call;
-# Closed = dead (missed deadline / role pulled) that you never applied to.
-REVIEWED_STATUSES = {"skip", "not a fit", "closed"}
-# Statuses that mean a real application is IN FLIGHT (he has acted on the row). curate's
-# stale-check exempts these from the strike rule: an employer's board often drops a req
-# the moment they stop accepting candidates, which is usually right after he applies.
-PIPELINE_STATUSES = {"Applied", "OA - To Do", "OA - Done", "Phone Screen",
-                     "Technical Interview", "Onsite",
-                     "Offer", "Networking", "On Hold"}
-# The interview funnel proper, for the "In process (OA+)" summary tile.
-IN_PROCESS_STATUSES = ("OA - To Do", "OA - Done", "Phone Screen",
-                       "Technical Interview", "Onsite")
+# 🔴 The vocabulary lives in status_vocab.py — a dependency-free module — and is
+# RE-EXPORTED here so every existing consumer keeps importing it from this file.
+# It moved on 2026-09-25 because this module imports openpyxl at module scope, and the
+# VPS's /usr/bin/python3 (the coach crons' interpreter) has no openpyxl, so board_facts.py
+# could not import the vocabulary and kept a retyped copy that went two revisions stale.
+from status_vocab import (STATUS_OPTS, REJECTED_STATUSES, REVIEWED_STATUSES,   # noqa: F401,E402
+                          PIPELINE_STATUSES, IN_PROCESS_STATUSES, STATUS_RANK)
 PRIORITY_OPTS = ["", "P0", "P1", "P2", "P3"]
 LANE_OPTS = ["AI/ML", "SWE", "Data", "PM", "Other"]
 CYCLE_OPTS = ["Fall 2026", "Winter 2027", "Spring 2027", "Summer 2027", "Summer 2026", "TBD"]
@@ -118,10 +101,7 @@ PRIO_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "": 4}
 # tier-S Palantir req at hot 72 sat below tier-A rows at hot 74-90. Tier is now the
 # band and hotness only orders WITHIN a band.
 TIER_RANK = {"S": 0, "A": 1, "B": 2, "C": 3}
-STATUS_RANK = {"Offer": 0, "Onsite": 1, "Technical Interview": 2, "Phone Screen": 3,
-               "OA - To Do": 4, "OA - Done": 5,
-               "Applied": 6, "Networking": 7, "On Hold": 8,
-               "Rejected after Interview": 9, "Rejected after OA": 10, "Rejected": 11}
+# STATUS_RANK is imported from status_vocab (re-exported above).
 
 
 def classify_row(rec: dict) -> str:

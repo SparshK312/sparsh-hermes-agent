@@ -98,12 +98,44 @@ def dates_in(s):
     return sorted({d for d in re.findall(r"(20\d\d-\d{2}-\d{2})", s)})
 
 log_dates = dates_in(section("Session log"))
-last_rep = log_dates[-1] if log_dates else None
+
+# 🔴 THE SESSION LOG IS NOT THE FILE THAT GETS UPDATED DAILY. Log.md is.
+# Measured 2026-09-25: the Session-log table's newest row was 2026-09-22 while Log.md
+# carried prep entries on the 24th AND four on the 25th (including "all four 🔴s
+# cleared"). This nudge therefore told him he was three days dark on a day he had done
+# two sessions. The table is curated by hand when someone remembers; Log.md is appended
+# by every session as it happens. Take the LATER of the two and say which one it came
+# from, so a disagreement is visible instead of silently resolved the wrong way.
+def _log_prep_dates():
+    try:
+        raw = (V / "Log.md").read_bytes()[-900_000:].decode("utf-8", "ignore")
+    except Exception:
+        return []
+    out = []
+    for m in re.finditer(r"^## \[(20\d\d-\d{2}-\d{2})\]\s+(\w+)\s+\|([^\n]*)", raw, re.M):
+        d, action, scope = m.group(1), m.group(2), m.group(3)
+        if re.search(r"interview prep|prep\b", scope, re.I) and action in ("update", "ingest"):
+            out.append(d)
+    return sorted(set(out))
+
+# ⚠️ Keep the two ideas SEPARATE. A Log.md entry scoped "Interview Prep" is often a plan
+# re-cut or a research triage, not a rep at the keyboard — counting those as reps would
+# invent a streak across Sep 16–22, a week the tracker itself records as "DARK — no reps
+# logged". So: the Session log still defines a REP (it is curated and means he sat down),
+# and Log.md defines ACTIVITY. Escalation needs BOTH to be quiet. That kills the false
+# "you are three days dark" without minting a false streak in its place.
+logmd_dates = _log_prep_dates()
+sess_last = log_dates[-1] if log_dates else None
+logmd_last = logmd_dates[-1] if logmd_dates else None
+last_rep = sess_last
+last_rep_src = "Session log" if sess_last else "none"
 days_since = (today - datetime.date.fromisoformat(last_rep)).days if last_rep else None
+days_since_activity = ((today - datetime.date.fromisoformat(logmd_last)).days
+                       if logmd_last else None)
 
 # current streak = consecutive days (ending today or yesterday) present in the log
 streak = 0
-have = set(log_dates)
+have = set(log_dates)          # reps only — see the note above
 probe = today
 if today_s not in have:                 # not logged yet today -> count from yesterday
     probe = today - datetime.timedelta(days=1)
@@ -111,16 +143,38 @@ while probe.isoformat() in have:
     streak += 1
     probe -= datetime.timedelta(days=1)
 
-# ---- redo list: items due for re-solve ---------------------------------------
-redo_due = []
-for ln in section("Redo list").splitlines():
-    if ln.strip().startswith("|") and "Re-solve" not in ln and "---" not in ln:
-        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-        # columns: Problem | Pattern | First solved | Re-solve due | ✓
-        if len(cells) >= 5:
-            prob, due, donecol = cells[0], cells[3], cells[4]
-            if re.match(r"20\d\d-\d{2}-\d{2}", due) and due <= today_s and not donecol.strip():
-                redo_due.append(prob)
+# ---- redo list: the SNAPSHOT, not a table in the tracker ----------------------
+# 🔴 This used to parse a markdown table out of the tracker's "Redo list" section. That
+# section now opens with, in bold: "DO NOT MAINTAIN A TABLE HERE. IT ROTS." — the table
+# was removed on 2026-09-15 after being wrong twice. So the parse matched nothing and
+# `redo_due` has been the literal string "none" on EVERY run since, while the real queue
+# (the scorecard app) had up to eleven problems overdue. The prompt's whole
+# spaced-repetition branch — "if redo_due is not none, tell him to re-solve those" — has
+# never once fired.
+#
+# The live queue is the scorecard, which is a local Mac app whose .json does not sync.
+# `Scripts/catchup.py` writes a MARKDOWN snapshot (which does sync) every time it runs.
+# Read that. If it is missing or stale, say UNKNOWN — "we could not look" is not the
+# same fact as "nothing is due", and reporting one as the other is how this broke.
+SNAPSHOT_MAX_AGE_DAYS = 3
+redo_due, redo_state = [], "unknown"
+snap = V / "09 - Systems" / "Hermes" / "prep-queue-snapshot.md"
+try:
+    stxt = snap.read_text(encoding="utf-8")
+    gen = re.search(r"^generated:\s*(20\d\d-\d{2}-\d{2})", stxt, re.M)
+    gen_date = datetime.date.fromisoformat(gen.group(1)) if gen else None
+    age = (today - gen_date).days if gen_date else None
+    if age is not None and age <= SNAPSHOT_MAX_AGE_DAYS:
+        redo_state = "fresh"
+        for ln in stxt.splitlines():
+            if ln.startswith("|") and ln.rstrip().endswith("YES |"):
+                cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+                if len(cells) >= 2:
+                    redo_due.append(cells[1])
+    else:
+        redo_state = f"stale (snapshot generated {gen_date}, {age}d old)"
+except Exception:
+    redo_state = "unknown (no snapshot — run Scripts/catchup.py on the Mac)"
 
 fresh_start = (done == 0 and not log_dates)
 days_since_start = (today - datetime.date.fromisoformat(PREP_START_DATE)).days
@@ -128,17 +182,31 @@ if fresh_start:
     # never logged a single rep -> escalate once it's been a couple days since go-live
     escalate = days_since_start >= ESCALATE_DAYS_FRESH
 else:
-    escalate = (days_since is not None and days_since >= ESCALATE_DAYS)
+    # Quiet on BOTH channels, or it is not a lapse. Before 2026-09-25 this looked only
+    # at the hand-curated Session log and escalated on days he had visibly done prep.
+    _rep_quiet = days_since is not None and days_since >= ESCALATE_DAYS
+    _act_quiet = days_since_activity is None or days_since_activity >= ESCALATE_DAYS
+    escalate = _rep_quiet and _act_quiet
 
 # ---- emit STATE block ---------------------------------------------------------
 L = [f"[prep-nudge state · {today_s}]"]
 L.append(f"progress: {done}/{total} items done")
 L.append(f"next_item: {next_item or 'all checked — set the next focus'}"
          + (f"  (context: {next_ctx})" if next_ctx else ""))
-L.append(f"last_rep_date: {last_rep or 'none yet'}")
+L.append(f"last_rep_date: {last_rep or 'none yet'}  (source: {last_rep_src})")
+L.append(f"last_session_log_row: {sess_last or 'none'}")
+L.append(f"last_prep_entry_in_Log_md: {logmd_last or 'none'}")
+L.append(f"days_since_prep_activity: {days_since_activity if days_since_activity is not None else 'n/a'}"
+         f"   (any prep-scoped Log.md entry — planning counts here, NOT as a rep)")
 L.append(f"days_since_rep: {days_since if days_since is not None else 'n/a (never logged)'}")
 L.append(f"current_streak_days: {streak}")
-L.append(f"redo_due: {', '.join(redo_due) if redo_due else 'none'}")
+if redo_state == "fresh":
+    L.append(f"redo_due: {', '.join(redo_due) if redo_due else 'none (queue is clear)'}")
+else:
+    # NEVER print "none" here when we could not look. See the block above.
+    L.append(f"redo_due: UNKNOWN — {redo_state}. Do NOT tell him the queue is clear; "
+             f"say the queue could not be read and to run catchup.py.")
+L.append(f"redo_source: {redo_state}")
 L.append(f"escalate: {'yes' if escalate else 'no'}")
 L.append(f"fresh_start: {'yes' if fresh_start else 'no'}")
 L.append(f"days_since_prep_went_live: {days_since_start}")

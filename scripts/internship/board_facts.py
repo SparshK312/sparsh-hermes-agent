@@ -28,10 +28,32 @@ from pathlib import Path
 SHEET_ID = "1Kkle7QoKsBMXihoslWjIoMDqKFznwxxA4Y_OgiqJpWI"
 GOOGLE_API = Path.home() / ".hermes/skills/productivity/google-workspace/scripts/google_api.py"
 VENV_PY = Path.home() / ".hermes/hermes-agent/venv/bin/python"
-DONE = {"applied", "oa", "phone screen", "onsite", "offer", "rejected",
-        "rejected after oa", "rejected after interview",
-        "skip", "not a fit", "closed"}
-LIVE_PIPELINE = {"oa", "phone screen", "onsite", "offer"}
+# 🔴 DERIVED, never retyped. This set was hardcoded and held "oa" — a status that
+# CEASED TO EXIST on 2026-09-16 when it split into "OA - To Do" / "OA - Done". It also
+# never learned "Technical Interview" (added 09-12). Consequence: a row he has an
+# outstanding OA on was not in DONE, so the 7 PM nudge would cheerfully tell him to
+# apply to it; and live_pipeline, which feeds "what's in flight", silently dropped
+# every OA and every technical round. The one source is STATUS_OPTS.
+from status_vocab import (STATUS_OPTS, PIPELINE_STATUSES,                # noqa: E402
+                          IN_PROCESS_STATUSES, REVIEWED_STATUSES,
+                          REJECTED_STATUSES)
+
+# Anything he has already acted on or ruled out — never re-suggest it as a fresh apply.
+DONE = ({s.lower() for s in PIPELINE_STATUSES}
+        | {s.lower() for s in REJECTED_STATUSES}
+        | {s.lower() for s in REVIEWED_STATUSES})
+# The interview funnel proper — what is actually in flight right now.
+LIVE_PIPELINE = {s.lower() for s in IN_PROCESS_STATUSES}
+
+# Exhaustiveness: every status in the vocabulary is either DONE or "not yet applied".
+# A new stage added to STATUS_OPTS and not classified here fails LOUDLY at import
+# instead of quietly becoming a row the nudge recommends re-applying to.
+_UNAPPLIED = {"to apply", ""}
+_unclassified = {s.lower() for s in STATUS_OPTS} - DONE - _UNAPPLIED
+if _unclassified:
+    raise AssertionError(
+        f"board_facts: status(es) {sorted(_unclassified)} are in STATUS_OPTS but "
+        f"classified neither as actioned (DONE) nor as not-yet-applied. Classify them.")
 
 
 def _sheet(rng: str) -> list[list]:
@@ -66,9 +88,28 @@ def _int(v, default=0):
         return default
 
 
+# Statuses that mean "an application physically went out" — the funnel plus Applied.
+# "Offer" is not in IN_PROCESS_STATUSES (that set is the funnel proper) but an offer
+# is obviously an application that was sent. "Networking" and "On Hold" are deliberately
+# NOT here: neither one certifies that a form was submitted, and over-counting is the
+# same class of lie as under-counting.
+_SENT = ({"applied", "offer"} | {s.lower() for s in IN_PROCESS_STATUSES}
+         | {s.lower() for s in REJECTED_STATUSES})
+
+
 def board_facts(top_n: int = 8) -> dict:
-    queue = _rows("Apply Now!A1:R400")
-    apps = _rows("My Applications!A1:K80")
+    # 🔴 WHOLE TABS. These read "Apply Now!A1:R400" and "My Applications!A1:K80"
+    # until 2026-09-25. Measured that day: the queue stood at 576 rows and My
+    # Applications at 182, so the reads returned exactly 399 and 79 — a result set
+    # that equals its cap, which is never a coincidence. Every application he had
+    # submitted since roughly row 80 was invisible, and because `applied_last_7_days`
+    # is computed from those rows the 7 PM nudge told him "Nothing applied in the last
+    # 7 days" on a week with TWENTY-TWO applications in it. The column letters were
+    # also stale: an "Ago" column was inserted on 09-21, pushing the tab to 13 columns
+    # while the read asked for 11. Open-ended, both dimensions, like board.py's
+    # _fetch_tabs (commit 2af9fba) — the identical defect, one file over.
+    queue = _rows("Apply Now!A1:Z")
+    apps = _rows("My Applications!A1:Z")
     if not queue and not apps:
         return {}
 
@@ -101,7 +142,11 @@ def board_facts(top_n: int = 8) -> dict:
                "status": st, "applied": r.get("Applied", "")}
         if st.lower() in LIVE_PIPELINE:
             pipeline.append(row)
-        if st.lower() == "applied":
+        # An application he has since moved forward on (OA, phone screen, offer…) is
+        # still an application he SENT. Counting only the literal "Applied" made
+        # "applied_last_7_days" drop a row the moment it progressed — the nudge got
+        # quieter precisely when things were going well.
+        if st.lower() in _SENT:
             applied.append(row)
 
     def _d(s):
@@ -121,6 +166,10 @@ def board_facts(top_n: int = 8) -> dict:
         "new_last_2_days": fresh[:6],
         "applied_total": len(applied),
         "applied_last_7_days": len(applied_7d),
+        # Row counts the facts were actually derived from. A caller that wants to say
+        # "nothing applied" can check these first: 0 rows read is "we could not look",
+        # which is not the same fact and must never be reported as one.
+        "rows_read": {"queue": len(queue), "apps": len(apps)},
         "applied_recent": applied[:5],
         "live_pipeline": pipeline,
         "note": ("Already-actioned roles are excluded from top_targets — never suggest "

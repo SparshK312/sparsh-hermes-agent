@@ -34,6 +34,38 @@ def check(label, got, want):
         print(f"  ❌ {label}: got {got!r}, want {want!r}")
 
 
+def _code_only(src: str) -> str:
+    """Source with comments and docstrings removed, so a substring assertion cannot be
+    satisfied — or defeated — by prose. Added 2026-09-25 after three assertions in this
+    file matched the comments that DESCRIBE the defect they exist to forbid."""
+    import io, tokenize
+    out, prev_tok, depth = [], None, 0
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except tokenize.TokenError:
+        return src
+    for tok in toks:
+        if tok.type == tokenize.COMMENT:
+            continue
+        if tok.type == tokenize.OP:
+            if tok.string in "([{":
+                depth += 1
+            elif tok.string in ")]}":
+                depth = max(0, depth - 1)
+        # A STRING is a docstring only at STATEMENT level. The depth guard matters: inside
+        # a multi-line dict every line break is an NL token, so without it a string KEY
+        # like "rows_read": {...} looks exactly like a docstring and gets stripped — which
+        # it did, and the assertion that reads it went red for the wrong reason.
+        if (tok.type == tokenize.STRING and depth == 0
+                and (prev_tok is None or prev_tok.type in (tokenize.NEWLINE, tokenize.NL,
+                                                           tokenize.INDENT, tokenize.DEDENT))):
+            prev_tok = tok
+            continue
+        out.append(tok.string)
+        prev_tok = tok
+    return " ".join(out)
+
+
 def rec(status="", notes="", dead=False, **machine):
     m = {"dead": dead, "company": "X", "role": "R", "location": "L"}
     m.update(machine)
@@ -769,10 +801,12 @@ def test_rejected_after_round_statuses():
     m = re.search(r"^_ACTIONED = \{(.*?)\}", cur, re.M | re.S)
     check("curate._ACTIONED holds both (else a live rejection row is struck as stale)",
           bool(m) and "rejected after oa" in m.group(1) and "rejected after interview" in m.group(1), True)
-    bf = (here / "board_facts.py").read_text()
-    m = re.search(r"^DONE = \{(.*?)\}", bf, re.M | re.S)
+    # Was a source-grep for a literal `DONE = {...}`. board_facts now DERIVES the set
+    # from the vocabulary (2026-09-25), so assert the values — strictly stronger, and it
+    # keeps holding when the vocabulary changes again.
+    import board_facts
     check("board_facts.DONE holds both (else the nudge re-surfaces a closed row)",
-          bool(m) and "rejected after oa" in m.group(1) and "rejected after interview" in m.group(1), True)
+          {"rejected after oa", "rejected after interview"} <= board_facts.DONE, True)
     xl = (here / "build_curated_xlsx.py").read_text()
     check("xlsx summary counts every Rejected* with a wildcard, not the bare word",
           'COUNTIF({rng},"Rejected*")' in xl and 'COUNTIF({rng},"Rejected")\'' not in xl, True)
@@ -1285,6 +1319,80 @@ def test_board_reads_whole_tabs():
     check("both lookup reads exist", len(lookups), 2)
     check("neither lookup read carries a fixed row cap", lookups, ["", ""])
 
+
+# ── THE NUDGE'S FACTS MUST COME FROM THE WHOLE TAB AND THE LIVE VOCABULARY ────
+# 2026-09-25, from Sparsh: "it'll say no applications or no prep done even though the
+# vault actually does have progress." Measured that evening, board_facts read
+# `Apply Now!A1:R400` and `My Applications!A1:K80` while the tabs stood at 576 and 182
+# rows — so the reads returned exactly 399 and 79, a result set equal to its cap, which
+# is never a coincidence. Every application past row ~80 was invisible, and since
+# `applied_last_7_days` is derived from those rows the 7 PM nudge said "Nothing applied
+# in the last 7 days" during a week holding TWENTY-TWO of them. Separately the status
+# vocabulary was RETYPED here (board_facts could not import build_curated_xlsx: that
+# module needs openpyxl, which the VPS's /usr/bin/python3 — the interpreter the coach
+# crons run under — does not have). The copy still said "oa", a status deleted on
+# 2026-09-16, and had never learned "Technical Interview", so `live_pipeline` dropped
+# every OA and every technical round: three OAs he owed were invisible to the nudge.
+def test_board_facts_reads_everything_and_derives_the_vocabulary():
+    import re
+    import board_facts as BF
+    from status_vocab import STATUS_OPTS, IN_PROCESS_STATUSES
+    print("S. board_facts reads whole tabs and derives its vocabulary")
+    src = (Path(__file__).parent / "board_facts.py").read_text()
+    # 🔴 Grep CODE, not comments. The first version of this test failed against the very
+    # comments that document the defect — a file-wide substring check cannot tell "the
+    # bug is here" from "the bug is described here", which is the same weakness that let
+    # an earlier invariant pass while its defect was reintroduced. Strip comments and
+    # docstrings first, then assert.
+    code = _code_only(src)
+
+    # (a) whole tabs, both dimensions. Anchored on the actual read calls.
+    reads = re.findall(r'_rows\("([^"]+)"\)', src)
+    check("board_facts reads both tabs", sorted(reads),
+          ["Apply Now!A1:Z", "My Applications!A1:Z"])
+    for r in reads:
+        check(f"{r!r} has no row cap", bool(re.search(r"\d+$", r)), False)
+    check("the old 80-row applications cap is gone", "A1:K80" in code, False)
+    check("the old 400-row queue cap is gone", "A1:R400" in code, False)
+
+    # (b) the vocabulary is derived, not retyped
+    check("no retyped status literal survives", '"phone screen", "onsite"' in code.lower(), False)
+    check("DONE derives from the shared vocabulary", "PIPELINE_STATUSES" in code, True)
+    check("the dead 'oa' status is not referenced", bool(re.search(r'"oa"', code)), False)
+
+    # (c) the sets actually cover today's statuses — values, not source text
+    for st in ("oa - to do", "oa - done", "technical interview"):
+        check(f"DONE covers {st!r} (else the nudge re-suggests a role he is mid-loop on)",
+              st in BF.DONE, True)
+        check(f"LIVE_PIPELINE covers {st!r} (else 'in flight' silently drops it)",
+              st in BF.LIVE_PIPELINE, True)
+        check(f"_SENT covers {st!r} (else a progressed application stops counting as applied)",
+              st in BF._SENT, True)
+    check("LIVE_PIPELINE is exactly the funnel", BF.LIVE_PIPELINE,
+          {x.lower() for x in IN_PROCESS_STATUSES})
+    check("an Offer counts as an application that was sent", "offer" in BF._SENT, True)
+    check("'To Apply' is NOT actioned", "to apply" in BF.DONE, False)
+
+    # (d) exhaustiveness: a NEW status must fail loudly at import, not quietly become
+    # a row the nudge recommends re-applying to. Mutation: drop the raise -> red.
+    check("board_facts asserts every status is classified",
+          "raise AssertionError" in code and "_unclassified" in code, True)
+    unclassified = {x.lower() for x in STATUS_OPTS} - BF.DONE - {"to apply", ""}
+    check("no status is currently unclassified", sorted(unclassified), [])
+
+    # (e) "we could not look" must be distinguishable from "nothing there"
+    check("board_facts reports how many rows it actually read", "rows_read" in code, True)
+
+    # (f) the vocabulary module must stay importable by the most dependency-poor
+    # interpreter on the box — that is the entire reason the copy existed.
+    vocab = (Path(__file__).parent / "status_vocab.py").read_text()
+    bad = [m for m in re.findall(r"^\s*(?:from|import)\s+([A-Za-z_][\w.]*)", vocab, re.M)
+           if m.split(".")[0] not in ("__future__",)]
+    check("status_vocab has no third-party imports", bad, [])
+    xl = (Path(__file__).parent / "build_curated_xlsx.py").read_text()
+    check("build_curated_xlsx re-exports the vocabulary (consumers unchanged)",
+          "from status_vocab import" in xl, True)
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -1318,6 +1426,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_ai_native_marker_composes_with_the_stale_marker,
            test_worklist_computes_ai_native_at_the_edge,
            test_show_answers_instead_of_refusing,
+           test_board_facts_reads_everything_and_derives_the_vocabulary,
            test_board_reads_whole_tabs):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.

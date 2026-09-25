@@ -108,6 +108,29 @@ if [ -f "$INV" ]; then
   echo
 fi
 
+# ===== Step 0c: Nudge invariants — MUST PASS OR THE DEPLOY ABORTS =====
+# Added 2026-09-25. The nudges were asserting "no applications" and "no prep done" on days
+# with 22 applications and two prep sessions in them, because each was reading a file that
+# had quietly stopped being the source of truth. These tests run the real scripts against
+# fixture vaults, so they fail on BEHAVIOUR, not wording. Same rule as 0b: a test wired
+# into nothing is a comment (see test_curated_roundtrip, green for 8 weeks against an
+# empty store).
+NUDGE="$REPO_ROOT/scripts/cron/test_nudge_invariants.py"
+if [ -f "$NUDGE" ]; then
+  echo "[0c/3] Nudge invariants..."
+  # 🔴 Capture then test the status. NOT `cmd | tail` — a pipeline's exit status is the
+  # last command's, so the gate would always pass. That mistake was made writing Step 0b.
+  NUDGE_OUT="$(python3 "$NUDGE" 2>&1)"; NUDGE_RC=$?
+  echo "$NUDGE_OUT" | tail -3
+  if [ "$NUDGE_RC" -ne 0 ]; then
+    echo "  ❌ NUDGE INVARIANTS FAILED (exit $NUDGE_RC) — deploy aborted."
+    echo "     A nudge is about to tell him nothing happened on a day something did."
+    exit 1
+  fi
+  echo "  ✓ invariants hold"
+  echo
+fi
+
 # ===== Step 1: Push (Mac → GitHub) =====
 if [ "$DO_PUSH" = "true" ]; then
   echo "[1/3] Pushing local changes to GitHub..."
