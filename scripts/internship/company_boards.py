@@ -222,6 +222,23 @@ BOARDS = [
     {"name": "Bloomberg", "tier": "A", "ats_type": "manual",
      "url": "https://bloomberg.avature.net/careers/SearchJobs/intern"},
 
+    # ── ADDED 2026-09-25. Susquehanna (SIG) is a tier-A quant firm -- peer to Jane
+    #    Street / Optiver / IMC, all of which were already tier A -- and it held ZERO
+    #    rows on ANY tab. This is one layer worse than the Rippling miss of 2026-09-22:
+    #    there the fetcher was missing and the company was at least named, here the
+    #    COMPANY was absent from every table, so it defaulted to tier C and the wide
+    #    net deleted its rows before any other check ran. Found by cross-checking the
+    #    SWElist 9/25 digest, which carried "Susquehanna International Group: Machine
+    #    Learning Engineer Intern" against a board that returned NOT ON THE BOARD.
+    #    Three Bala Cynwyd (Philadelphia) reqs are in lane and clear every gate, all
+    #    wanting graduation by August 2028 which is exactly his date: 11555 ML
+    #    Engineering, 10837 Trading System Engineering, 10838 Quant Strategy Developer.
+    #    careers.sig.com runs Phenom People over an iCIMS backend; the search API is
+    #    public, needs no key, and ships the full JD in the LISTING payload.
+    #    Verified live before adding: 258 reqs over 3 pages, 64 intern-titled.
+    {"name": "Susquehanna International Group", "tier": "A", "ats_type": "phenom",
+     "host": "careers.sig.com", "url": "https://careers.sig.com/intern-co-op/jobs"},
+
     # ── AI-native lane, added 2026-09-14 ──────────────────────────────────────
     # These are wired to their OWN ATS rather than left to the aggregators, which
     # is the fix this repo has now made three times (Capital One, Lyft, and now

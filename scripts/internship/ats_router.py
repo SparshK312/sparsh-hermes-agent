@@ -843,6 +843,99 @@ def _amazon_date(s: str) -> str:
         return ""
 
 
+PHENOM_PAGE = 100       # server-side cap; limit=200 returns ZERO jobs (measured 2026-09-25)
+PHENOM_MAX_PAGES = 20   # 2000 postings; SIG sits at 258
+
+
+async def _board_phenom(client, board, prefilter_fn=None) -> list[JobRecord]:
+    """Phenom People career-site search API: `https://<host>/api/jobs?page=N&limit=M`.
+
+    ONE stage, unlike Workday/Rippling: the listing payload already carries the full
+    `description` and `qualifications` HTML, so there is no per-req detail call. The
+    prefilter still runs at the listing stage, purely to avoid building records for
+    the ~75% of reqs that are not interns.
+
+    🔴 Added 2026-09-25 because Susquehanna (SIG) -- a tier-A quant firm and a named
+    target category -- had ZERO rows on the board and was never even a `manual` TODO:
+    it was simply absent from the tier table, so it defaulted to tier C and every row
+    was cut before reaching the queue. `board.py show "Susquehanna"` returned NOT ON
+    THE BOARD, which is the same shape as the Rippling miss on 2026-09-22 but one
+    layer earlier -- there the fetcher was missing, here the COMPANY was.
+
+    ⚠️ `limit` is capped server-side at 100 and, unlike most paginated APIs, asking
+    for more does not clamp -- it returns an EMPTY list. A naive `limit=500` reads as
+    "this employer has no jobs", which is exactly the silent-zero this whole module
+    exists to prevent. Hence PHENOM_PAGE, and hence the enumeration count below.
+    """
+    host = board.get("host") or board.get("domain")
+    if not host:
+        raise BoardFetchError(f"phenom {board.get('name')}: needs a host")
+
+    out: list[JobRecord] = []
+    seen: set[str] = set()
+    total: int | None = None
+    pages = 0
+
+    for page in range(1, PHENOM_MAX_PAGES + 1):
+        pages = page
+        data, code = await _get_json(
+            client, f"https://{host}/api/jobs?page={page}&limit={PHENOM_PAGE}")
+        if data is None:
+            if page == 1:
+                raise BoardFetchError(f"phenom {host}: HTTP {code}")
+            # A mid-pagination failure is partial data, not an empty board. Say so
+            # loudly rather than returning a short list that looks complete.
+            print(f"[ats_router] phenom {host}: page {page} HTTP {code} — "
+                  f"returning {len(out)} records from {page - 1} page(s), INCOMPLETE",
+                  file=sys.stderr)
+            break
+        if total is None:
+            total = data.get("totalCount") or data.get("count")
+        jobs = data.get("jobs") or []
+        if not jobs:
+            break
+        for wrapper in jobs:
+            j = wrapper.get("data") if isinstance(wrapper, dict) else None
+            if not isinstance(j, dict):
+                j = wrapper if isinstance(wrapper, dict) else {}
+            rid = str(j.get("req_id") or j.get("slug") or "")
+            title = j.get("title") or ""
+            if not rid or not title or rid in seen:
+                continue
+            seen.add(rid)
+            loc = (j.get("full_location") or j.get("short_location")
+                   or j.get("city") or "")
+            if prefilter_fn and not prefilter_fn(title, loc):
+                continue
+            blob = " ".join(s for s in (j.get("description"), j.get("qualifications"))
+                            if isinstance(s, str))
+            out.append(JobRecord(
+                title=title,
+                location=loc,
+                url=j.get("canonical_url") or f"https://{host}/jobs/{rid}",
+                full_jd=clean_fragment(blob),
+                posted_date=_iso_to_date(
+                    str(j.get("posted_date") or j.get("create_date") or "")),
+                ats_type="phenom",
+                req_id=rid,
+            ))
+        if len(jobs) < PHENOM_PAGE:
+            break
+    else:
+        print(f"[ats_router] phenom {host}: PAGE BUDGET EXHAUSTED — enumerated "
+              f"{len(seen)} reqs in {PHENOM_MAX_PAGES} pages, more may exist",
+              file=sys.stderr)
+
+    # 🔴 The cap names its own victims (CLAUDE.md: "every cap must announce itself").
+    # `totalCount` is the employer's own number, so a gap between it and what we
+    # enumerated is measurable rather than inferred.
+    if total and len(seen) < int(total):
+        print(f"[ats_router] phenom {host}: enumerated {len(seen)} of {total} reqs "
+              f"across {pages} page(s) — {int(total) - len(seen)} NOT SEEN",
+              file=sys.stderr)
+    return out
+
+
 _BOARD_FETCHERS = {
     "greenhouse": _board_greenhouse,
     "lever": _board_lever_impl,
@@ -854,6 +947,7 @@ _BOARD_FETCHERS = {
     "oracle": _board_oracle,
     "rippling": _board_rippling,
     "eightfold": _board_eightfold,
+    "phenom": _board_phenom,
 }
 
 
@@ -924,7 +1018,8 @@ async def fetch_board(client, board: dict, prefilter=None) -> list[JobRecord]:
         return []
 
     async def _attempt():
-        if ats in ("workday", "smartrecruiters", "oracle", "rippling", "eightfold"):
+        if ats in ("workday", "smartrecruiters", "oracle", "rippling",
+                   "eightfold", "phenom"):
             return await fetcher(client, board, prefilter or _default_prefilter)
         return await fetcher(client, board)
 

@@ -158,6 +158,17 @@ TIER_A |= {
     "optiver", "de shaw", "point72", "drw", "block", "square",
     "sierra", "harvey", "glean", "cognition", "decagon", "elevenlabs",
     "together ai", "modal", "baseten", "runway", "anduril", "applied intuition",
+    # Added 2026-09-25 alongside the careers.sig.com board entry. The board file is
+    # the source of truth for the tier, and its name normalizes to "susquehanna
+    # international" -- which phrase-matches "Susquehanna International Group, LLP"
+    # but NOT a feed row that writes the company as bare "Susquehanna". This alias
+    # covers that; it is a single word and therefore whole-word matched, so it cannot
+    # fire on an unrelated employer.
+    # ⚠️ DELIBERATELY NOT "sig": three letters, whole-word matched, and there are real
+    # unrelated companies named SIG (SIG Group packaging, SIG Sauer) that would be
+    # promoted to tier A by it. A false tier-A puts an employer he cannot apply to at
+    # the top of a brand-first queue, which is the exception list's whole purpose.
+    "susquehanna",
 }
 
 # ── single source of truth: tiers declared on the boards file win ─────────────
