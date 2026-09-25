@@ -787,10 +787,17 @@ def test_rippling_board_is_wired_not_manual():
 # 2026-09-25. Susquehanna (SIG) is a tier-A quant firm -- peer to Jane Street,
 # Optiver and IMC, all three already tier A -- and it held ZERO rows on ANY tab.
 # `board.py show "Susquehanna"` returned NOT ON THE BOARD. This is one layer worse
-# than the Rippling miss above: there the fetcher was missing but the company was at
-# least NAMED, so the coverage digest could report it. Here the company was absent
-# from every table, so brand_tier() returned "C" by default and the wide net deleted
-# its rows before any other check ran -- invisible to the digest too.
+# than the Rippling miss above for the BOARD: there the fetcher was missing but the
+# company was named and tiered, so its rows still reached the store. Here the company
+# was absent from every table, so brand_tier() returned "C" by default and
+# wide_net_source dropped its rows before the store -- 0 Susquehanna rows in 3,065.
+# ⚠️ CORRECTION, checked rather than assumed (2026-09-25): this was NOT invisible to
+# the weekly coverage digest, and an earlier version of this comment and of commit
+# 99635df said it was. coverage_digest.gather() re-fetches the FEEDS directly
+# (wide_net_source._fetch_github + gmail_source), not the store, and partition()
+# reports a tier-C company with no store row in Section A. Susquehanna was in lane,
+# in window and storeless, so Saturday 09:00 would have named it. The control worked;
+# catching it tonight bought ~14 hours, not infinity.
 # careers.sig.com runs Phenom People; the search API is public and ships the full JD
 # in the LISTING payload, so this was never a hard case, only an unlooked-at one.
 def test_sig_phenom_board_is_wired_and_tiered():
