@@ -752,7 +752,16 @@ def test_rippling_board_is_wired_not_manual():
     check("Netflix carries the two fields its fetcher needs",
           bool((nf or {}).get("api_base") and (nf or {}).get("domain")), True)
     check("an eightfold fetcher is registered", "eightfold" in A._BOARD_FETCHERS, True)
-    check("eightfold is dispatched WITH a prefilter", '"rippling", "eightfold"' in src, True)
+    # Membership in the prefilter dispatch tuple, not its line formatting. The literal
+    # '"rippling", "eightfold"' broke the moment a fifth ATS was added and the tuple
+    # wrapped — a brittle assertion that fails on a reformat is a gate that cries wolf,
+    # and a gate that cries wolf gets bypassed. This still goes red if eightfold is
+    # actually removed from the dispatch.
+    _disp = re.search(r'if ats in \(([^)]*)\)', src, re.S)
+    _ats = set(re.findall(r'"([a-z]+)"', _disp.group(1) if _disp else ""))
+    check("eightfold is dispatched WITH a prefilter", "eightfold" in _ats, True)
+    check("the other prefiltered boards are still dispatched",
+          {"workday", "smartrecruiters", "oracle", "rippling"} <= _ats, True)
     # The page size is capped at 10 SERVER-SIDE while reporting count=480, so a
     # single request silently sees 2% of the board.
     # 🔴 Assert the VALUE, not the source substring: "EIGHTFOLD_PAGE = 10" is a
@@ -772,6 +781,87 @@ def test_rippling_board_is_wired_not_manual():
     url_lines = [l for l in body.splitlines() if "url = (" in l or "&num=" in l or "&start=" in l]
     check("the listing URL carries start+num and NOT the API's fuzzy query param",
           bool(url_lines) and not any("query=" in l for l in url_lines), True)
+
+
+# ── AN ABSENT COMPANY IS WORSE THAN A "manual" ONE ───────────────────────────
+# 2026-09-25. Susquehanna (SIG) is a tier-A quant firm -- peer to Jane Street,
+# Optiver and IMC, all three already tier A -- and it held ZERO rows on ANY tab.
+# `board.py show "Susquehanna"` returned NOT ON THE BOARD. This is one layer worse
+# than the Rippling miss above: there the fetcher was missing but the company was at
+# least NAMED, so the coverage digest could report it. Here the company was absent
+# from every table, so brand_tier() returned "C" by default and the wide net deleted
+# its rows before any other check ran -- invisible to the digest too.
+# careers.sig.com runs Phenom People; the search API is public and ships the full JD
+# in the LISTING payload, so this was never a hard case, only an unlooked-at one.
+def test_sig_phenom_board_is_wired_and_tiered():
+    import ats_router as A
+    import company_boards as CB
+    from hotness import brand_tier
+    print("W2. Susquehanna is a fetched, tier-A board and the page cap is honest")
+    boards = CB.boards() if callable(getattr(CB, "boards", None)) else None
+    if boards is None:
+        boards = next(v for v in vars(CB).values()
+                      if isinstance(v, list) and v and isinstance(v[0], dict)
+                      and any(d.get("name") == "Rippling" for d in v))
+    sig = next((b for b in boards
+                if (b.get("name") or "").startswith("Susquehanna")), None)
+    check("Susquehanna is on the board list", sig is not None, True)
+    check("Susquehanna is a phenom board", (sig or {}).get("ats_type"), "phenom")
+    check("Susquehanna carries the host its fetcher needs",
+          (sig or {}).get("host"), "careers.sig.com")
+    # Tier A, not B: the board file is the source of truth for the tier, and a quant
+    # firm ranked below Tower Research inverts the top of a brand-first queue.
+    check("Susquehanna is tier A, like every other top quant on this list",
+          (sig or {}).get("tier"), "A")
+    check("Susquehanna is NOT in the manual set",
+          (sig or {}).get("ats_type") == "manual", False)
+    check("a phenom fetcher is registered", "phenom" in A._BOARD_FETCHERS, True)
+
+    src_r = (Path(__file__).parent / "ats_router.py").read_text()
+    # 258 reqs, ~75% of them not interns. The prefilter must reach the LISTING stage
+    # or every record is built and scored.
+    check("phenom is dispatched WITH a prefilter",
+          '"eightfold", "phenom"' in src_r, True)
+
+    # 🔴 THE TRAP, AND WHY THIS IS A VALUE CHECK AND NOT A grep.
+    # `limit` is capped at 100 SERVER-SIDE, and unlike almost every paginated API,
+    # asking for more does not clamp -- limit=200 returns an EMPTY jobs list. So a
+    # "harmless" bump to 500 makes a 258-req employer read as "no jobs open", which
+    # is precisely the silent zero this module exists to prevent. Asserting the VALUE
+    # is deliberate: "PHENOM_PAGE = 100" is a substring of "PHENOM_PAGE = 1000", and
+    # the grep form of this very check passed while the eightfold defect was
+    # reintroduced (mutation N2, 2026-09-22).
+    check("phenom page size is exactly 100 — a larger limit returns ZERO jobs "
+          "server-side, which reads as an empty board", A.PHENOM_PAGE, 100)
+    check("the page budget covers SIG's 258 reqs with headroom",
+          A.PHENOM_PAGE * A.PHENOM_MAX_PAGES >= 258 * 2, True)
+    check("the page budget announces itself instead of truncating silently",
+          "PAGE BUDGET EXHAUSTED" in src_r, True)
+
+    # Every cap names its own victims. totalCount is the employer's own number, so
+    # the gap is measured, not inferred — and a short read is loud rather than a
+    # plausible-looking list.
+    body = src_r.split("async def _board_phenom")[1].split("_BOARD_FETCHERS = {")[0]
+    check("a short enumeration reports how many reqs it did NOT see",
+          "NOT SEEN" in body, True)
+    check("a mid-pagination failure is reported as INCOMPLETE, not returned as a "
+          "short list that looks whole", "INCOMPLETE" in body, True)
+    check("page 1 failing RAISES so the board is retried and recorded, rather than "
+          "returning [] which is indistinguishable from 'no interns'",
+          "raise BoardFetchError" in body, True)
+
+    # The tier has to survive the name the FEED writes, not just the name we chose.
+    check("the full legal name tiers A",
+          brand_tier("Susquehanna International Group, LLP"), "A")
+    check("the SWElist spelling tiers A",
+          brand_tier("Susquehanna International Group"), "A")
+    check("a bare 'Susquehanna' row tiers A too", brand_tier("Susquehanna"), "A")
+    # ⚠️ The alias is deliberately "susquehanna" and NOT "sig": three letters,
+    # whole-word matched, and real unrelated employers are named SIG. A false tier-A
+    # puts a company he cannot apply to at the top of a brand-first queue.
+    check("'SIG Sauer' is NOT promoted by the alias", brand_tier("SIG Sauer") == "A", False)
+    check("'Sigma Computing' is NOT promoted by the alias",
+          brand_tier("Sigma Computing") == "A", False)
 
 
 # ── VOCABULARY, PART 3: REJECTED AFTER A ROUND ───────────────────────────────
@@ -1335,6 +1425,7 @@ def test_board_reads_whole_tabs():
 # every OA and every technical round: three OAs he owed were invisible to the nudge.
 def test_board_facts_reads_everything_and_derives_the_vocabulary():
     import re
+    import board_facts
     import board_facts as BF
     from status_vocab import STATUS_OPTS, IN_PROCESS_STATUSES
     print("S. board_facts reads whole tabs and derives its vocabulary")
@@ -1383,6 +1474,60 @@ def test_board_facts_reads_everything_and_derives_the_vocabulary():
     # (e) "we could not look" must be distinguishable from "nothing there"
     check("board_facts reports how many rows it actually read", "rows_read" in code, True)
 
+    # (f) "did he apply today" must come from the BOARD, not a sentinel file that only
+    # exists if he replied to Hermes in Telegram. That sentinel has never existed on the
+    # VPS, so the 7 PM nudge said "No application logged today" on 2026-09-21 — a day
+    # with eight submissions on the board.
+    # Behavioural, not a substring: drive board_facts with fixture rows and assert the
+    # COUNTS it returns. The first version of this check grepped for "applied_today" and
+    # stayed green when the key was deleted from the returned dict, because the local
+    # variable of the same name still existed — the file-wide-substring trap again.
+    from datetime import date as _date, timedelta as _td
+    today_s = _date.today().isoformat()
+    wk_s = (_date.today() - _td(days=3)).isoformat()
+    old_s = (_date.today() - _td(days=60)).isoformat()
+    fixture = {
+        "Apply Now!A1:Z": [
+            {"Status": "To Apply", "Company": "Zeta", "Role": "SWE Intern", "Fit": "88",
+             "Hot": "90", "Cycle": "Summer 2027", "Age": "1"},
+            {"Status": "OA - To Do", "Company": "Stripe", "Role": "SWE Intern", "Fit": "90",
+             "Hot": "95", "Cycle": "Summer 2027", "Age": "0"},
+        ],
+        "My Applications!A1:Z": [
+            {"Status": "Applied", "Company": "A", "Role": "r", "Applied": today_s},
+            {"Status": "OA - Done", "Company": "B", "Role": "r", "Applied": today_s},
+            {"Status": "Technical Interview", "Company": "C", "Role": "r", "Applied": wk_s},
+            {"Status": "Rejected after OA", "Company": "D", "Role": "r", "Applied": wk_s},
+            {"Status": "Applied", "Company": "E", "Role": "r", "Applied": old_s},
+        ],
+    }
+    real_rows = board_facts._rows
+    try:
+        board_facts._rows = lambda rng: fixture.get(rng, [])
+        f = board_facts.board_facts(top_n=5)
+    finally:
+        board_facts._rows = real_rows
+    check("applied_today counts today's submissions", f.get("applied_today"), 2)
+    check("applied_last_7_days counts the week, not just literal 'Applied'",
+          f.get("applied_last_7_days"), 4)
+    check("a progressed application still counts as sent", f.get("applied_total"), 5)
+    check("an OA row is NOT offered as something to apply to",
+          [r["company"] for r in f["top_targets"]], ["Zeta"])
+    check("live_pipeline sees the OA and the technical round",
+          sorted(r["status"] for r in f["live_pipeline"]), ["OA - Done", "Technical Interview"])
+    check("rows_read reports what was actually read", f.get("rows_read"),
+          {"queue": 2, "apps": 5})
+    coach = (Path(__file__).parent.parent / "fitness" / "coach.py").read_text()
+    ccode = _code_only(coach)
+    check("the applied-today check takes the board",
+          bool(re.search(r"def _intern_applied_today\(board", coach)), True)
+    check("it consults the board before falling back to the sentinel",
+          bool(re.search(r"if board and board\.get\(.applied_today.\)", coach)), True)
+    # ordering: the board must be FETCHED before the gate that uses it
+    check("the board is fetched before the applied-today gate",
+          coach.index("board = _board_targets()") < coach.index("_intern_applied_today(board)"),
+          True)
+
     # (f) the vocabulary module must stay importable by the most dependency-poor
     # interpreter on the box — that is the entire reason the copy existed.
     vocab = (Path(__file__).parent / "status_vocab.py").read_text()
@@ -1405,6 +1550,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_due_is_human_owned_and_never_computed,
            test_ago_is_display_only_and_never_read_back,
            test_rippling_board_is_wired_not_manual,
+           test_sig_phenom_board_is_wired_and_tiered,
            test_age_filter_discards_are_exempt_from_strikes,
            test_id_match_is_exact_and_refuses_ambiguity,
            test_sheet_dropdown_follows_the_vocabulary,

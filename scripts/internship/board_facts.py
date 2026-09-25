@@ -158,6 +158,7 @@ def board_facts(top_n: int = 8) -> dict:
     applied.sort(key=lambda x: _d(x["applied"]), reverse=True)
     cutoff = date.today() - timedelta(days=7)
     applied_7d = [a for a in applied if _d(a["applied"]) >= cutoff]
+    applied_today = [a for a in applied if _d(a["applied"]) == date.today()]
 
     return {
         "open_roles_total": len(open_roles),
@@ -166,6 +167,12 @@ def board_facts(top_n: int = 8) -> dict:
         "new_last_2_days": fresh[:6],
         "applied_total": len(applied),
         "applied_last_7_days": len(applied_7d),
+        # THE BOARD is the record of what he applied to. The evening nudge used to ask a
+        # sentinel file (~/.hermes/health/internship_state.json) that is written ONLY when
+        # he replies "applied: X" to Hermes in Telegram — but he applies with board.py from
+        # Claude Code, so the sentinel has never existed and the nudge opened with "No
+        # application logged today" on days he sent eight.
+        "applied_today": len(applied_today),
         # Row counts the facts were actually derived from. A caller that wants to say
         # "nothing applied" can check these first: 0 rows read is "we could not look",
         # which is not the same fact and must never be reported as one.

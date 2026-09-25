@@ -409,7 +409,19 @@ def _find_worklist():
 WORKLIST = _find_worklist()
 
 
-def _intern_applied_today() -> bool:
+def _intern_applied_today(board: dict | None = None) -> bool:
+    """Did an application go out today? ASK THE BOARD FIRST — it is the record.
+
+    This used to consult only INTERN_STATE, a sentinel written exclusively by
+    run_internship_applied(), i.e. only when he replies "applied: X" to Hermes in
+    Telegram. He applies with board.py from Claude Code, so the file has never existed
+    on the VPS (verified 2026-09-25) and this returned False every single day — which is
+    why the 7 PM nudge opened "No application logged today" on 2026-09-21, a day with
+    EIGHT submissions on the board. The sentinel stays as a fallback so replying still
+    silences the nudge immediately, before the Sheet write lands.
+    """
+    if board and board.get("applied_today"):
+        return True
     try:
         return json.loads(INTERN_STATE.read_text()).get("applied_date") == E.now().date().isoformat()
     except Exception:  # noqa: BLE001
@@ -486,10 +498,10 @@ def run_internship_check() -> int:
     """
     if E.now().weekday() >= 5:                 # Sat/Sun off
         return _silent()
-    if _intern_applied_today():
-        return _silent()
 
     board = _board_targets()
+    if _intern_applied_today(board):
+        return _silent()
     if board and board.get("top_targets"):
         # Prefer something newly opened — applying early is the entire thesis.
         pool = board.get("new_last_2_days") or board["top_targets"]
