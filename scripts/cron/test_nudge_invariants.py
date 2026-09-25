@@ -81,14 +81,22 @@ overdue_count: {n}
 """
 
 
-def build(sess_days_ago: int, log_days_ago=None, snap_days_ago=None) -> Path:
-    """A throwaway vault. `log_days_ago=None` means Log.md has no prep entry at all."""
+def build(sess_days_ago: int, log_days_ago=None, snap_days_ago=None,
+          logmd_age_days: int = 0) -> Path:
+    """A throwaway vault.
+
+    `log_days_ago=None` -> Log.md holds no PREP entry.
+    `logmd_age_days`    -> how old Log.md's newest entry of ANY kind is. A real Log.md
+                           gets entries daily about everything, so 0 is the normal case;
+                           raise it to simulate the file not arriving (sync broken).
+    """
     v = Path(tempfile.mkdtemp(prefix="nudge-fixture-"))
     (v / "00 - Dashboard").mkdir(parents=True)
     (v / "09 - Systems" / "Hermes").mkdir(parents=True)
     sess = (date.today() - timedelta(days=sess_days_ago)).isoformat()
     (v / "00 - Dashboard" / "Interview Prep.md").write_text(TRACKER.format(sess=sess))
-    log = "## [2026-01-01] update | Something Else — unrelated\n"
+    marker = (date.today() - timedelta(days=logmd_age_days)).isoformat()
+    log = f"## [{marker}] update | Action Items — unrelated day-to-day entry\n"
     if log_days_ago is not None:
         d = (date.today() - timedelta(days=log_days_ago)).isoformat()
         log += f"## [{d}] update | Interview Prep / Microsoft — did a rep\n"
@@ -138,6 +146,22 @@ def test_prep_nudge_reads_the_files_that_are_actually_updated():
     check("the archived plan's dates are ignored", "2020-01-01" in s["_raw"], False)
 
 
+def test_prep_nudge_validates_its_own_input():
+    print("N1b. prep-nudge: a stale Log.md is UNKNOWN activity, not zero activity")
+    # Obsidian Sync has been erroring "Vault limit exceeded" since 2026-09-14; on 09-25
+    # the VPS copy of Log.md was 40 entries behind the Mac's. If the file stops arriving,
+    # "no prep entry" means nothing — and must never become "you have done nothing".
+    v = build(sess_days_ago=9, log_days_ago=40, logmd_age_days=40)  # nothing arriving
+    s = state(v)
+    check("staleness of Log.md is detected", "STALE" in s.get("log_md_newest_entry", ""), True)
+    check("🔴 it refuses to escalate on an input it cannot see", s.get("escalate"), "no")
+    check("it names the likely cause", "Obsidian Sync" in s.get("log_md_newest_entry", ""), True)
+    # and a FRESH Log.md with both channels quiet must still escalate — the guard must
+    # not become a blanket excuse that silences the nudge forever.
+    s = state(build(sess_days_ago=9, log_days_ago=9))
+    check("a fresh Log.md still allows escalation", s.get("escalate"), "yes")
+
+
 def test_prep_nudge_never_calls_an_unread_queue_empty():
     print("N2. prep-nudge: an unread re-solve queue is UNKNOWN, never 'none'")
     # (a) no snapshot at all
@@ -178,6 +202,7 @@ def test_the_prompt_cannot_assert_an_unknown_queue_is_clear():
 
 
 for fn in (test_prep_nudge_reads_the_files_that_are_actually_updated,
+           test_prep_nudge_validates_its_own_input,
            test_prep_nudge_never_calls_an_unread_queue_empty,
            test_the_prompt_cannot_assert_an_unknown_queue_is_clear):
     try:

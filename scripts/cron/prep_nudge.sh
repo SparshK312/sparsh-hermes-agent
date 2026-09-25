@@ -110,13 +110,15 @@ def _log_prep_dates():
     try:
         raw = (V / "Log.md").read_bytes()[-900_000:].decode("utf-8", "ignore")
     except Exception:
-        return []
-    out = []
+        return [], None
+    out, newest = [], None
     for m in re.finditer(r"^## \[(20\d\d-\d{2}-\d{2})\]\s+(\w+)\s+\|([^\n]*)", raw, re.M):
         d, action, scope = m.group(1), m.group(2), m.group(3)
+        if newest is None or d > newest:
+            newest = d
         if re.search(r"interview prep|prep\b", scope, re.I) and action in ("update", "ingest"):
             out.append(d)
-    return sorted(set(out))
+    return sorted(set(out)), newest
 
 # ⚠️ Keep the two ideas SEPARATE. A Log.md entry scoped "Interview Prep" is often a plan
 # re-cut or a research triage, not a rep at the keyboard — counting those as reps would
@@ -124,7 +126,16 @@ def _log_prep_dates():
 # logged". So: the Session log still defines a REP (it is curated and means he sat down),
 # and Log.md defines ACTIVITY. Escalation needs BOTH to be quiet. That kills the false
 # "you are three days dark" without minting a false streak in its place.
-logmd_dates = _log_prep_dates()
+# 🔴 CHECK OUR OWN INPUT. Obsidian Sync has been erroring "Vault limit exceeded" since
+# 2026-09-14, and on 09-25 the VPS copy of Log.md was 40 entries / 12 hours behind the
+# Mac's. A stale Log.md makes "no prep entry recently" indistinguishable from "the file
+# stopped arriving" — the exact confusion this whole fix exists to remove. So the
+# freshness of the source is part of the answer, never an assumption.
+LOG_STALE_DAYS = 2
+logmd_dates, logmd_newest_any = _log_prep_dates()
+logmd_age = ((today - datetime.date.fromisoformat(logmd_newest_any)).days
+             if logmd_newest_any else None)
+logmd_stale = logmd_age is None or logmd_age > LOG_STALE_DAYS
 sess_last = log_dates[-1] if log_dates else None
 logmd_last = logmd_dates[-1] if logmd_dates else None
 last_rep = sess_last
@@ -186,7 +197,9 @@ else:
     # at the hand-curated Session log and escalated on days he had visibly done prep.
     _rep_quiet = days_since is not None and days_since >= ESCALATE_DAYS
     _act_quiet = days_since_activity is None or days_since_activity >= ESCALATE_DAYS
-    escalate = _rep_quiet and _act_quiet
+    # If Log.md itself is stale we cannot SEE the activity channel, so its quiet is not
+    # evidence. Never get pointed with him on the strength of a file that stopped arriving.
+    escalate = _rep_quiet and _act_quiet and not logmd_stale
 
 # ---- emit STATE block ---------------------------------------------------------
 L = [f"[prep-nudge state · {today_s}]"]
@@ -196,6 +209,10 @@ L.append(f"next_item: {next_item or 'all checked — set the next focus'}"
 L.append(f"last_rep_date: {last_rep or 'none yet'}  (source: {last_rep_src})")
 L.append(f"last_session_log_row: {sess_last or 'none'}")
 L.append(f"last_prep_entry_in_Log_md: {logmd_last or 'none'}")
+L.append(f"log_md_newest_entry: {logmd_newest_any or 'none'}"
+         + (f"   ⚠️ STALE by {logmd_age}d — Log.md is not reaching this machine (check "
+            f"Obsidian Sync). Treat prep activity as UNKNOWN, not zero."
+            if logmd_stale else "   (fresh)"))
 L.append(f"days_since_prep_activity: {days_since_activity if days_since_activity is not None else 'n/a'}"
          f"   (any prep-scoped Log.md entry — planning counts here, NOT as a rep)")
 L.append(f"days_since_rep: {days_since if days_since is not None else 'n/a (never logged)'}")
