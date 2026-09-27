@@ -935,6 +935,28 @@ def test_one_posting_one_id_across_encodings():
           CU._norm_rid({"req_id": "REQ-2026-1976",
                         "url": "https://a.icims.com/jobs/26268/x/job"}), "req-2026-1976")
 
+    # 🔑 THE CONSEQUENCE THAT WAS INITIALLY MISSED, and it is the bigger half of
+    # this fix. `_collapse_shadowed_twins` — the pass that transfers a Skip or
+    # Not a Fit onto an untouched twin so a RESOLVED requisition cannot reappear
+    # as an undecided row — groups ONLY by ("rid", company, rid), deliberately
+    # with no title key. So while _norm_rid returned "" for every iCIMS url, that
+    # pass could not fire for ANY iCIMS posting, and a decision he had already
+    # made sat next to a live `To Apply` twin of the same req.
+    # ⚠️ Commit 99635df's successor b32165b wrongly said this case was NOT fixed
+    # and needed a new design. It did not: the mechanism already existed and is
+    # careful. The req-id gap was the only thing keeping it away from iCIMS.
+    # Measured on the live store after the fix: exactly ONE new transfer —
+    # Atlassian 26271, anchor `Not a Fit`, two untouched victims.
+    cur_src = (Path(__file__).parent / "curate.py").read_text()
+    shadow = cur_src.split("def _collapse_shadowed_twins")[1].split("\ndef ")[0]
+    check("_collapse_shadowed_twins groups by req id (so the iCIMS rid fix "
+          "reaches it)", 'groups.setdefault(("rid", ' in shadow, True)
+    check("...and still has NO title key, which is what keeps a judgement from "
+          "crossing two reqs that share a title", '"title"' not in shadow, True)
+    check("only Skip / Not a Fit ever transfer — Closed is excluded because it is "
+          "a claim about availability, not about the role",
+          CU.JUDGEMENT_STATUSES, {"skip", "not a fit"})
+
 
 # ── THE SHARED HTTP CLIENT SPEAKS HTTP/1.1 ───────────────────────────────────
 # 2026-09-26. With http2=True the shared client threw `ProtocolError: Invalid
