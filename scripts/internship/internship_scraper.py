@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterator
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, unquote
 
 try:
     from bs4 import BeautifulSoup
@@ -104,6 +104,40 @@ TRACKING_PARAMS = {
 _PATH_HAS_ID_RE = re.compile(r"/\d{4,}")
 
 
+def _decode_path(path: str) -> str:
+    """Percent-decode a URL path so encoding variants of ONE posting share an id.
+
+    🔴 Added 2026-09-26. iCIMS serves the same requisition under both a literal
+    comma and `%2c`, and nothing upstream normalises it, so `canonical_id()`
+    returned two different ids for one job. Measured live: Atlassian's ML Intern
+    (req 26268) sat on `Apply Now` as `To Apply` while the IDENTICAL req sat on
+    `Reviewed` as `Not a Fit`, and Research Intern (26270) and Data Scientist
+    (26271) each held TWO live `To Apply` rows for the same posting.
+
+    ⚠️ Structural characters are NOT decoded. `%2F` -> `/` would invent a path
+    segment and `%3F` -> `?` would split the path from a query, either of which
+    silently MERGES or SPLITS postings that are genuinely distinct. When
+    decoding would introduce one, the original path is kept unchanged -- a
+    missed merge is recoverable, a wrong merge destroys a human decision.
+
+    No store migration is needed: `_collapse_duplicates` pass (3) re-canonicalises
+    every stored url with TODAY's rules, which is the mechanism built for exactly
+    this in 2026-09-12, so existing ids stay valid and the twins collapse on the
+    next run.
+    """
+    if "%" not in path:
+        return path
+    try:
+        decoded = unquote(path)
+    except Exception:  # noqa: BLE001 -- a malformed escape must never break dedup
+        return path
+    if any(c in decoded for c in "/?#") and decoded.count("/") != path.count("/"):
+        return path
+    if "?" in decoded or "#" in decoded:
+        return path
+    return decoded
+
+
 def canonicalize_url(url: str) -> str:
     """Strip tracking params, lowercase host, normalize trailing slash."""
     try:
@@ -120,7 +154,7 @@ def canonicalize_url(url: str) -> str:
                 query_kept.append(kv)
     cleaned_query = "&".join(query_kept)
     netloc = parsed.netloc.lower()
-    path = parsed.path.rstrip("/") or "/"
+    path = _decode_path(parsed.path).rstrip("/") or "/"
     return urlunparse((parsed.scheme, netloc, path, "", cleaned_query, ""))
 
 

@@ -367,6 +367,13 @@ def _norm_rid(m: dict) -> str:
     if not rid:
         u = (m.get("url") or "").lower()
         hit = re.search(r"amazon\.jobs/(?:[a-z]{2}/)?jobs/(\d{6,})", u)
+        # 🔴 2026-09-26: iCIMS carries the req id as the first path segment after
+        # /jobs/ and aggregator rows arrive with no req_id, so the (company, rid)
+        # pass never fired for ANY iCIMS posting -- measured empty on both
+        # Atlassian ML Intern rows. Tenant-scoped ids are safe here because the
+        # grouping key is (normalised company, rid), never rid alone.
+        if not hit and "icims.com" in u:
+            hit = re.search(r"icims\.com/jobs/(\d{4,})", u)
         if not hit and "myworkdayjobs.com" in u:
             # Workday paths end in _<req id>, with -1/-2 appended on the /search/ portal.
             # Aggregator rows arrive without req_id but with exactly this URL.

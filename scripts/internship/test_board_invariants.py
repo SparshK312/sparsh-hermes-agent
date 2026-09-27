@@ -871,6 +871,103 @@ def test_sig_phenom_board_is_wired_and_tiered():
           brand_tier("Sigma Computing") == "A", False)
 
 
+# ── ONE POSTING, ONE ID: ENCODING VARIANTS AND THE iCIMS REQ ID ──────────────
+# 2026-09-26. iCIMS serves the same requisition under a literal comma AND `%2c`,
+# and nothing normalised it, so canonical_id() returned two ids for one job.
+# Measured live: Atlassian ML Intern (26268) sat on Apply Now as `To Apply` while
+# the IDENTICAL req sat on Reviewed as `Not a Fit`, and Research Intern (26270)
+# and Data Scientist (26271) each held TWO live `To Apply` rows. Separately,
+# _norm_rid returned EMPTY for every iCIMS url, so the (company, req-id) pass —
+# the one built to survive re-titling — never fired for any iCIMS posting at all.
+def test_one_posting_one_id_across_encodings():
+    from internship_scraper import canonical_id
+    import curate as CU
+    print("D1. encoding variants collapse; structural chars never merge postings")
+
+    for req, slug in (("26268", "machine-learning-intern"),
+                      ("26270", "research-intern"),
+                      ("26271", "data-scientist-intern")):
+        a = f"https://campus-americas.icims.com/jobs/{req}/{slug}%2c-2027-summer-u.s./job"
+        b = f"https://campus-americas.icims.com/jobs/{req}/{slug},-2027-summer-u.s./job"
+        check(f"{req}: comma and %2c are ONE id", canonical_id(a), canonical_id(b))
+
+    # 🔴 The safety half, and it matters more than the merge: decoding a
+    # STRUCTURAL character invents or destroys path structure, which would merge
+    # postings that are genuinely different. A missed merge is recoverable; a
+    # wrong merge silently overwrites a human decision.
+    check("%2F is NOT decoded (would invent a path segment)",
+          canonical_id("https://x.com/jobs/a%2Fb") != canonical_id("https://x.com/jobs/a/b"), True)
+    check("%3F is NOT decoded (would split path from query)",
+          canonical_id("https://x.com/jobs/a%3Fq=1") != canonical_id("https://x.com/jobs/a?q=1"), True)
+    # Different requisitions stay different.
+    check("26268 and 26270 remain distinct ids",
+          canonical_id("https://campus-americas.icims.com/jobs/26268/x,-y/job")
+          != canonical_id("https://campus-americas.icims.com/jobs/26270/x,-y/job"), True)
+
+    # No migration is required, and this is WHY: pass (3) re-canonicalises every
+    # stored url with today's rules. Re-keying the store without re-keying the
+    # Sheet is the 2026-09-05 blank-row orphan defect, so ids must NOT move.
+    cur = (Path(__file__).parent / "curate.py").read_text()
+    check("_collapse_duplicates still re-canonicalises stored urls (the "
+          "migration-free path for any canonical_id change)",
+          'u_cid = canonical_id(m.get("url") or "")' in cur, True)
+    for u in ("https://boards.greenhouse.io/neuralink/jobs/6594422003",
+              "https://careers.withwaymo.com/jobs?gh_jid=8224900",
+              "https://jobs.ashbyhq.com/snowflake/4be290ae-dd9d-488c-9d90-56fcd69101ca"):
+        check(f"unchanged id for {u.split('/')[2]}", canonical_id(u), canonical_id(u).strip())
+    check("greenhouse numeric-path id is untouched",
+          canonical_id("https://boards.greenhouse.io/neuralink/jobs/6594422003"),
+          "boards.greenhouse.io/neuralink/jobs/6594422003")
+    check("waymo gh_jid identity still survives",
+          canonical_id("https://careers.withwaymo.com/jobs?gh_jid=8224900"),
+          "careers.withwaymo.com/jobs?gh_jid=8224900")
+
+    # The req-id pass must actually fire for iCIMS now.
+    check("iCIMS req id is extracted (was empty for every iCIMS url)",
+          CU._norm_rid({"url": "https://campus-americas.icims.com/jobs/26268/x/job"}), "26268")
+    check("iCIMS req id extracted for SIG too",
+          CU._norm_rid({"url": "https://careers-sig.icims.com/jobs/11555/mle/job"}), "11555")
+    check("iCIMS ids for different reqs do not collide",
+          CU._norm_rid({"url": "https://a.icims.com/jobs/26268/x/job"})
+          != CU._norm_rid({"url": "https://a.icims.com/jobs/26270/x/job"}), True)
+    # An explicit req_id on the row still wins over the url guess.
+    check("an explicit req_id still takes precedence",
+          CU._norm_rid({"req_id": "REQ-2026-1976",
+                        "url": "https://a.icims.com/jobs/26268/x/job"}), "req-2026-1976")
+
+
+# ── THE SHARED HTTP CLIENT SPEAKS HTTP/1.1 ───────────────────────────────────
+# 2026-09-26. With http2=True the shared client threw `ProtocolError: Invalid
+# input ConnectionInputs.SEND_SETTINGS in state ConnectionState.CLOSED` on a
+# ROTATING ~5 boards per run, measured twice in one day: 08:00 lost Adobe,
+# Anduril, Kensho, Netflix, Susquehanna; 17:37 lost Kensho, Netflix, Rippling,
+# Visa, Wells Fargo. Different boards each run => the shared connection pool,
+# not any fetcher. HTTP/2 buys nothing for a few dozen one-shot GETs to
+# different hosts: there are no streams to multiplex.
+def test_shared_client_is_http1():
+    import ats_router as A
+    print("D2. the shared httpx client negotiates HTTP/1.1, asserted on the live object")
+    maker = next((v for k, v in vars(A).items()
+                  if callable(v) and "client" in k.lower()
+                  and getattr(v, "__module__", "") == "ats_router"), None)
+    check("a client factory exists in ats_router", maker is not None, True)
+    client = maker()
+    # 🔴 ASSERT THE LIVE OBJECT, NOT A SOURCE SUBSTRING. Two reasons, both real:
+    # (1) "http2=True" appears in this fix's own explanatory comment, so a grep
+    #     reports a defect that is not there;
+    # (2) the FIRST version of this very test inspected the transport with a
+    #     fuzzy `"h2" in str(...)` and PASSED while mutation M3 flipped http2
+    #     back ON — a check that could not fail, written while fixing exactly
+    #     that class of bug. httpx stores the real flag at
+    #     client._transport._pool._http2, verified True/False against both
+    #     constructions before this assertion was written.
+    pool = client._transport._pool
+    check("httpx exposes the http2 flag where this test reads it",
+          hasattr(pool, "_http2"), True)
+    check("HTTP/2 is DISABLED on the shared connection pool", pool._http2, False)
+    check("HTTP/1.1 is enabled", pool._http1, True)
+
+
 # ── VOCABULARY, PART 3: REJECTED AFTER A ROUND ───────────────────────────────
 # 2026-09-14, Sparsh: "if we did an OA and THEN got rejected, is there a way to mark
 # that on the sheet… 'rejected after OA' or 'rejected after interview'". Two terminal
@@ -1558,6 +1655,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_ago_is_display_only_and_never_read_back,
            test_rippling_board_is_wired_not_manual,
            test_sig_phenom_board_is_wired_and_tiered,
+           test_one_posting_one_id_across_encodings,
+           test_shared_client_is_http1,
            test_age_filter_discards_are_exempt_from_strikes,
            test_id_match_is_exact_and_refuses_ambiguity,
            test_sheet_dropdown_follows_the_vocabulary,

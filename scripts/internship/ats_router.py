@@ -1411,7 +1411,17 @@ async def _single_manual(client, url, ats) -> JobRecord:
 
 
 def make_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=HTTP_TIMEOUT, http2=True,
+    # 🔴 http2=False since 2026-09-26. With http2=True the shared client threw
+    # `ProtocolError: Invalid input ConnectionInputs.SEND_SETTINGS in state
+    # ConnectionState.CLOSED` on a ROTATING set of ~5 boards per run -- measured
+    # twice the same day: the 08:00 run lost Adobe, Anduril, Kensho, Netflix and
+    # Susquehanna; the 17:37 run lost Kensho, Netflix, Rippling, Visa and Wells
+    # Fargo. Different boards each time, so it is the shared connection pool and
+    # not any one fetcher. Several are tier S/A. Nothing was marked dead (the
+    # failed-board exemption held), but every failure costs that board a run.
+    # HTTP/2 buys nothing here: these are a few dozen one-shot JSON GETs to
+    # different hosts, so there are no streams to multiplex.
+    return httpx.AsyncClient(timeout=HTTP_TIMEOUT, http2=False,
                              limits=httpx.Limits(max_connections=CONCURRENCY))
 
 
