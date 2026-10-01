@@ -23,8 +23,18 @@ from __future__ import annotations
 # One value was covering two opposite states: on that date 8 rows read "OA" and 5 of them
 # needed nothing — the 3 outstanding ones (DRW, Snowflake, Intact) were indistinguishable
 # from the 5 already sat. "To Do" carries the To Apply orange; "Done" keeps the OA sky.
+# "Final Round - Sat" added 2026-09-30, Sparsh's call. "Sat" is the past tense of "sit an
+# interview", NOT Saturday — it is the "- Done" idea from OA - Done, kept in his wording.
+# It exists because "Onsite" was covering two opposite states exactly as bare "OA" did:
+# on 2026-09-30 the Microsoft Cloud & Distributed Backend row read "Onsite" AFTER he had
+# already sat the final round, and his reaction was "why did you put onsite for microsoft,
+# that makes no sense… the interview i did today was already the final round, there is no
+# next step, we're just waiting to hear back." A status that reads as an upcoming event,
+# on a row whose event is over, is the same defect one stage up.
+# "Onsite" now means the final round is REACHED (booked, or happening).
+# "Final Round - Sat" means it is BEHIND him and the decision is theirs — nothing owed.
 STATUS_OPTS = ["To Apply", "Applied", "OA - To Do", "OA - Done", "Phone Screen",
-               "Technical Interview", "Onsite",
+               "Technical Interview", "Onsite", "Final Round - Sat",
                "Offer", "Rejected", "Rejected after OA", "Rejected after Interview",
                "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
 # Every terminal-no status, for consumers that need "he was turned down" as one bucket.
@@ -37,12 +47,16 @@ REVIEWED_STATUSES = {"skip", "not a fit", "closed"}
 # stale-check exempts these from the strike rule: an employer's board often drops a req
 # the moment they stop accepting candidates, which is usually right after he applies.
 PIPELINE_STATUSES = {"Applied", "OA - To Do", "OA - Done", "Phone Screen",
-                     "Technical Interview", "Onsite",
+                     "Technical Interview", "Onsite", "Final Round - Sat",
                      "Offer", "Networking", "On Hold"}
 # The interview funnel proper, for the "In process (OA+)" summary tile.
 IN_PROCESS_STATUSES = ("OA - To Do", "OA - Done", "Phone Screen",
-                       "Technical Interview", "Onsite")
-STATUS_RANK = {"Offer": 0, "Onsite": 1, "Technical Interview": 2, "Phone Screen": 3,
-               "OA - To Do": 4, "OA - Done": 5,
-               "Applied": 6, "Networking": 7, "On Hold": 8,
-               "Rejected after Interview": 9, "Rejected after OA": 10, "Rejected": 11}
+                       "Technical Interview", "Onsite", "Final Round - Sat")
+# Lower = further along. "Final Round - Sat" outranks "Onsite" because a round that is
+# BEHIND him is further than one that is merely booked — the only thing above it is the
+# offer itself.
+STATUS_RANK = {"Offer": 0, "Final Round - Sat": 1, "Onsite": 2,
+               "Technical Interview": 3, "Phone Screen": 4,
+               "OA - To Do": 5, "OA - Done": 6,
+               "Applied": 7, "Networking": 8, "On Hold": 9,
+               "Rejected after Interview": 10, "Rejected after OA": 11, "Rejected": 12}

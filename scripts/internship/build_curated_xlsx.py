@@ -78,7 +78,8 @@ STATUS_FILL = {"To Apply": ("FED7AA", "9A3412"),        # orange  — action nee
                "OA - Done": ("BAE6FD", "075985"),       # sky     — sat, awaiting their result
                "Phone Screen": ("C7D2FE", "3730A3"),    # indigo
                "Technical Interview": ("E9D5FF", "6B21A8"),  # purple — between screen and final
-               "Onsite": ("DDD6FE", "5B21B6"),          # violet
+               "Onsite": ("DDD6FE", "5B21B6"),          # violet  — final round REACHED (booked / happening)
+               "Final Round - Sat": ("C4B5FD", "4C1D95"),  # deep violet — final round BEHIND him, decision theirs
                "Offer": ("A7F3D0", "065F46"),           # green   — win
                "Networking": ("FBCFE8", "9D174D"),      # pink    — warm outreach
                "Rejected": ("FECACA", "991B1B"),        # red     — no
