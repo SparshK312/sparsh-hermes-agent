@@ -94,6 +94,27 @@ TIER_B = {
     # so C is the right answer for them rather than a gap.
     "gallup", "semgrep", "viam", "talos", "retell ai",
     "coveo", "kinaxis",
+    # Added 2026-10-01 from the SWElist 9/29 + 9/30 digests cross-checked against the
+    # board. Both clear his "Shopify or better" bar and both were scoring tier C -- the
+    # DEFAULT for any company absent from this table -- which is self-reinforcing
+    # invisibility: MAX_ENRICH keeps S/A/B unconditionally and gives tier C only the
+    # remainder, so a big name missing from this list gets cut on most runs.
+    #   Electronic Arts: the board held exactly ONE EA row (SWE Intern, Orlando) off an
+    #   aggregator, while the 9/29 digest carried "AI Engineer Intern - AI Platform",
+    #   which never reached any tab. Epic Games was already B; EA is its peer.
+    #   Intuit: 3 live reqs sat in the queue (PM, AI Scientist, Toronto SWE co-op) and
+    #   scored as an unknown company, so they ranked below genuinely smaller employers.
+    # Bare "ea" is deliberately NOT added, but the reason is narrower than it first
+    # looks and was MEASURED rather than assumed: the 2026-09-08 whole-word boundary fix
+    # already contains it, so "ea" fires only on EA / EA Sports / EA Mobile and does NOT
+    # touch Eaton, Beats Electronics, Sea Machines, Nuclea, Panera or Teradata. It is
+    # left out because it buys nothing over "electronic arts" and still mis-hits an
+    # unrelated "Health EA" -- not because it would be a bloodbath.
+    # ⚠️ Worth knowing for the next addition: test C1 does NOT go red on a two-letter
+    # token. The boundary fix, not the corpus check, is what makes short names survivable.
+    # 🔑 The live collision to check here was "intuit" against INTUITIVE SURGICAL, which
+    # is already on his board as Not a Fit. Verified: it stays tier C.
+    "electronic arts", "intuit",
     # Added 2026-09-12 from a 16-digest SWElist audit (Aug 27 - Sep 11, 1,460 postings)
     # diffed against the board. 79% of the in-lane digest rows were at companies the
     # table did not name, so they defaulted to C and were deleted before any other
