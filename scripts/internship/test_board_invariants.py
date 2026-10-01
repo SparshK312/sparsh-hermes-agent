@@ -533,6 +533,46 @@ def test_status_vocabulary_has_one_source():
     check("ranks: Onsite < Technical Interview < Phone Screen",
           STATUS_RANK["Onsite"] < STATUS_RANK["Technical Interview"] < STATUS_RANK["Phone Screen"], True)
 
+    # ── 2026-09-30: STATUS_RANK is the My Applications SORT KEY, and BOTH defects
+    # below shipped that night and survived the full suite. Mutation caught them; no
+    # assertion did. That is the whole reason this block exists.
+    #
+    # (1) "Networking" ranked BELOW "Applied", so marking the one live Tesla thread
+    # Networking BURIED it under 23 dormant Tesla applications -- the exact opposite
+    # of why it was marked. Sparsh: "networking can be shown like near the top, under
+    # the OAs and stuff ... instead of being down near the rejected section." Both
+    # relationship-driven states belong under the OA block and above cold Applied.
+    from build_curated_xlsx import UNKNOWN_RANK
+    check("Recruiter Outreach outranks a cold Applied",
+          STATUS_RANK["Recruiter Outreach"] < STATUS_RANK["Applied"], True)
+    check("Networking outranks a cold Applied (a live lead, not an ex-row)",
+          STATUS_RANK["Networking"] < STATUS_RANK["Applied"], True)
+    check("an application a recruiter is moving leads a bare lead",
+          STATUS_RANK["Recruiter Outreach"] < STATUS_RANK["Networking"], True)
+    check("both relationship states sit under the OA block, not above it",
+          STATUS_RANK["OA - Done"] < STATUS_RANK["Recruiter Outreach"], True)
+    check("nothing live sorts below a rejection",
+          max(STATUS_RANK[s] for s in PIPELINE_STATUSES)
+          < min(v for k, v in STATUS_RANK.items() if k.startswith("Rejected")), True)
+    #
+    # (2) The renderers' fallback for an unrecognised status was a BARE LITERAL 7,
+    # duplicated across build_curated_xlsx and build_curated_gsheet. It silently meant
+    # "sort an unknown status like Applied" -- true only while Applied happened to be
+    # rank 7. The moment Applied moved off 7, an unknown status outranked every real
+    # application and nothing failed. It derives from Applied now.
+    check("UNKNOWN_RANK tracks Applied rather than a frozen number",
+          UNKNOWN_RANK == STATUS_RANK["Applied"], True)
+    # NB: the call nests parens -- STATUS_RANK.get((h.get("x") or "").strip(), FALLBACK)
+    # -- so a [^)]* anchor never reaches the fallback argument and the check passes
+    # vacuously. The first version of this assertion did exactly that and failed at
+    # baseline. Stay on the line instead ([^\n]) and keep the paren-free tail strict.
+    for _mod in ("build_curated_xlsx.py", "build_curated_gsheet.py"):
+        _src = (Path(__file__).parent / _mod).read_text()
+        check(f"{_mod}: no hardcoded rank fallback left",
+              bool(re.search(r"STATUS_RANK\.get\([^\n]*?,\s*\d+\s*\)", _src)), False)
+        check(f"{_mod}: falls back through UNKNOWN_RANK",
+              bool(re.search(r"STATUS_RANK\.get\([^\n]*?,\s*UNKNOWN_RANK\s*\)", _src)), True)
+
     # the consumers must DERIVE from the list, not restate it. Source-anchored on the
     # exact assignment, not a substring: a literal set that merely mentions the
     # symbol in a comment must not pass.

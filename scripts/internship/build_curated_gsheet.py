@@ -48,6 +48,7 @@ from build_curated_xlsx import (  # single source of truth for routing + ranking
     QUEUE_HEADERS,
     REVIEW_HEADERS,
     STATUS_RANK,
+    UNKNOWN_RANK,
     _fit_cells,
     _queue_sort_key,
     _review_status,
@@ -337,7 +338,7 @@ def _route(store: dict) -> dict[str, list]:
     buckets[TAB_QUEUE].sort(key=_queue_sort_key)
     buckets[TAB_QUEUE] = _group_by_company(buckets[TAB_QUEUE])
     buckets[TAB_APPS].sort(key=lambda r: (
-        STATUS_RANK.get((r["human"].get("status") or "").strip(), 7),
+        STATUS_RANK.get((r["human"].get("status") or "").strip(), UNKNOWN_RANK),
         r["human"].get("applied_date") or "0"))
     buckets[TAB_REVIEWED].sort(key=lambda r: (
         0 if _review_status(r) in ("Skip", "Not a Fit") else 1,

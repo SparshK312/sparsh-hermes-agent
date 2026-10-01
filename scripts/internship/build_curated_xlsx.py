@@ -61,7 +61,8 @@ ID_HEADER = "_id"
 # VPS's /usr/bin/python3 (the coach crons' interpreter) has no openpyxl, so board_facts.py
 # could not import the vocabulary and kept a retyped copy that went two revisions stale.
 from status_vocab import (STATUS_OPTS, REJECTED_STATUSES, REVIEWED_STATUSES,   # noqa: F401,E402
-                          PIPELINE_STATUSES, IN_PROCESS_STATUSES, STATUS_RANK)
+                          PIPELINE_STATUSES, IN_PROCESS_STATUSES, STATUS_RANK,
+                          UNKNOWN_RANK)
 PRIORITY_OPTS = ["", "P0", "P1", "P2", "P3"]
 LANE_OPTS = ["AI/ML", "SWE", "Data", "PM", "Other"]
 CYCLE_OPTS = ["Fall 2026", "Winter 2027", "Spring 2027", "Summer 2027", "Summer 2026", "TBD"]
@@ -78,6 +79,7 @@ STATUS_FILL = {"To Apply": ("FED7AA", "9A3412"),        # orange  — action nee
                "OA - Done": ("BAE6FD", "075985"),       # sky     — sat, awaiting their result
                "Phone Screen": ("C7D2FE", "3730A3"),    # indigo
                "Technical Interview": ("E9D5FF", "6B21A8"),  # purple — between screen and final
+               "Recruiter Outreach": ("99F6E4", "115E59"),  # teal — THEY came to him; ahead of cold Applied
                "Onsite": ("DDD6FE", "5B21B6"),          # violet  — final round REACHED (booked / happening)
                "Final Round - Sat": ("C4B5FD", "4C1D95"),  # deep violet — final round BEHIND him, decision theirs
                "Offer": ("A7F3D0", "065F46"),           # green   — win
@@ -462,7 +464,7 @@ def _build_apps(ws, rows):
 
     def sort_key(rec):
         h = rec["human"]
-        return (STATUS_RANK.get((h.get("status") or "").strip(), 7),
+        return (STATUS_RANK.get((h.get("status") or "").strip(), UNKNOWN_RANK),
                 "0" if not h.get("applied_date") else h["applied_date"])
     rows = sorted(rows, key=sort_key)
     for i, rec in enumerate(rows):

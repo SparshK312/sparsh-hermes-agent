@@ -33,8 +33,20 @@ from __future__ import annotations
 # on a row whose event is over, is the same defect one stage up.
 # "Onsite" now means the final round is REACHED (booked, or happening).
 # "Final Round - Sat" means it is BEHIND him and the decision is theirs — nothing owed.
-STATUS_OPTS = ["To Apply", "Applied", "OA - To Do", "OA - Done", "Phone Screen",
-               "Technical Interview", "Onsite", "Final Round - Sat",
+# "Recruiter Outreach" added 2026-09-30, Sparsh's call, same night as "Final Round - Sat"
+# and for a related reason -- but this one also fixed a REGRESSION. The Tesla Factory
+# Firmware row (283395) was put on "Networking" that evening to mark that a recruiter had
+# sourced him; his push-back was "idk if we should add a quick status for like recruiter
+# reach out or something just so it's not sitting as just 'applied'". Checking it showed
+# "Networking" RANKS 8, BELOW plain "Applied" at 7 -- and STATUS_RANK is the My
+# Applications sort key in BOTH renderers. So labelling it Networking had buried the one
+# live Tesla thread underneath 23 dormant Tesla applications: the exact opposite of why
+# it was labelled.
+# "Networking" means a warm lead with NO application (the Mercor row). "Recruiter
+# Outreach" means an EXISTING application that a recruiter has picked up and is actively
+# moving -- further along than cold Applied, short of any booked screen.
+STATUS_OPTS = ["To Apply", "Applied", "Recruiter Outreach", "OA - To Do", "OA - Done",
+               "Phone Screen", "Technical Interview", "Onsite", "Final Round - Sat",
                "Offer", "Rejected", "Rejected after OA", "Rejected after Interview",
                "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
 # Every terminal-no status, for consumers that need "he was turned down" as one bucket.
@@ -46,17 +58,31 @@ REVIEWED_STATUSES = {"skip", "not a fit", "closed"}
 # Statuses that mean a real application is IN FLIGHT (he has acted on the row). curate's
 # stale-check exempts these from the strike rule: an employer's board often drops a req
 # the moment they stop accepting candidates, which is usually right after he applies.
-PIPELINE_STATUSES = {"Applied", "OA - To Do", "OA - Done", "Phone Screen",
-                     "Technical Interview", "Onsite", "Final Round - Sat",
-                     "Offer", "Networking", "On Hold"}
+PIPELINE_STATUSES = {"Applied", "Recruiter Outreach", "OA - To Do", "OA - Done",
+                     "Phone Screen", "Technical Interview", "Onsite",
+                     "Final Round - Sat", "Offer", "Networking", "On Hold"}
 # The interview funnel proper, for the "In process (OA+)" summary tile.
 IN_PROCESS_STATUSES = ("OA - To Do", "OA - Done", "Phone Screen",
                        "Technical Interview", "Onsite", "Final Round - Sat")
 # Lower = further along. "Final Round - Sat" outranks "Onsite" because a round that is
 # BEHIND him is further than one that is merely booked — the only thing above it is the
 # offer itself.
+# This is the My Applications SORT KEY in both renderers -- lower renders higher.
+# 2026-09-30, Sparsh: "networking can be shown like near the top, under the OAs and
+# stuff, so mercor and tesla can go there too, instead of being down near the rejected
+# section." So BOTH relationship-driven states sit directly under the OA block and ABOVE
+# plain Applied. Before this, Networking ranked below Applied and sat just above the
+# rejections -- which buried a warm lead under 130+ cold applications.
+# "Recruiter Outreach" leads "Networking": an application a recruiter is actively moving
+# is further along than a lead with no application behind it.
+# 🔴 UNKNOWN_RANK is the fallback both renderers use for a status not in this table, and
+# it must track Applied. It was a bare literal 7 duplicated in two files; the moment
+# Applied moved off 7 that silently made an unknown status outrank every real Applied
+# row. Named here so the next insert cannot reintroduce it.
 STATUS_RANK = {"Offer": 0, "Final Round - Sat": 1, "Onsite": 2,
                "Technical Interview": 3, "Phone Screen": 4,
                "OA - To Do": 5, "OA - Done": 6,
-               "Applied": 7, "Networking": 8, "On Hold": 9,
-               "Rejected after Interview": 10, "Rejected after OA": 11, "Rejected": 12}
+               "Recruiter Outreach": 7, "Networking": 8,
+               "Applied": 9, "On Hold": 10,
+               "Rejected after Interview": 11, "Rejected after OA": 12, "Rejected": 13}
+UNKNOWN_RANK = STATUS_RANK["Applied"]
