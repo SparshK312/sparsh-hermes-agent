@@ -77,6 +77,14 @@ BOARDS = [
     {"name": "Cursor (Anysphere)", "tier": "A", "ats_type": "ashby", "org": "cursor"},
     {"name": "Replit", "tier": "A", "ats_type": "ashby", "org": "replit"},
     {"name": "Cohere", "tier": "A", "ats_type": "ashby", "org": "cohere"},
+    # Together AI wired 2026-10-01. It was aggregator-only despite being tier A with THREE
+    # applications already in (two SWE + one SDET, all Sep 21) and a fourth staged.
+    # The miss that surfaced it: Research Intern, Model Shaping exists as a SUMMER twin
+    # (5238466007) and a WINTER twin (5238465007), both live on Greenhouse -- and only the
+    # Summer one ever reached the board, because an aggregator happened to carry that one.
+    # The staged answers doc says to apply to the WINTER req FIRST (rotation 3 is scarcer
+    # than rotation 4), so the board was missing the more important half of the pair.
+    {"name": "Together AI", "tier": "A", "ats_type": "greenhouse", "token": "togetherai"},
     {"name": "Mercury", "tier": "A", "ats_type": "greenhouse", "token": "mercury"},
     {"name": "Coinbase", "tier": "A", "ats_type": "greenhouse", "token": "coinbase"},
     {"name": "SoFi", "tier": "B", "ats_type": "greenhouse", "token": "sofi"},
