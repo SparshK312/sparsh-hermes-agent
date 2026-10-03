@@ -85,6 +85,19 @@ BOARDS = [
     # The staged answers doc says to apply to the WINTER req FIRST (rotation 3 is scarcer
     # than rotation 4), so the board was missing the more important half of the pair.
     {"name": "Together AI", "tier": "A", "ats_type": "greenhouse", "token": "togetherai"},
+    # xAI wired 2026-10-03 — it was TIER S and completely unpolled, which is the worst
+    # version of this gap: the tier table said "target employer" while nothing ever asked
+    # the employer what was open. Its rows reached the board only when an aggregator
+    # happened to carry one. Verified live: 301 open reqs, both intern cycles present
+    # (Spring 2027 5252108007, Summer 2027 5255111007), Palo Alto, and NO ITAR, export
+    # control, citizenship or graduation-window language in either — unusual for a req
+    # whose JD text says "SpaceXAI", and worth having checked rather than assumed.
+    {"name": "xAI", "tier": "S", "ats_type": "greenhouse", "token": "xai"},
+    # Harvey wired 2026-10-03 — tier A, legal-AI, three distinct intern reqs live and all
+    # three arrived by aggregator luck: SWE Intern Summer 2027 New York ($62-72/hr),
+    # Summer 2027 San Francisco (same band), and Winter 2027 TORONTO (CA$45-55/hr).
+    # The Winter/Toronto one matters disproportionately: Winter is his scarcest cycle.
+    {"name": "Harvey", "tier": "A", "ats_type": "ashby", "org": "harvey"},
     {"name": "Mercury", "tier": "A", "ats_type": "greenhouse", "token": "mercury"},
     {"name": "Coinbase", "tier": "A", "ats_type": "greenhouse", "token": "coinbase"},
     {"name": "SoFi", "tier": "B", "ats_type": "greenhouse", "token": "sofi"},
