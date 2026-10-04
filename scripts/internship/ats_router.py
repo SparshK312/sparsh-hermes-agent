@@ -299,12 +299,31 @@ async def _board_greenhouse(client, board) -> list[JobRecord]:
         client, f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true")
     if not data:
         raise BoardFetchError(f"greenhouse {token}: HTTP {code}")
+    # Opt-in per board (2026-10-04, Jane Street). Some employers put the intern signal
+    # ONLY in a metadata field: Jane Street titles every req bare ("Software Engineer")
+    # and says "Summer Internship" / "Winter Co-Op" in metadata "Employment Type". The
+    # title is what default_intern_filter() gates on, so without this every one of its
+    # intern reqs was dropped before the store. `title_meta` names the field whose value
+    # is appended to the title; `url_template` pins the posting URL to the employer's
+    # public page so board rows keep the SAME canonical id the aggregators already gave
+    # them (absolute_url is the /apply/ form, a different id).
+    title_meta = board.get("title_meta")
+    url_template = board.get("url_template")
     out = []
     for j in data.get("jobs", []):
+        title = j.get("title", "")
+        if title_meta:
+            val = next((str(m.get("value") or "").strip() for m in (j.get("metadata") or [])
+                        if (m or {}).get("name") == title_meta), "")
+            if val and val.lower() not in title.lower():
+                title = f"{title} ({val})"
+        url = j.get("absolute_url", "")
+        if url_template and j.get("id"):
+            url = url_template.format(id=j["id"])
         out.append(JobRecord(
-            title=j.get("title", ""),
+            title=title,
             location=_merge_offices((j.get("location") or {}).get("name", ""), j.get("offices")),
-            url=j.get("absolute_url", ""),
+            url=url,
             full_jd=clean_fragment(j.get("content", "")),
             # first_published, NOT updated_at: a re-touched req is not a fresh one.
             # Median gap 49 days, p90 258, max 2,681 across 11,528 live postings —

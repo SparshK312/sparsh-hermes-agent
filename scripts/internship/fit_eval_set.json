@@ -336,5 +336,18 @@
       "fit_band": "low"
     },
     "origin": "Real NVIDIA JR2011493 the user flagged twice — 'accepted at least until June 9' the model read as a floor; now enforced deterministically in code."
+  },
+  {
+    "id": "js_undated_summer",
+    "company": "Jane Street",
+    "title": "Machine Learning Engineer (Summer Internship)",
+    "location": "New York, New York, United States",
+    "cycle": "",
+    "jd": "Machine Learning Engineer Internship, May-August\nLOCATION\nNYC\nDEPARTMENT\nTrading, Research, and Machine Learning\nAbout the Position \nOur goals are to give you a real sense of what it's like to work at Jane Street as a Machine Learning Engineer while also providing a truly unparalleled educational experience. You'll be paired with full-time employees who act as mentors, collaborating with you on real-world ML projects we actually need done. Many classes and activities are shared with our Software Engineering interns, while others focus specifically on machine learning applications and techniques. \nMachine learning is a critical pillar of Jane Street's global business. Our ever-changing trading environment serves as a unique, rapid-feedback platform for ML experimentation, allowing us to incorporate new ideas with relatively little friction. If you’d like to learn more, you can have a look at our Machine Learning page . \nDuring the program, you’ll work on projects mentored closely by the full-time employees who designed them. Some projects consider big-picture questions that we’re still trying to figure out, while others involve building something new. You will get access to our growing GPU cluster containing thousands of H100/H200/B200s and gain an understanding of the differences between textbook machine learning and its application to noisy financial data. \nThe interview process follows the same structure as our Software Engineering Intern interviews, with one key addition: after your initial technical coding interview over Zoom, you'll have an on-site interview with 2-4 technical rounds, including 1-2 dedicated to assessing ML engineering skills. \nLearn more about Jane Street’s internship program here . \nAbout You \nIf you've never thought about a career in finance, you're in good company. Many of us were in the same position before working here. If you have a curious mind, a collaborative spirit, and a passion for solving interesting problems, we have a feeling you'll fit right in. We don't expect you to have a background in finance—we're more interested in how you think and learn than what you currently know. You should be: \n\nAn undergraduate or PhD student with practical experience training an ML model, working on an ML library, or optimizing an ML workflow \nA top-notch programmer with a love for technology \nIntellectually curious, collaborative, and eager to learn \nHumble and unafraid to ask questions and admit mistakes",
+    "expected": {
+      "disqualifier": "none",
+      "fit_band": "high"
+    },
+    "origin": "real: Jane Street 8611307002 (2026-10-04) — 'May-August', NO year anywhere; was scored wrong-cycle 15 in production. Must be none. JD header reproduces the scraped page text the false positive fired on."
   }
 ]

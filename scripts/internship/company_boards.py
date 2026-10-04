@@ -225,6 +225,11 @@ BOARDS = [
     {"name": "Google", "tier": "S", "ats_type": "manual", "url": "https://www.google.com/about/careers/applications/jobs/results/?employment_type=INTERN"},
     {"name": "Meta", "tier": "S", "ats_type": "manual", "url": "https://www.metacareers.com/jobs?is_intern=true"},
     {"name": "Microsoft", "tier": "S", "ats_type": "manual", "url": "https://careers.microsoft.com/v2/global/en/students"},
+    # 2026-10-04: DeepMind's careers page routes every opening to Google Careers
+    # (company=DeepMind), which has no public API -- the same reason Google is manual.
+    # Listed so the target is named and tiered; reqs arrive only via the aggregators.
+    {"name": "DeepMind", "tier": "S", "ats_type": "manual",
+     "url": "https://www.google.com/about/careers/applications/jobs/results?company=DeepMind&employment_type=INTERN"},
     # 2026-09-22: promoted from "manual" after the audit of all nine manual boards.
     # Eightfold board, public, no key. Apple/Bloomberg/Meta/Microsoft/PayPal/Tesla/Uber
     # were probed the same day and stay manual (401/403/404 or HTML only).
@@ -242,6 +247,21 @@ BOARDS = [
     # coverage digest both treat it as a target the moment the aggregators list it.
     {"name": "Bloomberg", "tier": "A", "ats_type": "manual",
      "url": "https://bloomberg.avature.net/careers/SearchJobs/intern"},
+    # 2026-10-04: Citadel and Citadel Securities clear his Summer ACCEPT bar (top pay)
+    # and were absent from this file. Both careers sites return 403 to a plain client
+    # (bot-blocked, like Tesla), so they are manual: named, tiered, aggregator-fed.
+    {"name": "Citadel", "tier": "A", "ats_type": "manual",
+     "url": "https://www.citadel.com/careers/open-opportunities/students/"},
+    {"name": "Citadel Securities", "tier": "A", "ats_type": "manual",
+     "url": "https://www.citadelsecurities.com/careers/open-opportunities/students/"},
+    # 2026-10-04: Jane Street clears his Summer ACCEPT bar and was never polled -- its
+    # 46 Summer reqs + 1 Winter Co-Op reached the store only via aggregators, which had
+    # since rolled off (all 5 store rows dead=True). Public Greenhouse board; the intern
+    # term is in metadata, not the title, hence title_meta. url_template keeps the ids
+    # the store already holds (position/<id>), so no Sheet re-key is needed.
+    {"name": "Jane Street", "tier": "A", "ats_type": "greenhouse", "token": "janestreet",
+     "title_meta": "Employment Type",
+     "url_template": "https://www.janestreet.com/join-jane-street/position/{id}"},
 
     # ── ADDED 2026-09-25. Susquehanna (SIG) is a tier-A quant firm -- peer to Jane
     #    Street / Optiver / IMC, all of which were already tier A -- and it held ZERO

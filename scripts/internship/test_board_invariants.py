@@ -779,9 +779,12 @@ def test_rippling_board_is_wired_not_manual():
     # ⚠️ These nine are therefore visible ONLY through the aggregators. A req that
     # Simplify/SWElist miss at any of them is invisible by construction.
     manual = sorted(b.get("name") for b in boards if b.get("ats_type") == "manual")
-    check("the manual set is exactly the eight AUDITED-hard boards",
-          manual, ["Apple", "Bloomberg", "Google", "Meta", "Microsoft",
-                   "PayPal", "Tesla", "Uber"])
+    # 2026-10-04: +Citadel, +Citadel Securities (403 to a plain client) and +DeepMind
+    # (its openings live inside Google Careers, which has no public API). All three
+    # clear his Summer ACCEPT bar and were absent from the file entirely.
+    check("the manual set is exactly the eleven AUDITED-hard boards",
+          manual, ["Apple", "Bloomberg", "Citadel", "Citadel Securities", "DeepMind",
+                   "Google", "Meta", "Microsoft", "PayPal", "Tesla", "Uber"])
     check("Rippling is no longer among them", "Rippling" in manual, False)
     check("Netflix is no longer among them (Eightfold, wired 2026-09-22)",
           "Netflix" in manual, False)
@@ -1704,6 +1707,65 @@ def test_board_facts_reads_everything_and_derives_the_vocabulary():
     check("build_curated_xlsx re-exports the vocabulary (consumers unchanged)",
           "from status_vocab import" in xl, True)
 
+# ── AN INTERN SIGNAL THAT LIVES ONLY IN METADATA ─────────────────────────────
+# 2026-10-04. Jane Street (Greenhouse `janestreet`) titles every req bare --
+# "Software Engineer" -- and states "Summer Internship" / "Winter Co-Op" only in the
+# metadata field "Employment Type". default_intern_filter() gates on the TITLE, so a
+# plain greenhouse fetch dropped all 47 of its intern reqs before the store, including
+# a Winter Co-Op (8419303002) at a firm on his Summer accept bar. Two opt-in board keys
+# fix it: title_meta appends the metadata value; url_template keeps the store's ids.
+def test_title_meta_rescues_metadata_only_intern_signal():
+    import asyncio
+    import ats_router as A
+    import company_boards as CB
+    from internship_scraper import canonical_id
+    print("W3. a metadata-only intern term reaches the title (Jane Street)")
+    js = next((b for b in CB.BOARDS if b.get("name") == "Jane Street"), None)
+    check("Jane Street is on the board list", js is not None, True)
+    check("Jane Street is a greenhouse board", (js or {}).get("ats_type"), "greenhouse")
+    check("Jane Street opts into title_meta", (js or {}).get("title_meta"), "Employment Type")
+
+    payload = {"jobs": [
+        {"id": 8419303002, "title": "Software Engineer", "content": "",
+         "absolute_url": "https://www.janestreet.com/join-jane-street/apply/8419303002?gh_jid=8419303002",
+         "location": {"name": "New York, New York, United States"},
+         "metadata": [{"name": "Employment Type", "value": "Winter Co-Op"}]},
+        {"id": 1, "title": "Software Engineer", "content": "", "absolute_url": "https://x/1",
+         "location": {"name": "NYC"},
+         "metadata": [{"name": "Employment Type", "value": "Full-Time: Experienced"}]},
+    ]}
+    real = A._get_json
+    async def fake(client, url, *a, **k):
+        return payload, 200
+    A._get_json = fake
+    try:
+        recs = asyncio.run(A._board_greenhouse(None, js or {"token": "janestreet"}))
+        plain = asyncio.run(A._board_greenhouse(None, {"token": "other"}))
+    finally:
+        A._get_json = real
+    co = recs[0] if recs else None
+    check("the Winter Co-Op title carries the term",
+          (co.title if co else ""), "Software Engineer (Winter Co-Op)")
+    check("…and therefore passes the intern gate",
+          A.default_intern_filter(co.title if co else ""), True)
+    check("an Experienced req still fails the intern gate",
+          A.default_intern_filter(recs[1].title if len(recs) > 1 else "intern"), False)
+    check("url_template keeps the id the store already holds",
+          canonical_id(co.url if co else ""),
+          "www.janestreet.com/join-jane-street/position/8419303002")
+    check("a board WITHOUT title_meta is unchanged (opt-in only)",
+          [r.title for r in plain], ["Software Engineer", "Software Engineer"])
+
+    # The cached wrong-cycle verdicts on the aggregator-era Jane Street rows (fit-v3.4,
+    # "May-Aug cycle is wrong") need no new prompt version: a v3.4 row has missed v3.5
+    # and v3.7, which carry no predicate, so it is blanket re-scored once it is alive.
+    # Pinned so a future predicate on those versions cannot silently strand it.
+    import fit_pass as F
+    stale = {"fit_prompt_ver": "fit-v3.4", "fit_disqualifier": "wrong-cycle",
+             "full_jd": "Machine Learning Engineer Internship, May-August\nNYC"}
+    check("a fit-v3.4 wrong-cycle row is re-scored on revival", F._affected_by_bump(stale), True)
+
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -1717,6 +1779,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_ago_is_display_only_and_never_read_back,
            test_rippling_board_is_wired_not_manual,
            test_sig_phenom_board_is_wired_and_tiered,
+           test_title_meta_rescues_metadata_only_intern_signal,
            test_one_posting_one_id_across_encodings,
            test_shared_client_is_http1,
            test_age_filter_discards_are_exempt_from_strikes,
