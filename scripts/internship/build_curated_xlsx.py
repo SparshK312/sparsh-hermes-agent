@@ -171,7 +171,7 @@ def queue_placement(rec: dict) -> tuple[str, str]:
     import board_tabs as BT
     import target_bar as TB
     m, h = rec.get("machine", {}) or {}, rec.get("human", {}) or {}
-    season = TB.season_of(m.get("cycle", ""))
+    season = TB.season_of(m.get("cycle", ""), m.get("role", ""))
     bar = TB.bar_of(m.get("company", ""), season)
     season_tab = BT.TAB_WINTER if season == TB.WINTER else BT.TAB_SUMMER
     if (h.get("status") or "").strip().lower() == "on hold":

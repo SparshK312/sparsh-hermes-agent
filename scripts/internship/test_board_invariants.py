@@ -1837,6 +1837,13 @@ def test_target_bar_names_and_collisions():
                       ("Winter 2027, Spring 2027", W_), ("Fall 2026, Winter 2027", W_),
                       ("Summer 2027", S_), ("", S_), ("TBD", S_), ("Fall 2027", S_)):
         check(f"season_of({cyc!r})", TB.season_of(cyc), want)
+    # A cycle-less row falls back to its title; a labelled cycle is never overridden.
+    for cyc, title, want in (("", "Software Engineer (Winter Co-Op)", W_),
+                             ("", "Software Engineering Intern - Spring", W_),
+                             ("", "Software Engineer (Summer Internship)", S_),
+                             ("", "Software Engineer Intern", S_),
+                             ("Summer 2027", "Winter/Summer Software Engineer", S_)):
+        check(f"season_of({cyc!r}, {title!r})", TB.season_of(cyc, title), want)
     # Dependency-poor import: the coach crons import board_facts under /usr/bin/python3.
     src = _code_only((Path(__file__).parent / "target_bar.py").read_text())
     check("target_bar imports nothing heavy", "openpyxl" in src, False)
@@ -1870,6 +1877,10 @@ def test_queue_placement_partitions_the_queue():
         ("Rippling", "", "On Hold", BT.TAB_SUMMER),
         ("Amazon", "Summer 2027", "To Apply", BT.TAB_SUMMER),
     ]
+    jw = _qrec("jw", "Jane Street", "")
+    jw["machine"]["role"] = "Software Engineer (Winter Co-Op)"
+    check("Jane Street's cycle-less Winter Co-Op lands on the Winter tab",
+          queue_placement(jw)[0], BT.TAB_WINTER)
     for i, (co, cyc, st, want) in enumerate(cases):
         r = _qrec(f"q{i}", co, cyc, st)
         check(f"{co} / {cyc or 'blank'} / {st or 'no status'} is a queue row",

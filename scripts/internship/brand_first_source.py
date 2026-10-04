@@ -30,7 +30,9 @@ from internship_scraper import (
     classify_period,
 )
 
-BOARD_TIMEOUT = 50  # seconds per board — one slow board can't hang the whole run
+BOARD_TIMEOUT = 90  # seconds per board, counted from when it STARTS (see BOARD_CONCURRENCY).
+# 50 -> 90 on 2026-10-04: with the fan-out bounded, NVIDIA (Workday, ~50 detail calls,
+# 19.5s alone) was the one board still timing out at 50s on the 18:00 run.
 # 🔴 BOUNDED FAN-OUT (2026-10-04). collect() used to start EVERY board at once (~100)
 # on one client capped at 16 connections, and BOARD_TIMEOUT's clock started the moment
 # a board was scheduled — so a board could spend its whole 50s WAITING IN OUR OWN QUEUE.

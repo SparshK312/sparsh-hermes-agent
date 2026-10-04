@@ -38,6 +38,8 @@ can import it.
 """
 from __future__ import annotations
 
+import re
+
 from hotness import TIER_EXCEPTIONS, _name_matches, normalize_company_name, words0
 
 ACCEPT, APPLY, BELOW = "accept", "apply", "below"
@@ -109,7 +111,7 @@ def is_excepted(company: str) -> bool:
             or _matches_any(EXTRA_EXCEPTIONS, nn, w))
 
 
-def season_of(cycle: str) -> str:
+def season_of(cycle: str, title: str = "") -> str:
     """Which queue tab a row's cycle belongs on.
 
     Winter if the cycle names Winter 2027 OR Spring 2027 — US employers label the
@@ -121,6 +123,15 @@ def season_of(cycle: str) -> str:
     """
     c = (cycle or "").lower()
     if "winter 2027" in c or "spring 2027" in c:
+        return WINTER
+    # 2026-10-04: a cycle-less row whose TITLE names the winter term. Jane Street's
+    # "Software Engineer (Winter Co-Op)" (Jan-Apr, NYC) carries no year anywhere, so
+    # _cycle_label leaves `cycle` blank and the row defaulted to the Summer tab — the
+    # single most valuable Winter req on the board, filed under the wrong season. Only
+    # consulted when the cycle names no season+year at all, so a labelled row is never
+    # overridden by its title.
+    if not re.search(r"\b(winter|spring|summer|fall|autumn)\s+20\d\d\b", c) and \
+            re.search(r"\b(winter|spring)\b", (title or "").lower()):
         return WINTER
     return SUMMER
 
