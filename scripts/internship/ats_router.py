@@ -52,7 +52,12 @@ except ImportError:  # keep importable without it; fragments use the stdlib path
 
 
 # ── tunables ──────────────────────────────────────────────────────────────────
-HTTP_TIMEOUT = httpx.Timeout(12.0, connect=5.0)
+# pool=60 (2026-10-04): waiting for one of OUR OWN pooled connections is queueing, not
+# a dead server. With pool defaulting to the 12s read value, a request queued behind
+# a slow Workday board's detail fan-out raised PoolTimeout and failed the whole board
+# (31 PoolTimeouts in one run). connect 5 -> 10: the opening burst of TLS handshakes
+# produced ConnectTimeouts on boards that answer in under a second alone.
+HTTP_TIMEOUT = httpx.Timeout(12.0, connect=10.0, pool=60.0)
 CONCURRENCY = 16
 MAX_JD_CHARS = 12_000          # store the real JD (user wants to read it); bound storage
 MIN_USABLE_CHARS = 200         # below this after cleaning -> treat as no-JD

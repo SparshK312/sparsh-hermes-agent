@@ -31,6 +31,16 @@ from internship_scraper import (
 )
 
 BOARD_TIMEOUT = 50  # seconds per board — one slow board can't hang the whole run
+# 🔴 BOUNDED FAN-OUT (2026-10-04). collect() used to start EVERY board at once (~100)
+# on one client capped at 16 connections, and BOARD_TIMEOUT's clock started the moment
+# a board was scheduled — so a board could spend its whole 50s WAITING IN OUR OWN QUEUE.
+# Measured: 24–64 boards "failed" on every refresh Sep 30 → Oct 4 (PoolTimeout,
+# ConnectTimeout in the opening burst, ">50s — skipped"), a rotating ~40% of the board,
+# and all 41 failures of the 16:31 run then succeeded when fetched ALONE (Amazon 2.7s,
+# Jane Street 0.4s, slowest Netflix 28s). The employers were fine; we were congesting
+# ourselves. Now at most BOARD_CONCURRENCY boards run at once and each board's timeout
+# starts only when it actually starts.
+BOARD_CONCURRENCY = 8
 
 
 def _listing_prefilter(title: str, location: str = "") -> bool:
@@ -253,7 +263,13 @@ async def collect(client=None) -> list[dict]:
     UNCLASSIFIED_TITLES.clear()
     getattr(A, "BOARD_FETCH_FAILURES", set()).clear()
     try:
-        results = await asyncio.gather(*[_one_board(client, b) for b in boards()])
+        sem = asyncio.Semaphore(BOARD_CONCURRENCY)
+
+        async def _bounded(b):
+            async with sem:                      # BOARD_TIMEOUT starts inside, not before
+                return await _one_board(client, b)
+
+        results = await asyncio.gather(*[_bounded(b) for b in boards()])
     finally:
         if own_client:
             await client.aclose()

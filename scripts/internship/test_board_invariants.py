@@ -2084,6 +2084,56 @@ def test_board_py_imports_the_repo_modules_and_new_tabs():
               for n in ("board.py", "curate.py", "build_curated_gsheet.py", "board_facts.py")),
           False)
 
+
+# ── BOUNDED BOARD FAN-OUT (2026-10-04) ────────────────────────────────────────
+# collect() started every board at once on a 16-connection client and each board's
+# BOARD_TIMEOUT clock started before it had a connection: 24–64 boards "failed" on
+# every refresh for days, and all 41 failures of one run succeeded when fetched alone.
+# This simulates the pool with a 2-slot semaphore and asserts no board times out while
+# merely queued, and that concurrency never exceeds BOARD_CONCURRENCY.
+def test_board_fanout_is_bounded_and_queueing_is_not_a_timeout():
+    print("BF1. collect(): bounded board concurrency; queue wait never burns a board's timeout")
+    import asyncio
+    import brand_first_source as BFS
+    import ats_router as A
+    pool = asyncio.Semaphore(2) if False else None
+    state = {"now": 0, "max": 0}
+
+    async def fake_fetch(client, board, prefilter=None):
+        nonlocal pool
+        async with pool:                      # the "connection pool": 2 slots
+            state["now"] += 1
+            state["max"] = max(state["max"], state["now"])
+            await asyncio.sleep(0.05)
+            state["now"] -= 1
+        return []
+
+    fake_boards = [{"name": f"B{i}", "ats_type": "greenhouse", "tier": "A"} for i in range(24)]
+    saved = (A.fetch_board, BFS.boards, BFS.BOARD_TIMEOUT, BFS.BOARD_CONCURRENCY, A.make_client)
+
+    class _NullClient:
+        async def aclose(self): pass
+
+    async def run():
+        nonlocal pool
+        pool = asyncio.Semaphore(2)
+        return await BFS.collect()
+    try:
+        A.fetch_board = fake_fetch
+        BFS.boards = lambda: fake_boards
+        BFS.BOARD_TIMEOUT = 0.2               # 24 boards x 0.05s through 2 slots = 0.6s total
+        BFS.BOARD_CONCURRENCY = 2
+        A.make_client = lambda: _NullClient()
+        asyncio.run(run())
+        failed = set(BFS.FAILED_BOARDS)
+    finally:
+        A.fetch_board, BFS.boards, BFS.BOARD_TIMEOUT, BFS.BOARD_CONCURRENCY, A.make_client = saved
+    check("no board 'times out' while merely queued for a connection", sorted(failed), [])
+    check("never more boards in flight than BOARD_CONCURRENCY", state["max"] <= 2, True)
+    check("the production bound is set and modest", 1 < saved[3] <= 16, True)
+    check("waiting for our own pool is not a 12s failure", (A.HTTP_TIMEOUT.pool or 999) >= 60, True)
+    check("the connect timeout survives an opening burst", A.HTTP_TIMEOUT.connect >= 10, True)
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -2126,7 +2176,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_target_bar_names_and_collisions,
            test_queue_placement_partitions_the_queue,
            test_write_board_migrates_the_queue_tab_losslessly,
-           test_board_py_imports_the_repo_modules_and_new_tabs):
+           test_board_py_imports_the_repo_modules_and_new_tabs,
+           test_board_fanout_is_bounded_and_queueing_is_not_a_timeout):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:
