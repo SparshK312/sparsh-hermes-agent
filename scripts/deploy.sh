@@ -245,6 +245,15 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # Weekly coverage digest (2026-09-12): what the tier table hid this week.
   cp scripts/internship/run_coverage_digest.sh ~/.hermes/scripts/run_coverage_digest.sh
   chmod +x ~/.hermes/scripts/run_curate_vps.sh ~/.hermes/scripts/run_hot_watch.sh ~/.hermes/scripts/run_revive_dead.sh ~/.hermes/scripts/run_coverage_digest.sh
+  # Morning email triage (2026-10-04). Until today NOTHING copied scripts/email/: the
+  # VPS ran a hand-placed Sep-4 copy, so the fix to its 60-row My Applications cap
+  # (commit 12e183e) deployed and changed nothing. Same "never-executed decoy" shape
+  # as the 2026-09-05 wrappers above. The wrapper is now in the repo too.
+  mkdir -p ~/.hermes/scripts/email
+  cp scripts/email/email_triage.py scripts/email/email_audit.py ~/.hermes/scripts/email/
+  chmod +x ~/.hermes/scripts/email/email_triage.py
+  cp scripts/cron/email_triage.sh ~/.hermes/scripts/email_triage.sh
+  chmod +x ~/.hermes/scripts/email_triage.sh
   # RETIRED 2026-08-26: internship_watch.sh -> internship_triage.py, the legacy
   # frontier watcher. Its cron job (internship-watcher) was disabled and last ran
   # 2026-06-21; the job record is removed and both files are deleted. Nothing

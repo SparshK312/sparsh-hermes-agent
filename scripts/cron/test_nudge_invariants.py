@@ -244,6 +244,15 @@ def test_email_triage_reads_every_application():
         check("hitting the ceiling is announced", any("AT CAP" in m for m in logs), True)
     finally:
         T._gapi, T.log = real_gapi, real_log
+    # The fix only matters if it reaches the VPS: until 2026-10-04 deploy.sh never copied
+    # scripts/email/, so the VPS ran a hand-placed Sep-4 copy and a deployed fix was inert.
+    dep = (HERE.parent / "deploy.sh").read_text()
+    check("deploy.sh copies email_triage.py to where the cron runs it",
+          bool(re.search(r"cp scripts/email/email_triage\.py[^\n]*~/\.hermes/scripts/email/", dep)), True)
+    check("deploy.sh copies the email_triage.sh cron wrapper",
+          "cp scripts/cron/email_triage.sh ~/.hermes/scripts/email_triage.sh" in dep, True)
+    check("the wrapper runs the copy deploy.sh writes",
+          "$HOME/.hermes/scripts/email/email_triage.py" in (HERE / "email_triage.sh").read_text(), True)
 
 for fn in (test_prep_nudge_reads_the_files_that_are_actually_updated,
            test_prep_nudge_validates_its_own_input,
