@@ -201,10 +201,55 @@ def test_the_prompt_cannot_assert_an_unknown_queue_is_clear():
           "NEVER say the queue is clear" in p, True)
 
 
+
+# ── THE MORNING EMAIL TRIAGE MUST SEE EVERY APPLICATION ───────────────────────
+# 2026-10-04. email_triage.live_applications() read "My Applications!A1:K60" while the
+# tab held 189 rows, so 130 applications (Amazon, Google, Microsoft, Palantir…) were
+# invisible and an email from any of them could not be matched to its application.
+# Behavioural: drive the REAL function with a fake Sheet of 700 rows.
+def test_email_triage_reads_every_application():
+    print("E1. email_triage reads the whole My Applications tab; only the PROMPT is capped, loudly")
+    sys.path.insert(0, str(HERE.parent / "email"))
+    import email_triage as T
+    hdr = ["_id", "Status", "Due", "Company", "Role", "Lane", "Location", "Cycle",
+           "Apply", "Applied", "Ago", "Source / Referral", "Notes"]
+    def row(i, status, applied):
+        r = [""] * len(hdr)
+        r[0], r[1], r[3], r[4], r[9] = f"id{i}", status, f"Co{i}", "SWE Intern", applied
+        return r
+    asked, logs = [], []
+    real_gapi, real_log = T._gapi, T.log
+    def fake(rows):
+        def _g(*args, **kw):
+            asked.append(args[-1])
+            return json.dumps([hdr] + rows)
+        return _g
+    try:
+        T.log = lambda m: logs.append(m)
+        # 189 rows, the real size on 2026-10-04: every one must come back.
+        T._gapi = fake([row(i, "Applied", f"2026-09-{1 + i % 28:02d}") for i in range(189)])
+        got = T.live_applications()
+        check("all 189 applications are read (was 59)", len(got), 189)
+        check("the range has no row cap", bool(re.search(r"\d+$", asked[-1])), False)
+        check("no AT-CAP warning below the ceiling", any("AT CAP" in m for m in logs), False)
+        # 700 rows: the prompt is trimmed, every in-process row survives, and it is LOUD.
+        logs.clear()
+        rows = [row(i, "Applied", f"2025-{1 + i % 12:02d}-01") for i in range(690)]
+        rows += [row(1000 + i, "OA - To Do", "2025-01-01") for i in range(10)]
+        T._gapi = fake(rows)
+        got = T.live_applications()
+        check("the prompt is held to MAX_APPS", len(got), T.MAX_APPS)
+        check("every in-process row survives the trim, even the oldest",
+              sum(1 for a in got if a["status"] == "OA - To Do"), 10)
+        check("hitting the ceiling is announced", any("AT CAP" in m for m in logs), True)
+    finally:
+        T._gapi, T.log = real_gapi, real_log
+
 for fn in (test_prep_nudge_reads_the_files_that_are_actually_updated,
            test_prep_nudge_validates_its_own_input,
            test_prep_nudge_never_calls_an_unread_queue_empty,
-           test_the_prompt_cannot_assert_an_unknown_queue_is_clear):
+           test_the_prompt_cannot_assert_an_unknown_queue_is_clear,
+           test_email_triage_reads_every_application):
     try:
         fn()
     except Exception as exc:  # noqa: BLE001

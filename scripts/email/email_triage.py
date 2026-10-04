@@ -189,11 +189,25 @@ def enrich_bodies(cands: list[dict]) -> None:
     log(f"enriched {ok}/{len(targets)} recruiting-shaped emails with full bodies")
 
 
+# 🔴 THE READ IS THE WHOLE TAB; ONLY THE PROMPT HAS A CEILING (2026-10-04).
+# This read "My Applications!A1:K60" until 2026-10-04, when the tab held 189 rows: 130
+# applications (Amazon, Google, Microsoft, Palantir, Optiver, Figma, Neuralink…) were
+# invisible, so an email from any of them could not be tied to the application it was
+# about. Same defect board_facts had on 2026-09-25, one directory over. The cost worth
+# guarding is the MODEL PROMPT, not the Sheet read, so the read is unbounded and the
+# prompt is trimmed only past MAX_APPS rows — loudly, keeping every in-process row and
+# dropping the oldest settled ones first.
+MAX_APPS = 600
+# Statuses that say nothing is moving — trimmed first, oldest first, if the cap is hit.
+_SETTLED = ("applied", "rejected", "rejected after oa", "rejected after interview",
+            "closed", "skip", "not a fit")
+
+
 def live_applications() -> list[dict]:
     """His tracked applications, read off the live board. Best-effort: without this the
     model still triages, it just can't say WHICH application an email belongs to."""
     try:
-        raw = _gapi("sheets", "get", BOARD_SHEET_ID, "My Applications!A1:K60")
+        raw = _gapi("sheets", "get", BOARD_SHEET_ID, "'My Applications'!A1:Z")
         data = json.loads(raw)
         rows = data.get("values", data) if isinstance(data, dict) else data
         if not rows:
@@ -206,10 +220,30 @@ def live_applications() -> list[dict]:
             if g("company"):
                 apps.append({"company": g("company"), "role": g("role"),
                              "status": g("status"), "applied": g("applied")})
-        return apps
+        log(f"board context: {len(apps)} applications read from My Applications")
+        return _apps_for_prompt(apps)
     except Exception as e:  # noqa: BLE001
         log(f"board context unavailable ({type(e).__name__}) — triaging without it")
         return []
+
+
+def _apps_for_prompt(apps: list[dict]) -> list[dict]:
+    """Every application, unless there are more than MAX_APPS. Then keep everything
+    in process (OA, interview, offer…) and the newest settled rows, and SAY SO."""
+    if len(apps) <= MAX_APPS:
+        return apps
+    moving = [a for a in apps if (a.get("status") or "").strip().lower() not in _SETTLED]
+    settled = [a for a in apps if (a.get("status") or "").strip().lower() in _SETTLED]
+    settled.sort(key=lambda a: str(a.get("applied") or ""), reverse=True)
+    room = max(MAX_APPS - len(moving), 0)
+    kept = moving + settled[:room]
+    dropped = settled[room:]
+    log(f"⚠️  AT CAP ({MAX_APPS}) — My Applications holds {len(apps)} rows; the prompt "
+        f"carries {len(kept)} (all {len(moving)} in-process + the newest settled). "
+        f"DROPPED {len(dropped)} oldest settled rows (applied on/before "
+        f"{dropped[0].get('applied') or '?'}). An email about one of those cannot be "
+        f"matched to its application. Raise MAX_APPS.")
+    return kept
 
 
 # ── the model call ────────────────────────────────────────────────────────────
