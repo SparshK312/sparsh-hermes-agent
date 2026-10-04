@@ -161,7 +161,11 @@ GSHEET_ID = os.environ.get("CURATED_GSHEET_ID",
 GSHEET_ON = os.environ.get("CURATED_GSHEET", "1").lower() not in ("0", "false", "no")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(VAULT / "Scripts"))
+# 🔴 APPENDED, NOT PREPENDED (2026-10-04). The vault's Scripts/ held stale copies of
+# build_curated_xlsx.py (Jul 1) and build_curated_gsheet.py (Sep 4); prepending it
+# made those SHADOW this directory's modules on the Mac. Nothing needed from the vault
+# is also defined here, so this directory must win.
+sys.path.append(str(VAULT / "Scripts"))
 
 import brand_first_source  # noqa: E402
 import wide_net_source  # noqa: E402
@@ -903,9 +907,12 @@ async def refresh(notify: bool = False) -> int:
                     changed += 1
             if changed:
                 store.save(gen)
+            # Iterates the tabs that were actually written, so a renamed tab constant
+            # can never raise HERE — after a successful write — and get reported below
+            # as "GOOGLE SHEET NOT UPDATED" (found 2026-10-04 while splitting the queue).
             c = res["counts"]
-            print(f"   Google Sheet updated — {c[gsheet.TAB_QUEUE]} queue, "
-                  f"{c[gsheet.TAB_APPS]} applications, {c[gsheet.TAB_REVIEWED]} reviewed"
+            print("   Google Sheet updated — "
+                  + ", ".join(f"{n} {t}" for t, n in c.items())
                   + (f" (+{changed} late edits merged)" if changed else ""))
         except Exception as e:  # noqa: BLE001
             print(f"\n⚠️  GOOGLE SHEET NOT UPDATED — {type(e).__name__}: {e}\n"

@@ -154,6 +154,31 @@ def classify_row(rec: dict) -> str:
     return "queue"
 
 
+def queue_placement(rec: dict) -> tuple[str, str]:
+    """For a row classify_row() already calls 'queue': (Sheet tab, bar).
+
+    Added 2026-10-04. classify_row is deliberately UNCHANGED — curate.py, the xlsx
+    renderer and the tests all depend on its four return values — so the split of the
+    queue into Winter / Summer / Below Bar happens here, one level down, and only for
+    rows already bound for the queue. Nothing here can move a row into or out of My
+    Applications or Reviewed.
+
+    Season comes from the machine `cycle` (target_bar.season_of: Winter/Spring 2027 ->
+    Winter, everything else incl. blank -> Summer). The bar comes from the COMPANY
+    (target_bar.bar_of). An "On Hold" row is a deliberate park, so it stays on its
+    season's tab whatever the bar says. Routing only — no status is ever written.
+    """
+    import board_tabs as BT
+    import target_bar as TB
+    m, h = rec.get("machine", {}) or {}, rec.get("human", {}) or {}
+    season = TB.season_of(m.get("cycle", ""))
+    bar = TB.bar_of(m.get("company", ""), season)
+    season_tab = BT.TAB_WINTER if season == TB.WINTER else BT.TAB_SUMMER
+    if (h.get("status") or "").strip().lower() == "on hold":
+        return season_tab, bar
+    return (BT.TAB_BELOW if bar == TB.BELOW else season_tab), bar
+
+
 # ── lock detection ────────────────────────────────────────────────────────────
 def is_locked(path: str | Path) -> bool:
     """True if Excel has the file open (its ~$ owner-lock is present). Non-raising —

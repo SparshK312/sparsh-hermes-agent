@@ -37,6 +37,15 @@ VENV_PY = Path.home() / ".hermes/hermes-agent/venv/bin/python"
 from status_vocab import (STATUS_OPTS, PIPELINE_STATUSES,                # noqa: E402
                           IN_PROCESS_STATUSES, REVIEWED_STATUSES,
                           REJECTED_STATUSES)
+# Tab names come from the one dependency-free source (2026-10-04: "Apply Now" split into
+# Apply - Winter / Apply - Summer / Below Bar). A literal here is how a rename would
+# have silently emptied the morning brief and the evening nudge.
+import board_tabs as BT  # noqa: E402
+
+
+def _rng(tab: str) -> str:
+    """Whole-tab A1 range, tab name quoted (the new names contain " - ")."""
+    return "'" + tab.replace("'", "''") + "'!A1:Z"
 
 # Anything he has already acted on or ruled out — never re-suggest it as a fresh apply.
 DONE = ({s.lower() for s in PIPELINE_STATUSES}
@@ -108,8 +117,20 @@ def board_facts(top_n: int = 8) -> dict:
     # also stale: an "Ago" column was inserted on 09-21, pushing the tab to 13 columns
     # while the read asked for 11. Open-ended, both dimensions, like board.py's
     # _fetch_tabs (commit 2af9fba) — the identical defect, one file over.
-    queue = _rows("Apply Now!A1:Z")
-    apps = _rows("My Applications!A1:Z")
+    # The tabs he applies FROM, Winter first (his priority since 2026-10-04). Below Bar
+    # is deliberately not read: the nudge surfaces targets, not the "aiming higher" pile.
+    winter = _rows(_rng(BT.TAB_WINTER))
+    summer = _rows(_rng(BT.TAB_SUMMER))
+    for r in winter:
+        r["_season"] = "winter"
+    for r in summer:
+        r["_season"] = "summer"
+    queue = winter + summer
+    if not queue:
+        # Before the migration refresh has run, only the legacy tab exists. Without this
+        # fallback a deploy that lands before the refresh would blank the nudges.
+        queue = _rows(_rng(BT.LEGACY_QUEUE))
+    apps = _rows(_rng(BT.TAB_APPS))
     if not queue and not apps:
         return {}
 
@@ -128,9 +149,12 @@ def board_facts(top_n: int = 8) -> dict:
             "cycle": r.get("Cycle", ""),
             "age_days": _int(r.get("Age"), 999),
             "unreadable": str(fit).strip() in ("👀", ""),
+            "season": r.get("_season", ""),
         })
+    # Winter first, then the old order: Winter 2027 is the open slot he is filling.
+    _winter_first = lambda x: 0 if x["season"] == "winter" else 1  # noqa: E731
     scored = [x for x in open_roles if x["fit"] is not None]
-    scored.sort(key=lambda x: (-x["hot"], -(x["fit"] or 0)))
+    scored.sort(key=lambda x: (_winter_first(x), -x["hot"], -(x["fit"] or 0)))
 
     fresh = [x for x in open_roles if x["age_days"] <= 2]
     fresh.sort(key=lambda x: (-x["hot"], x["age_days"]))
@@ -176,7 +200,8 @@ def board_facts(top_n: int = 8) -> dict:
         # Row counts the facts were actually derived from. A caller that wants to say
         # "nothing applied" can check these first: 0 rows read is "we could not look",
         # which is not the same fact and must never be reported as one.
-        "rows_read": {"queue": len(queue), "apps": len(apps)},
+        "rows_read": {"queue": len(queue), "winter": len(winter),
+                      "summer": len(summer), "apps": len(apps)},
         "applied_recent": applied[:5],
         "live_pipeline": pipeline,
         "note": ("Already-actioned roles are excluded from top_targets — never suggest "

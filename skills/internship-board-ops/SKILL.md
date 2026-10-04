@@ -67,11 +67,13 @@ python board.py status "id:boards.greenhouse.io/figma/jobs/6143238004" "OA - Don
 
 One refusal → one exact retry. Never a third attempt with a reworded fragment; if the id: list does not contain the row, it is not on the board.
 
-**Status vocabulary** (the Sheet's dropdown; anything else renders broken):
-`To Apply · Applied · OA - To Do · OA - Done · Phone Screen · Technical Interview · Onsite · Offer · Rejected · Rejected after OA · Rejected after Interview · Networking · On Hold · Skip · Not a Fit · Closed`
-`Rejected` is cold; a rejection after an assessment or a live round gets its own status. The one source is `STATUS_OPTS` in `build_curated_xlsx.py`.
+**Tabs (since 2026-10-04):** `Apply - Winter` (Winter/Spring 2027 at bar-clearing companies — his priority) · `Apply - Summer` (everything else that clears the bar, incl. rows with no stated cycle) · `Below Bar` (passes every gate but the company is below his bar — not a target list; never suggest from it) · `My Applications` · `Reviewed` (hard-gate failures + his Skip/Not a Fit). The bar is `target_bar.py`; tab names are `board_tabs.py`.
 
-After a write the Sheet is updated immediately; the row re-routes between tabs on the next `curate.py` refresh (`Applied` moves it from Apply Now to My Applications). Do not move rows by hand and do not run the refresh to "check" — read the Sheet.
+**Status vocabulary** (the Sheet's dropdown; anything else renders broken):
+`To Apply · Applied · Recruiter Outreach · OA - To Do · OA - Done · Phone Screen · Technical Interview · Onsite · Final Round - Sat · Offer · Rejected · Rejected after OA · Rejected after Interview · Networking · On Hold · Skip · Not a Fit · Closed`
+`Rejected` is cold; a rejection after an assessment or a live round gets its own status. The one source is `STATUS_OPTS` in `status_vocab.py`.
+
+After a write the Sheet is updated immediately; the row re-routes between tabs on the next `curate.py` refresh (`Applied` moves it from Apply - Winter / Apply - Summer / Below Bar to My Applications). Do not move rows by hand and do not run the refresh to "check" — read the Sheet.
 
 ## Pitfalls
 - `python -c` is blocked by the gateway guard — named scripts only.

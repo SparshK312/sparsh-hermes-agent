@@ -54,15 +54,24 @@ from build_curated_xlsx import (  # single source of truth for routing + ranking
     _review_status,
     _review_closed,
     classify_row,
+    queue_placement,
 )
+import board_tabs as BT  # noqa: E402  (tab names: one dependency-free source)
+from target_bar import BAR_RANK  # noqa: E402
 
 SCHEMA_VERSION = 1
 SHEET_ID_DEFAULT = "1Kkle7QoKsBMXihoslWjIoMDqKFznwxxA4Y_OgiqJpWI"
 
-TAB_QUEUE = "Apply Now"
-TAB_APPS = "My Applications"
-TAB_REVIEWED = "Reviewed"
-TAB_META = "_meta"
+# Tab names live in board_tabs.py (2026-10-04: the single "Apply Now" queue became
+# Apply - Winter / Apply - Summer / Below Bar). Re-exported here for callers.
+TAB_WINTER = BT.TAB_WINTER
+TAB_SUMMER = BT.TAB_SUMMER
+TAB_BELOW = BT.TAB_BELOW
+TAB_APPS = BT.TAB_APPS
+TAB_REVIEWED = BT.TAB_REVIEWED
+TAB_META = BT.TAB_META
+LEGACY_QUEUE = BT.LEGACY_QUEUE
+QUEUE_TABS = BT.QUEUE_TABS
 
 # Header on row 1, data from row 2, row 1 frozen. Deliberately flatter than the xlsx
 # (which spends rows 1-2 on a title block): this gets read on a phone, where two rows
@@ -274,8 +283,23 @@ def _col_letter(n: int) -> str:
 _HUMAN_BY_HEADER = {"status": "status", "priority": "priority_override",
                     "applied": "applied_date", "notes": "notes", "due": "due"}
 
-TABS = (TAB_QUEUE, TAB_APPS, TAB_REVIEWED)
-_HEADERS = {TAB_QUEUE: QUEUE_HEADERS, TAB_APPS: APP_HEADERS, TAB_REVIEWED: REVIEW_HEADERS}
+TABS = BT.TABS
+# Every queue-shaped tab carries the SAME headers, Priority included, so a row moving
+# between Winter / Summer / Below Bar never lands on a tab missing one of its human
+# columns (read-back only touches columns that exist on the tab it reads).
+_HEADERS = {**{t: QUEUE_HEADERS for t in QUEUE_TABS},
+            TAB_APPS: APP_HEADERS, TAB_REVIEWED: REVIEW_HEADERS,
+            LEGACY_QUEUE: QUEUE_HEADERS}
+
+
+def _readback_tabs(present) -> tuple:
+    """Tabs read_back_human reads, in precedence order (later wins per field).
+
+    The legacy "Apply Now" tab comes FIRST, so it is the lowest precedence: before the
+    migration it is the only queue tab and every edit on it is read; after it is
+    renamed it no longer exists. If a half-finished migration ever left it beside the
+    new tabs, the new tabs win."""
+    return ((LEGACY_QUEUE,) if LEGACY_QUEUE in present else ()) + tuple(TABS)
 
 
 # ── read-back ─────────────────────────────────────────────────────────────────
@@ -285,7 +309,7 @@ def read_back_human(sheet_id: str = SHEET_ID_DEFAULT) -> dict[str, dict]:
     to sort the sheet and sorting moves rows (proven: a pinned row went 3 -> 32)."""
     out: dict[str, dict] = {}
     present = tab_map(sheet_id)
-    for tab in TABS:
+    for tab in _readback_tabs(present):
         if tab not in present:
             continue
         headers = _HEADERS[tab]
@@ -328,15 +352,28 @@ def _rec(cid, entry):
 
 
 def _route(store: dict) -> dict[str, list]:
-    buckets = {TAB_QUEUE: [], TAB_APPS: [], TAB_REVIEWED: []}
-    dest_tab = {"queue": TAB_QUEUE, "application": TAB_APPS, "reviewed": TAB_REVIEWED}
+    buckets = {t: [] for t in TABS}
+    dest_tab = {"application": TAB_APPS, "reviewed": TAB_REVIEWED}
+    bar_of_row: dict[str, str] = {}
     for cid, entry in store.items():
         rec = _rec(cid, entry)
-        tab = dest_tab.get(classify_row(rec))
+        kind = classify_row(rec)
+        if kind == "queue":
+            # 2026-10-04: one queue became three tabs. classify_row is unchanged; the
+            # split happens only among rows it already sends to the queue.
+            tab, bar = queue_placement(rec)
+            bar_of_row[cid] = bar
+        else:
+            tab = dest_tab.get(kind)      # "drop" -> None -> not rendered, as before
         if tab:
             buckets[tab].append(rec)
-    buckets[TAB_QUEUE].sort(key=_queue_sort_key)
-    buckets[TAB_QUEUE] = _group_by_company(buckets[TAB_QUEUE])
+    for tab in QUEUE_TABS:
+        # Accept-bar companies first (the ones worth reneging on Microsoft for), then
+        # the existing tier/priority/hotness order WITHIN each bar band. A company has
+        # one bar per tab, so _group_by_company's blocks cannot straddle a band.
+        buckets[tab].sort(key=lambda r: (BAR_RANK.get(bar_of_row.get(r["_cid"]), 9),
+                                         _queue_sort_key(r)))
+        buckets[tab] = _group_by_company(buckets[tab])
     buckets[TAB_APPS].sort(key=lambda r: (
         STATUS_RANK.get((r["human"].get("status") or "").strip(), UNKNOWN_RANK),
         r["human"].get("applied_date") or "0"))
@@ -449,14 +486,14 @@ def _row_values(tab: str, rec: dict) -> list:
     url = m.get("url", "") or ""
     common = {
         ID_HEADER: rec["_cid"],
-        "Status": (h.get("status") or "") or ("To Apply" if tab == TAB_QUEUE else ""),
+        "Status": (h.get("status") or "") or ("To Apply" if tab in QUEUE_TABS else ""),
         "Company": m.get("company", ""), "Role": m.get("role", ""),
         "Lane": m.get("lane", ""), "Location": m.get("location", ""),
         "Cycle": m.get("cycle", ""), "Notes": h.get("notes", ""),
         "Apply": url,           # rewritten as a HYPERLINK below
         "Fit": fit_disp, "Why": why_disp,
     }
-    if tab == TAB_QUEUE:
+    if tab in QUEUE_TABS:
         common.update({
             "🔥": m.get("fresh", ""), "Hot": m.get("hotness", ""),
             "Tier": m.get("tier", ""), "Priority": h.get("priority_override", ""),
@@ -483,9 +520,37 @@ def _row_values(tab: str, rec: dict) -> list:
 
 
 # ── grid plumbing ─────────────────────────────────────────────────────────────
-def _ensure_tabs(sheet_id: str, needed_rows: dict[str, int]) -> dict[str, dict]:
-    """Create missing tabs and grow undersized grids. Idempotent."""
+def _ensure_tabs(sheet_id: str, needed_rows: dict[str, int]) -> tuple[dict[str, dict], bool]:
+    """Create missing tabs and grow undersized grids. Idempotent.
+
+    Returns (present, layout_changed). layout_changed is True when a tab was RENAMED or
+    CREATED, so the caller can apply ensure_format(): a tab made here is bare (no
+    dropdown, no hidden _id, no colours, no filter) until ensure_format runs, and before
+    2026-10-04 nothing ran it automatically for a new tab.
+
+    🔄 MIGRATION (2026-10-04): the pre-split queue tab "Apply Now" is RENAMED in place to
+    "Apply - Winter" rather than deleted and recreated, so its sheetId, formatting,
+    dropdowns and filter survive. Nothing is lost by the rename: read_back_human has
+    already read it (it reads LEGACY_QUEUE first whenever it exists), and _sync_tab then
+    rewrites the renamed tab whole with only Winter rows.
+    """
     present = tab_map(sheet_id)
+    changed = False
+    if LEGACY_QUEUE in present and TAB_WINTER not in present:
+        batch_update(sheet_id, [{"updateSheetProperties": {
+            "properties": {"sheetId": present[LEGACY_QUEUE]["sheetId"], "title": TAB_WINTER},
+            "fields": "title"}}])
+        print(f"[gsheet] 🔄 renamed tab {LEGACY_QUEUE!r} -> {TAB_WINTER!r} (one-time "
+              f"migration; formatting kept)", file=sys.stderr)
+        present = tab_map(sheet_id)
+        changed = True
+    elif LEGACY_QUEUE in present:
+        # Both exist: a half-finished migration. Never delete his tab automatically —
+        # it may hold edits — but say so loudly. read_back_human still reads it (lowest
+        # precedence) and nothing writes to it any more.
+        print(f"[gsheet] ⚠️  legacy tab {LEGACY_QUEUE!r} still exists beside "
+              f"{TAB_WINTER!r}. It is read back but no longer written; delete it by hand "
+              f"once its edits have been picked up.", file=sys.stderr)
     reqs = []
     for tab in (*TABS, TAB_META):
         want_rows = needed_rows.get(tab, 200) + 100     # headroom for appends
@@ -512,9 +577,11 @@ def _ensure_tabs(sheet_id: str, needed_rows: dict[str, int]) -> dict[str, dict]:
                                    "gridProperties": grow},
                     "fields": fields}})
     if reqs:
+        if any("addSheet" in r for r in reqs):
+            changed = True
         batch_update(sheet_id, reqs)
         present = tab_map(sheet_id)
-    return present
+    return present, changed
 
 
 def _sync_tab(sheet_id: str, tab: str, records: list[dict]) -> int:
@@ -635,7 +702,7 @@ def write_board(store: dict, sheet_id: str = SHEET_ID_DEFAULT,
               file=sys.stderr)
 
     buckets = _route(merged)
-    _ensure_tabs(sheet_id, {t: len(buckets[t]) for t in TABS})
+    _present, layout_changed = _ensure_tabs(sheet_id, {t: len(buckets[t]) for t in TABS})
 
     counts = {}
     for tab in TABS:
@@ -649,7 +716,11 @@ def write_board(store: dict, sheet_id: str = SHEET_ID_DEFAULT,
     # is cheap; re-apply the format only when the live rule disagrees with STATUS_OPTS.
     live = sheet_status_options(sheet_id)
     tz = sheet_timezone(sheet_id)
-    if not vocab_is_current(live):
+    if layout_changed:
+        print("[gsheet] a tab was created or renamed this run — applying ensure_format() "
+              "so it gets its dropdowns, hidden _id, colours and filter", file=sys.stderr)
+        ensure_format(sheet_id)
+    elif not vocab_is_current(live):
         print(f"[gsheet] Status vocabulary drifted: Sheet has {live}, code has "
               f"{list(STATUS_OPTS)} — re-applying ensure_format()", file=sys.stderr)
         ensure_format(sheet_id)
@@ -658,14 +729,20 @@ def write_board(store: dict, sheet_id: str = SHEET_ID_DEFAULT,
               f"column would flip a day early; re-applying ensure_format()", file=sys.stderr)
         ensure_format(sheet_id)
 
-    values_update(sheet_id, f"{_q(TAB_META)}!A1:B6", [
+    meta_rows = [
         ["schema_version", SCHEMA_VERSION],
         ["generated_at", generated_at],
-        ["queue", counts[TAB_QUEUE]],
+        # "queue" keeps its pre-2026-10-04 meaning (rows he can apply from), now the
+        # Winter + Summer tabs; Below Bar is counted on its own line.
+        ["queue", counts[TAB_WINTER] + counts[TAB_SUMMER]],
+        ["queue_winter", counts[TAB_WINTER]],
+        ["queue_summer", counts[TAB_SUMMER]],
+        ["below_bar", counts[TAB_BELOW]],
         ["applications", counts[TAB_APPS]],
         ["reviewed", counts[TAB_REVIEWED]],
         ["store_total", len(store)],
-    ])
+    ]
+    values_update(sheet_id, f"{_q(TAB_META)}!A1:B{len(meta_rows)}", meta_rows)
     return {"counts": counts, "human": human}
 
 
@@ -709,11 +786,12 @@ def sheet_status_options(sheet_id: str = SHEET_ID_DEFAULT):
         print(f"[gsheet] could not read the Status validation rule: {exc}", file=sys.stderr)
         return None
 
-_WIDTHS = {
-    TAB_QUEUE: {"🔥": 34, "Hot": 46, "Fit": 44, "Why": 260, "Tier": 44, "Priority": 70,
+_QUEUE_WIDTHS = {"🔥": 34, "Hot": 46, "Fit": 44, "Why": 260, "Tier": 44, "Priority": 70,
                 "Status": 104, "Company": 130, "Role": 300, "Lane": 62, "Location": 150,
                 "Cycle": 92, "Posted": 88, "Age": 46, "Apply": 68, "Source": 90,
-                "Notes": 240},
+                "Notes": 240}
+_WIDTHS = {
+    **{t: _QUEUE_WIDTHS for t in QUEUE_TABS},
     TAB_APPS: {"Status": 104, "Company": 140, "Role": 300, "Lane": 62, "Location": 160,
                "Cycle": 92, "Apply": 68, "Applied": 92, "Ago": 96, "Source / Referral": 140,
                "Notes": 320},

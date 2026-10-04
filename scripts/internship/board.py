@@ -53,7 +53,8 @@ Valid Status values (they are a dropdown on the Sheet; anything else will look b
 
 AFTER RUNNING: the change is live on the Sheet immediately. The JSON store catches up
 on the next `curate.py` run, which is also when the row re-routes between tabs (setting
-`Applied` moves it from Apply Now to My Applications).
+`Applied` moves it from Apply - Winter / Apply - Summer / Below Bar to My Applications).
+Tab names live in board_tabs.py; which queue tab a row lands on is target_bar.py.
 """
 from __future__ import annotations
 
@@ -68,13 +69,26 @@ from pathlib import Path
 from build_curated_xlsx import STATUS_OPTS  # noqa: E402
 from board_match import find_by_id, find_rows  # noqa: E402
 
-VAULT_SCRIPTS = Path("/Users/sparshk/Documents/School Vault - UofT/Scripts")
-sys.path.insert(0, str(VAULT_SCRIPTS))
-
+# 🔴 2026-10-04: this file used to PREPEND the vault's Scripts/ to sys.path here, and
+# that folder held a STALE copy of build_curated_gsheet.py (Sep 4, still hardcoding the
+# old tab names), so on the Mac `G` was the stale module. This directory's copy is the
+# one the VPS renders with; it is now the only one importable.
+import board_tabs as BT  # noqa: E402
 import build_curated_gsheet as G  # noqa: E402
 
 VALID = list(STATUS_OPTS)
-TABS = (G.TAB_QUEUE, G.TAB_APPS, G.TAB_REVIEWED)
+TABS = BT.TABS
+
+
+def _live_tabs() -> list:
+    """The board tabs that exist on the Sheet right now, the legacy queue first.
+
+    Between a deploy and the migration refresh the Sheet still has "Apply Now" and none
+    of the three new queue tabs; afterwards the reverse. Reading only what exists keeps
+    show/status working across that window instead of erroring on a missing tab."""
+    present = G.tab_map(G.SHEET_ID_DEFAULT)
+    return ([BT.LEGACY_QUEUE] if BT.LEGACY_QUEUE in present else []) + \
+           [t for t in TABS if t in present]
 
 
 def _find(needle: str):
@@ -97,7 +111,7 @@ def _find(needle: str):
         # testable without the vault import above.
         want = needle[3:].strip()
         rows_by_tab = {}
-        for tab in TABS:
+        for tab in _live_tabs():
             h = G._HEADERS[tab]
             rows_by_tab[tab] = G.values_get(G.SHEET_ID_DEFAULT,
                                             f"{G._q(tab)}!A1:{G._col_letter(len(h))}")
@@ -136,7 +150,7 @@ def _find(needle: str):
 def _fetch_tabs():
     """One read per tab; every lookup in a call shares it."""
     rows_by_tab, headers_by_tab = {}, {}
-    for tab in TABS:
+    for tab in _live_tabs():
         h = G._HEADERS[tab]
         # 🔴 The whole tab, never a fixed row count. This read `A1:L500` until
         # 2026-09-21, when Reviewed stood at 1,277 rows and Apply Now at 492: every
@@ -191,12 +205,19 @@ def main() -> int:
     cmd = sys.argv[1]
 
     if cmd == "list-live":
-        h = G._HEADERS[G.TAB_QUEUE]
-        rows = G.values_get(G.SHEET_ID_DEFAULT,
-                            f"{G._q(G.TAB_QUEUE)}!A1:{G._col_letter(len(h))}60")
-        for i, r in enumerate(rows[1:], start=2):
-            g = lambda k: (r[h.index(k)] if h.index(k) < len(r) else "")  # noqa: E731
-            print(f"  #{i-1:<4} Fit={g('Fit'):<4} {g('Company')[:16]:<16} {g('Role')[:50]}")
+        # The top of each tab he applies from, Winter first (his priority). Below Bar is
+        # not a target list and is not shown. Falls back to the legacy queue before the
+        # migration refresh has run.
+        live = [t for t in _live_tabs() if t in BT.APPLY_TABS] or \
+               [t for t in _live_tabs() if t == BT.LEGACY_QUEUE]
+        for tab in live:
+            h = G._HEADERS[tab]
+            rows = G.values_get(G.SHEET_ID_DEFAULT,
+                                f"{G._q(tab)}!A1:{G._col_letter(len(h))}31")
+            print(f"── {tab} (top {max(len(rows) - 1, 0)}) ──")
+            for i, r in enumerate(rows[1:], start=2):
+                g = lambda k: (r[h.index(k)] if h.index(k) < len(r) else "")  # noqa: E731
+                print(f"  #{i-1:<4} Fit={g('Fit'):<4} {g('Company')[:16]:<16} {g('Role')[:50]}")
         return 0
 
     if len(sys.argv) < 3:

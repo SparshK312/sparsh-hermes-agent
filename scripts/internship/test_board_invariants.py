@@ -1606,11 +1606,24 @@ def test_board_facts_reads_everything_and_derives_the_vocabulary():
     # docstrings first, then assert.
     code = _code_only(src)
 
-    # (a) whole tabs, both dimensions. Anchored on the actual read calls.
-    reads = re.findall(r'_rows\("([^"]+)"\)', src)
-    check("board_facts reads both tabs", sorted(reads),
-          ["Apply Now!A1:Z", "My Applications!A1:Z"])
-    for r in reads:
+    # (a) whole tabs, both dimensions. 2026-10-04: the ranges are built from board_tabs
+    # (the queue split into Apply - Winter / Apply - Summer / Below Bar), so they are
+    # asserted BEHAVIOURALLY — the ranges board_facts actually requests — not by grep.
+    import board_tabs as _BT
+    asked = []
+    real_rows0 = board_facts._rows
+    try:
+        board_facts._rows = lambda rng: (asked.append(rng), [])[1]
+        board_facts.board_facts()
+    finally:
+        board_facts._rows = real_rows0
+    want_reads = sorted(f"'{t}'!A1:Z" for t in (_BT.TAB_WINTER, _BT.TAB_SUMMER,
+                                                _BT.LEGACY_QUEUE, _BT.TAB_APPS))
+    check("board_facts reads Winter, Summer, (legacy fallback when both are empty) "
+          "and My Applications", sorted(asked), want_reads)
+    check("board_facts never reads Below Bar (not a target list)",
+          any(_BT.TAB_BELOW in r for r in asked), False)
+    for r in asked:
         check(f"{r!r} has no row cap", bool(re.search(r"\d+$", r)), False)
     check("the old 80-row applications cap is gone", "A1:K80" in code, False)
     check("the old 400-row queue cap is gone", "A1:R400" in code, False)
@@ -1656,13 +1669,17 @@ def test_board_facts_reads_everything_and_derives_the_vocabulary():
     wk_s = (_date.today() - _td(days=3)).isoformat()
     old_s = (_date.today() - _td(days=60)).isoformat()
     fixture = {
-        "Apply Now!A1:Z": [
+        "'Apply - Winter'!A1:Z": [
             {"Status": "To Apply", "Company": "Zeta", "Role": "SWE Intern", "Fit": "88",
-             "Hot": "90", "Cycle": "Summer 2027", "Age": "1"},
+             "Hot": "60", "Cycle": "Winter 2027", "Age": "1"},
+        ],
+        "'Apply - Summer'!A1:Z": [
             {"Status": "OA - To Do", "Company": "Stripe", "Role": "SWE Intern", "Fit": "90",
              "Hot": "95", "Cycle": "Summer 2027", "Age": "0"},
+            {"Status": "To Apply", "Company": "Yotta", "Role": "SWE Intern", "Fit": "91",
+             "Hot": "97", "Cycle": "Summer 2027", "Age": "1"},
         ],
-        "My Applications!A1:Z": [
+        "'My Applications'!A1:Z": [
             {"Status": "Applied", "Company": "A", "Role": "r", "Applied": today_s},
             {"Status": "OA - Done", "Company": "B", "Role": "r", "Applied": today_s},
             {"Status": "Technical Interview", "Company": "C", "Role": "r", "Applied": wk_s},
@@ -1680,12 +1697,23 @@ def test_board_facts_reads_everything_and_derives_the_vocabulary():
     check("applied_last_7_days counts the week, not just literal 'Applied'",
           f.get("applied_last_7_days"), 4)
     check("a progressed application still counts as sent", f.get("applied_total"), 5)
-    check("an OA row is NOT offered as something to apply to",
-          [r["company"] for r in f["top_targets"]], ["Zeta"])
+    check("an OA row is NOT offered as something to apply to, and Winter comes first "
+          "even when a Summer row is hotter (2026-10-04: Winter is the open slot)",
+          [r["company"] for r in f["top_targets"]], ["Zeta", "Yotta"])
     check("live_pipeline sees the OA and the technical round",
           sorted(r["status"] for r in f["live_pipeline"]), ["OA - Done", "Technical Interview"])
     check("rows_read reports what was actually read", f.get("rows_read"),
-          {"queue": 2, "apps": 5})
+          {"queue": 3, "winter": 1, "summer": 2, "apps": 5})
+    # Before the migration refresh only the legacy tab exists: the nudge must still see it.
+    legacy_fixture = {"'Apply Now'!A1:Z": fixture["'Apply - Winter'!A1:Z"],
+                      "'My Applications'!A1:Z": fixture["'My Applications'!A1:Z"]}
+    try:
+        board_facts._rows = lambda rng: legacy_fixture.get(rng, [])
+        f_legacy = board_facts.board_facts(top_n=5)
+    finally:
+        board_facts._rows = real_rows
+    check("pre-migration: board_facts falls back to the legacy 'Apply Now' tab",
+          [r["company"] for r in f_legacy["top_targets"]], ["Zeta"])
     coach = (Path(__file__).parent.parent / "fitness" / "coach.py").read_text()
     ccode = _code_only(coach)
     check("the applied-today check takes the board",
@@ -1766,6 +1794,296 @@ def test_title_meta_rescues_metadata_only_intern_signal():
     check("a fit-v3.4 wrong-cycle row is re-scored on revival", F._affected_by_bump(stale), True)
 
 
+
+# ── THE TARGET BAR (2026-10-04) ───────────────────────────────────────────────
+# Microsoft Summer 2027 was accepted on 2026-10-02 and his bar split in two: an ACCEPT
+# list (worth reneging for) and an APPLY list; everything else renders on Below Bar.
+# target_bar.py holds it. These pin his named calls and every look-alike measured
+# against the 887-name corpus the day it was written — the same adversarial-corpus
+# discipline as test_brand_tier_collisions.
+def test_target_bar_names_and_collisions():
+    print("TB1. target_bar: his named calls, by season, and the look-alikes")
+    import target_bar as TB
+    S_, W_ = TB.SUMMER, TB.WINTER
+    for name in ("Google", "Google DeepMind", "Meta", "Apple", "OpenAI", "Anthropic",
+                 "xAI", "Jane Street", "Citadel", "Citadel Securities"):
+        check(f"{name} is accept", TB.bar_of(name, S_), TB.ACCEPT)
+    for name in ("Amazon", "NVIDIA", "Stripe", "Tesla", "D. E. Shaw & Co.",
+                 "The D. E. Shaw Group", "Susquehanna International Group", "IMC Trading",
+                 "Together AI", "Harvey", "Lyft", "Robinhood", "Wealthsimple", "Rubrik",
+                 "Autodesk", "Intuit", "American Express", "G-Research",
+                 "Viking Global Investors", "The Walt Disney Company",
+                 "Toyota Research Institute", "Relativity Space", "Red Hat, Inc."):
+        check(f"{name} is apply", TB.bar_of(name, S_), TB.APPLY)
+    # His explicit exclusions, both rounds.
+    for name in ("Rippling", "Decagon", "Cloudflare", "Atlassian", "Royal Bank of Canada",
+                 "BMO", "Abridge", "Verkada", "Affirm", "Tower Research Capital",
+                 "Akuna Capital", "Electronic Arts", "AMD", "Samsara", "Nuro",
+                 "Domino Data Lab", "SingleStore", "Hometap", "Ciena", "Honeywell",
+                 "CME Group", "Shopify", "Some Unknown Startup"):
+        check(f"{name} is below", TB.bar_of(name, S_), TB.BELOW)
+    # Look-alikes: a listed word inside a different company.
+    for name in ("Citadel Federal Credit Union", "Citadel Credit Union", "IMC Companies",
+                 "IMC Health", "Ramp Network", "Mercury Marine", "Mercury Insurance",
+                 "Cohere Health", "Epic Systems", "Stand Together", "Uber Freight",
+                 "Intuitive Surgical", "Sierra Nevada Corporation", "Relativity",
+                 "Toyota", "Scale", "Intel 471", "Apple Bank", "Meta Materials"):
+        check(f"look-alike {name!r} is below", TB.bar_of(name, S_), TB.BELOW)
+    # Microsoft: Summer is accepted, so a Summer req is moot; a Winter one is worth it.
+    check("Microsoft Summer is below (already secured)", TB.bar_of("Microsoft", S_), TB.BELOW)
+    check("Microsoft Winter is apply", TB.bar_of("Microsoft", W_), TB.APPLY)
+    # Season: Spring 2027 is the US label for Jan-Apr; blank defaults to Summer.
+    for cyc, want in (("Winter 2027", W_), ("Spring 2027", W_),
+                      ("Winter 2027, Spring 2027", W_), ("Fall 2026, Winter 2027", W_),
+                      ("Summer 2027", S_), ("", S_), ("TBD", S_), ("Fall 2027", S_)):
+        check(f"season_of({cyc!r})", TB.season_of(cyc), want)
+    # Dependency-poor import: the coach crons import board_facts under /usr/bin/python3.
+    src = _code_only((Path(__file__).parent / "target_bar.py").read_text())
+    check("target_bar imports nothing heavy", "openpyxl" in src, False)
+
+
+def _qrec(cid, company, cycle="", status="", dead=False, disq="none", notes=""):
+    return {"_cid": cid,
+            "machine": {"company": company, "role": "Software Engineer Intern",
+                        "cycle": cycle, "dead": dead, "fit_disqualifier": disq,
+                        "url": f"https://x/{cid}", "tier": "A", "hotness": 50},
+            "human": {"status": status, "notes": notes, "priority_override": ""}}
+
+
+def test_queue_placement_partitions_the_queue():
+    print("TB2. queue_placement: every queue row lands on exactly one tab; nothing else moves")
+    from build_curated_xlsx import classify_row, queue_placement
+    import board_tabs as BT
+    cases = [  # (company, cycle, status, want_tab)
+        ("Jane Street", "Winter 2027", "", BT.TAB_WINTER),
+        ("Tesla", "Spring 2027", "", BT.TAB_WINTER),
+        ("Stripe", "Summer 2027", "", BT.TAB_SUMMER),
+        ("Netflix", "", "", BT.TAB_SUMMER),
+        ("Google", "TBD", "", BT.TAB_SUMMER),
+        ("Rippling", "Summer 2027", "", BT.TAB_BELOW),
+        ("BMO", "Winter 2027", "", BT.TAB_BELOW),
+        ("Microsoft", "Winter 2027", "", BT.TAB_WINTER),
+        ("Microsoft", "Summer 2027", "", BT.TAB_BELOW),
+        ("Microsoft", "", "", BT.TAB_BELOW),
+        # On Hold is a deliberate park: it stays on its SEASON tab whatever the bar says
+        ("Hometap", "Spring 2027", "On Hold", BT.TAB_WINTER),
+        ("Rippling", "", "On Hold", BT.TAB_SUMMER),
+        ("Amazon", "Summer 2027", "To Apply", BT.TAB_SUMMER),
+    ]
+    for i, (co, cyc, st, want) in enumerate(cases):
+        r = _qrec(f"q{i}", co, cyc, st)
+        check(f"{co} / {cyc or 'blank'} / {st or 'no status'} is a queue row",
+              classify_row(r), "queue")
+        check(f"{co} / {cyc or 'blank'} / {st or 'no status'} -> {want}",
+              queue_placement(r)[0], want)
+    # classify_row is unchanged: applications and Reviewed never reach queue_placement.
+    check("an Applied below-bar row is still an application",
+          classify_row(_qrec("a", "Rippling", "Summer 2027", "Applied")), "application")
+    check("a Skip accept-bar row is still Reviewed",
+          classify_row(_qrec("b", "Google", "Summer 2027", "Skip")), "reviewed")
+    check("a disqualified accept-bar row is still Reviewed",
+          classify_row(_qrec("c", "Google", "Summer 2027", disq="phd-required")), "reviewed")
+    check("a dead, note-less row is still dropped",
+          classify_row(_qrec("d", "Google", "Summer 2027", dead=True)), "drop")
+
+
+class _FakeSheet:
+    """In-memory Google Sheet: just enough of the API surface write_board touches."""
+    def __init__(self):
+        self.tabs, self.next_id, self.calls = {}, 100, []
+
+    def add(self, title, rows):
+        self.tabs[title] = {"sheetId": self.next_id, "rows": [list(r) for r in rows]}
+        self.next_id += 1
+
+    @staticmethod
+    def _col(letters):
+        n = 0
+        for ch in letters:
+            n = n * 26 + (ord(ch) - 64)
+        return n - 1
+
+    def _parse(self, rng):
+        m = re.match(r"^'(.+)'!([A-Z]+)(\d+)(?::([A-Z]+)(\d*))?$", rng)
+        assert m, rng
+        tab = m.group(1).replace("''", "'")
+        return tab, self._col(m.group(2)), int(m.group(3)) - 1, \
+            (self._col(m.group(4)) if m.group(4) else None), \
+            (int(m.group(5)) - 1 if m.group(5) else None)
+
+    def tab_map(self, _sid):
+        return {t: {"sheetId": v["sheetId"], "rowCount": 5000, "columnCount": 30,
+                    "frozenRowCount": 1} for t, v in self.tabs.items()}
+
+    def values_get(self, _sid, rng):
+        tab, c0, r0, c1, r1 = self._parse(rng)
+        rows = self.tabs[tab]["rows"][r0:(r1 + 1) if r1 is not None else None]
+        out = [r[c0:(c1 + 1) if c1 is not None else None] for r in rows]
+        while out and not any(str(x) for x in out[-1]):
+            out.pop()
+        return out
+
+    def values_update(self, _sid, rng, values, raw=True):
+        tab, c0, r0, _c1, _r1 = self._parse(rng)
+        grid = self.tabs[tab]["rows"]
+        for i, vals in enumerate(values):
+            while len(grid) <= r0 + i:
+                grid.append([])
+            row = grid[r0 + i]
+            while len(row) < c0 + len(vals):
+                row.append("")
+            for j, v in enumerate(vals):
+                row[c0 + j] = v
+        return {}
+
+    def values_clear(self, _sid, rng):
+        tab, _c0, r0, _c1, r1 = self._parse(rng)
+        grid = self.tabs[tab]["rows"]
+        for i in range(r0, min((r1 + 1) if r1 is not None else len(grid), len(grid))):
+            grid[i] = []
+        return {}
+
+    def batch_update(self, _sid, reqs):
+        for rq in reqs:
+            self.calls.append(next(iter(rq)))
+            if "updateSheetProperties" in rq:
+                p = rq["updateSheetProperties"]["properties"]
+                if "title" in p:
+                    old = next(t for t, v in self.tabs.items() if v["sheetId"] == p["sheetId"])
+                    self.tabs[p["title"]] = self.tabs.pop(old)
+            elif "addSheet" in rq:
+                self.add(rq["addSheet"]["properties"]["title"], [])
+        return {}
+
+
+def _render(fake, store, G):
+    """Run the REAL write_board against the fake sheet."""
+    patched = {"tab_map": fake.tab_map, "values_get": fake.values_get,
+               "values_update": fake.values_update, "values_clear": fake.values_clear,
+               "batch_update": fake.batch_update,
+               "sheet_status_options": lambda _sid=None: list(G.STATUS_OPTS),
+               "sheet_timezone": lambda _sid=None: G.SHEET_TZ,
+               "ensure_format": lambda _sid=None: fake.calls.append("ENSURE_FORMAT")}
+    saved = {k: getattr(G, k) for k in patched}
+    try:
+        for k, v in patched.items():
+            setattr(G, k, v)
+        return G.write_board(store, sheet_id="fake", generated_at="t")
+    finally:
+        for k, v in saved.items():
+            setattr(G, k, v)
+
+
+def _tab_ids(fake, tab):
+    rows = fake.tabs.get(tab, {}).get("rows", [])
+    return [r[0] for r in rows[1:] if r and r[0]]
+
+
+def test_write_board_migrates_the_queue_tab_losslessly():
+    print("TB3. write_board: Apply Now -> Winter/Summer/Below Bar, renamed not lost, "
+          "every row exactly once")
+    import build_curated_gsheet as G
+    import board_tabs as BT
+    from build_curated_xlsx import QUEUE_HEADERS
+    store_recs = [
+        _qrec("js-w", "Jane Street", "Winter 2027"),
+        _qrec("stripe-s", "Stripe", "Summer 2027"),
+        _qrec("google-s", "Google", ""),
+        _qrec("ripp-s", "Rippling", "Summer 2027"),
+        _qrec("bmo-w", "BMO", "Winter 2027"),
+        _qrec("msft-w", "Microsoft", "Winter 2027"),
+        _qrec("msft-s", "Microsoft", "Summer 2027"),
+        _qrec("home-w", "Hometap", "Spring 2027", status="On Hold"),
+        _qrec("app-1", "Rippling", "Summer 2027", status="Applied"),
+        _qrec("skip-1", "Google", "Summer 2027", status="Skip"),
+        _qrec("disq-1", "Google", "Summer 2027", disq="phd-required"),
+        _qrec("dead-1", "Google", "Summer 2027", dead=True),
+    ]
+    store = {r["_cid"]: {"machine": r["machine"], "human": r["human"]} for r in store_recs}
+
+    fake = _FakeSheet()
+    # The pre-migration sheet: the legacy queue tab holds an edit he typed on his phone
+    # (Notes + Priority on Stripe) that the store has never seen.
+    legacy = [list(QUEUE_HEADERS)]
+    for cid in ("stripe-s", "js-w"):
+        row = [""] * len(QUEUE_HEADERS)
+        row[0] = cid
+        row[QUEUE_HEADERS.index("Status")] = "To Apply"
+        if cid == "stripe-s":
+            row[QUEUE_HEADERS.index("Notes")] = "typed on my phone"
+            row[QUEUE_HEADERS.index("Priority")] = "P1"
+        legacy.append(row)
+    fake.add(BT.LEGACY_QUEUE, legacy)
+    legacy_sid = fake.tabs[BT.LEGACY_QUEUE]["sheetId"]
+    fake.add(BT.TAB_APPS, [list(G._HEADERS[BT.TAB_APPS])])
+    fake.add(BT.TAB_REVIEWED, [list(G._HEADERS[BT.TAB_REVIEWED])])
+    fake.add(BT.TAB_META, [])
+
+    res = _render(fake, store, G)
+
+    check("the legacy tab is gone", BT.LEGACY_QUEUE in fake.tabs, False)
+    check("Apply - Winter IS the legacy tab, renamed (same sheetId, formatting kept)",
+          fake.tabs[BT.TAB_WINTER]["sheetId"], legacy_sid)
+    check("Summer and Below Bar were created",
+          all(t in fake.tabs for t in (BT.TAB_SUMMER, BT.TAB_BELOW)), True)
+    check("ensure_format ran because the layout changed", fake.calls.count("ENSURE_FORMAT"), 1)
+
+    placed = {t: _tab_ids(fake, t) for t in BT.TABS}
+    every = [cid for ids in placed.values() for cid in ids]
+    check("no row is written to two tabs", len(every), len(set(every)))
+    check("every non-dropped row is on the board",
+          sorted(every), sorted(c for c in store if c != "dead-1"))
+    check("Winter tab", sorted(placed[BT.TAB_WINTER]), ["home-w", "js-w", "msft-w"])
+    check("Summer tab", sorted(placed[BT.TAB_SUMMER]), ["google-s", "stripe-s"])
+    check("Below Bar", sorted(placed[BT.TAB_BELOW]), ["bmo-w", "msft-s", "ripp-s"])
+    check("My Applications unchanged", placed[BT.TAB_APPS], ["app-1"])
+    check("Reviewed unchanged", sorted(placed[BT.TAB_REVIEWED]), ["disq-1", "skip-1"])
+    check("accept-bar Google sorts above apply-bar Stripe on Summer",
+          placed[BT.TAB_SUMMER], ["google-s", "stripe-s"])
+
+    # The phone edit on the legacy tab survived the migration onto the Summer tab.
+    srow = next(r for r in fake.tabs[BT.TAB_SUMMER]["rows"] if r and r[0] == "stripe-s")
+    check("legacy-tab Notes edit carried onto the Summer tab",
+          srow[QUEUE_HEADERS.index("Notes")], "typed on my phone")
+    check("legacy-tab Priority edit carried onto the Summer tab",
+          srow[QUEUE_HEADERS.index("Priority")], "P1")
+    check("the late read-back returns the legacy edit for the store",
+          res["human"].get("stripe-s", {}).get("notes"), "typed on my phone")
+    brow = next(r for r in fake.tabs[BT.TAB_BELOW]["rows"] if r and r[0] == "ripp-s")
+    check("Below Bar renders the To Apply default, never a machine status",
+          brow[QUEUE_HEADERS.index("Status")], "To Apply")
+
+    meta = {r[0]: r[1] for r in fake.tabs[BT.TAB_META]["rows"] if len(r) > 1}
+    check("_meta queue = Winter + Summer", meta.get("queue"), 5)
+    check("_meta below_bar", meta.get("below_bar"), 3)
+
+    # Second run: idempotent — no rename, no new tab, no forced ensure_format.
+    fake.calls.clear()
+    _render(fake, store, G)
+    check("second run: no layout change, no ensure_format",
+          ("ENSURE_FORMAT" in fake.calls, "addSheet" in fake.calls), (False, False))
+    check("second run: same placement", {t: sorted(_tab_ids(fake, t)) for t in BT.TABS},
+          {t: sorted(v) for t, v in placed.items()})
+
+
+def test_board_py_imports_the_repo_modules_and_new_tabs():
+    print("TB5. board.py / curate.py import THIS directory's modules; board.py uses board_tabs")
+    import board_tabs as BT
+    here = Path(__file__).resolve().parent
+    for fname in ("board.py", "curate.py"):
+        code = _code_only((here / fname).read_text())
+        check(f"{fname} never PREPENDS the vault Scripts/ (stale copies shadowed this dir)",
+              bool(re.search(r"sys\.path\.insert\(0,\s*str\((VAULT|VAULT_SCRIPTS)", code)),
+              False)
+    import board
+    check("board.TABS is board_tabs.TABS", board.TABS, BT.TABS)
+    check("board.py's Sheet module is this directory's",
+          Path(board.G.__file__).resolve().parent, here)
+    check("no module still names the pre-split TAB_QUEUE",
+          any("TAB_QUEUE" in _code_only((here / n).read_text())
+              for n in ("board.py", "curate.py", "build_curated_gsheet.py", "board_facts.py")),
+          False)
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -1804,7 +2122,11 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_worklist_computes_ai_native_at_the_edge,
            test_show_answers_instead_of_refusing,
            test_board_facts_reads_everything_and_derives_the_vocabulary,
-           test_board_reads_whole_tabs):
+           test_board_reads_whole_tabs,
+           test_target_bar_names_and_collisions,
+           test_queue_placement_partitions_the_queue,
+           test_write_board_migrates_the_queue_tab_losslessly,
+           test_board_py_imports_the_repo_modules_and_new_tabs):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

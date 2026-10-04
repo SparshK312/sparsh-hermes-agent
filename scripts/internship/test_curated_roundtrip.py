@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import store_paths  # noqa: E402
 VAULT = store_paths.vault_root()
-sys.path.insert(0, str(VAULT / "Scripts"))
+sys.path.append(str(VAULT / "Scripts"))  # 2026-10-04: append, never prepend — the vault held stale copies that shadowed this dir
 
 from openpyxl import load_workbook
 from build_curated_xlsx import check_lock, classify_row, read_back_human, write_board, ID_HEADER
