@@ -280,6 +280,9 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # Vault-sync watchdog (2026-10-05): pending uploads + error rate + Mac heartbeat.
   cp scripts/cron/sync_watchdog.sh ~/.hermes/scripts/sync_watchdog.sh
   chmod +x ~/.hermes/scripts/sync_watchdog.sh
+  # Hourly git snapshot of the vault (2026-10-05): history outside Obsidian Sync's quota.
+  cp scripts/cron/vault_git_snapshot.sh ~/.hermes/scripts/vault_git_snapshot.sh
+  chmod +x ~/.hermes/scripts/vault_git_snapshot.sh
   # RETIRED 2026-08-26: internship_watch.sh -> internship_triage.py, the legacy
   # frontier watcher. Its cron job (internship-watcher) was disabled and last ran
   # 2026-06-21; the job record is removed and both files are deleted. Nothing
