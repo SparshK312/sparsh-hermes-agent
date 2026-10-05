@@ -213,6 +213,12 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   cp scripts/cron/hae_sync.sh              ~/.hermes/scripts/health_hae_sync.sh
   cp scripts/cron/prep_nudge.sh            ~/.hermes/scripts/prep_nudge.sh
   chmod +x ~/.hermes/scripts/health_*.sh ~/.hermes/scripts/prep_nudge.sh
+  # Hermes-only vault context (2026-10-05). Hermes loads the FIRST of .hermes.md >
+  # AGENTS.md > CLAUDE.md from its cwd (/home/hermes/vault); until now that was the Mac's
+  # 56 KB CLAUDE.md — ~63% of every Hermes prompt, mostly Mac-only and stale. A dotfile, so
+  # Obsidian Sync never touches it. Gated: a flagged file would load as [BLOCKED].
+  cp vault-context/.hermes.md /home/hermes/vault/.hermes.md
+  ~/.hermes/hermes-agent/venv/bin/python scripts/vault/check_context_file.py /home/hermes/vault/.hermes.md
   # HAE wearable-bridge python (Phase 3): the always-on listener (run by the
   # hae-ingest.service systemd unit) + the raw->CSV processor + the CSV->daily-
   # note-frontmatter ingester (both run by the hae-sync cron). Mirrored here so
