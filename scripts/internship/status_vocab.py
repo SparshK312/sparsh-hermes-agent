@@ -84,5 +84,9 @@ STATUS_RANK = {"Offer": 0, "Final Round - Sat": 1, "Onsite": 2,
                "OA - To Do": 5, "OA - Done": 6,
                "Recruiter Outreach": 7, "Networking": 8,
                "Applied": 9, "On Hold": 10,
-               "Rejected after Interview": 11, "Rejected after OA": 12, "Rejected": 13}
+               "Rejected after Interview": 11, "Rejected after OA": 12, "Rejected": 13,
+               # 2026-10-05: an APPLIED row can now carry a Reviewed status and stay on
+               # My Applications (classify_row). Settled-by-him sorts at the very bottom,
+               # under the rejections; on Reviewed these ranks are never consulted.
+               "Closed": 14, "Skip": 15, "Not a Fit": 16}
 UNKNOWN_RANK = STATUS_RANK["Applied"]

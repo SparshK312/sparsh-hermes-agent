@@ -2145,6 +2145,55 @@ def test_board_fanout_is_bounded_and_queueing_is_not_a_timeout():
     check("waiting for our own pool is not a 12s failure", (A.HTTP_TIMEOUT.pool or 999) >= 60, True)
     check("the connect timeout survives an opening burst", A.HTTP_TIMEOUT.connect >= 10, True)
 
+# ── A SETTLED APPLICATION STAYS ON MY APPLICATIONS (2026-10-05) ─────────────────
+# Skip / Not a Fit / Closed used to mean only "looked at it, never applied", so every
+# one routed to Reviewed. Sparsh skipped the Snowflake Database OA (not the
+# application) and four Microsoft applications closed when he accepted a different
+# Microsoft role: "i didn't skip the application, i only just skipped the OA… i still
+# applied in the first place." The applied_date is the evidence of an application.
+def test_settled_applications_stay_on_my_applications():
+    print("SA1. Skip / Not a Fit / Closed on an APPLIED row stays on My Applications")
+    from build_curated_xlsx import (classify_row, REVIEWED_STATUSES, STATUS_RANK,
+                                    STATUS_OPTS, REJECTED_STATUSES)
+    reviewed = [s for s in STATUS_OPTS if s.lower() in REVIEWED_STATUSES]
+    check("the settled statuses are exactly Skip / Not a Fit / Closed",
+          sorted(reviewed), ["Closed", "Not a Fit", "Skip"])
+    for st in reviewed:
+        applied = {"machine": {"company": "Snowflake", "role": "SWE Intern"},
+                   "human": {"status": st, "applied_date": "2026-09-26", "notes": ""}}
+        never = {"machine": {"company": "Snowflake", "role": "SWE Intern"},
+                 "human": {"status": st, "applied_date": "", "notes": ""}}
+        dead_applied = {"machine": {"company": "Microsoft", "role": "SWE Intern", "dead": True},
+                        "human": {"status": st, "applied_date": "2026-09-18", "notes": ""}}
+        check(f"applied + {st} -> application", classify_row(applied), "application")
+        check(f"never applied + {st} -> reviewed (unchanged)", classify_row(never), "reviewed")
+        check(f"applied + {st} + posting dead -> still an application",
+              classify_row(dead_applied), "application")
+        check(f"{st} has a rank (else it sorts as Applied)", st in STATUS_RANK, True)
+        check(f"{st} sorts below every rejection",
+              STATUS_RANK[st] > max(STATUS_RANK[r] for r in REJECTED_STATUSES), True)
+    # whitespace-only is not an applied date
+    blank = {"machine": {"company": "X", "role": "Y"},
+             "human": {"status": "Closed", "applied_date": "   ", "notes": ""}}
+    check("a whitespace applied_date is not evidence of applying", classify_row(blank), "reviewed")
+    # the Sheet's own router puts it on the right tab
+    import build_curated_gsheet as G
+    store = {"a": {"machine": {"company": "Microsoft", "role": "PM Intern", "url": "https://x/a"},
+                   "human": {"status": "Closed", "applied_date": "2026-09-24", "notes": "",
+                             "priority_override": ""}},
+             "b": {"machine": {"company": "Acme", "role": "SWE Intern", "url": "https://x/b"},
+                   "human": {"status": "Closed", "applied_date": "", "notes": "",
+                             "priority_override": ""}}}
+    try:
+        b = G._route(store)
+        apps = [r["_cid"] for r in b[G.TAB_APPS]]
+        rev = [r["_cid"] for r in b[G.TAB_REVIEWED]]
+        check("_route: applied Closed lands on My Applications", "a" in apps and "a" not in rev, True)
+        check("_route: never-applied Closed lands on Reviewed", "b" in rev and "b" not in apps, True)
+    except Exception as exc:  # noqa: BLE001
+        check(f"_route ran ({type(exc).__name__}: {exc})", False, True)
+
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -2188,7 +2237,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_queue_placement_partitions_the_queue,
            test_write_board_migrates_the_queue_tab_losslessly,
            test_board_py_imports_the_repo_modules_and_new_tabs,
-           test_board_fanout_is_bounded_and_queueing_is_not_a_timeout):
+           test_board_fanout_is_bounded_and_queueing_is_not_a_timeout,
+           test_settled_applications_stay_on_my_applications):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

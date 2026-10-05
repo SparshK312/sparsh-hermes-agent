@@ -111,8 +111,10 @@ def classify_row(rec: dict) -> str:
     """Which sheet a posting belongs on: 'queue' | 'application' | 'reviewed' | 'drop'.
     - queue:       live, still 'To Apply' (machine-ranked discovery).
     - application: any real application status (Applied/OA/Onsite/Offer/Rejected/...).
-    - reviewed:    Skip/Not-a-Fit you set, OR a posting that went stale while you had a
-                   note on it (so your note is never silently lost — that's the whole point).
+    - reviewed:    Skip/Not-a-Fit/Closed you set on a row you never applied to, OR a posting
+                   that went stale while you had a note on it (so your note is never
+                   silently lost — that's the whole point). An APPLIED row (it has an
+                   applied_date) with one of those statuses stays an 'application'.
     - drop:        stale with no note and no status -> off the board (still kept in JSON).
     """
     m, h = rec.get("machine", {}), rec.get("human", {})
@@ -131,6 +133,17 @@ def classify_row(rec: dict) -> str:
     status = (h.get("status") or "").strip().lower()
     note = (h.get("notes") or "").strip()
     if status in REVIEWED_STATUSES:
+        # 🔴 A SETTLED APPLICATION IS STILL AN APPLICATION (added 2026-10-05).
+        # Skip / Not a Fit / Closed were defined as "I looked at this and did NOT apply",
+        # so they always routed to Reviewed. That is wrong once he HAS applied: he skipped
+        # the Snowflake Database OA (not the application), and four Microsoft applications
+        # closed because he accepted a different Microsoft role. Sparsh: "i didn't skip
+        # the application, i only just skipped the OA… i still applied in the first
+        # place." The applied_date is the evidence he applied (board.py and the
+        # read-back both write it), so with one present the row stays on My
+        # Applications, sorted below the rejections. Without one, nothing changes.
+        if str(h.get("applied_date") or "").strip():
+            return "application"
         return "reviewed"
     # "On Hold" = parked before applying (e.g. waiting on a referral) -> stays in the
     # queue, NOT the applications sheet (nothing has actually been applied to yet).
