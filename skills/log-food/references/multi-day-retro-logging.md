@@ -16,7 +16,7 @@ The user provides meals from multiple days (often a weekend catchup or a few day
 1. Remove the meal from June 23 by reverting its frontmatter totals (or calling `vault_log.py undo-last-meal`).
 2. Re-insert the meal into June 21's food log with the same macros.
 3. Update both date files' frontmatter totals.
-4. Append a `Log.md` entry flagging the correction: `## [YYYY-MM-DD] update | log-food — sushi lunch corrected to 2026-06-21 (was mistakenly logged to 2026-06-23)`
+4. Append a log entry (`log_append.py`) flagging the correction: `## [YYYY-MM-DD] update | log-food — sushi lunch corrected to 2026-06-21 (was mistakenly logged to 2026-06-23)`
 
 **Key rule:** When the user provides a date correction, it overrides the agent's inferred/assumed date. Ask immediately if the intended date is ambiguous ("Is that lunch on Sunday (21st) or Monday (22nd)?") rather than assuming and fixing it later.
 
@@ -53,7 +53,7 @@ If the user says "No, the sushi was on Sunday not Monday", revert:
 1. **Identify the mistaken entry.** Find it in the food log for the wrong date (e.g., June 23).
 2. **Call `vault_log.py undo-last-meal`** to remove it and revert the daily-note totals.
 3. **Re-log to the correct date** using `vault_log.py food --date 2026-06-21 ...`.
-4. **Append a Log.md correction line:**
+4. **Append a log correction entry (`log_append.py`):**
    ```
    ## [2026-06-23] update | log-food — sushi lunch corrected to 2026-06-21 (was logged to 2026-06-23 in error)
    ```

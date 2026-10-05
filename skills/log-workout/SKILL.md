@@ -230,13 +230,13 @@ Run it via `terminal` (note the **fitness venv** — the muscle card needs `cair
 
 ## Log the change
 
-Skip Log.md for routine workout logs — the workout file IS the canonical record. Log.md only gets an entry for first-of-day workout creation:
+Skip the log for routine workout logs — the workout file IS the canonical record. The log only gets an entry for first-of-day workout creation:
 
 ```
 ## [YYYY-MM-DD] ingest | 07 - Health/Workouts/<date>.md — <split> session started (N exercises so far)
 ```
 
-Subsequent updates within the same session: no Log.md entry needed.
+Subsequent updates within the same session: no log entry needed.
 
 ## Pitfalls
 

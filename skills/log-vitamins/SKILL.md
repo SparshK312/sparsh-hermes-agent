@@ -72,7 +72,7 @@ Do **not** use for medications (prescription drugs) — those need a different f
 
 ## Log the change
 
-Skip Log.md — routine adherence event.
+Skip the log — routine adherence event.
 
 ## Pitfalls
 

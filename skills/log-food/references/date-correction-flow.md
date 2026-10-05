@@ -9,5 +9,5 @@ Rules:
 - Move the existing entry to the corrected date in place; do **not** create a second copy.
 - Recompute the source day and target day totals from the file contents after the move.
 - If the wrong-day note/log was already created, restore that day to a blank/zeroed state rather than leaving a phantom entry behind.
-- Append the matching `Log.md` audit line in the same pass.
+- Append the matching log audit entry (`log_append.py`) in the same pass.
 - Verify both files render with exactly one frontmatter block and that totals match the moved macros.

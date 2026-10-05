@@ -8,7 +8,7 @@ Use when the user corrects a meal *after* it has already been confirmed or logge
 - Rewrite the existing meal entry in the food log in place.
 - Recompute that meal's macros.
 - Update daily-note totals by delta.
-- Append a Log.md correction entry.
+- Append a log correction entry (`log_append.py`).
 - Only create a second entry if the user explicitly says it is an addition.
 
 ## Examples

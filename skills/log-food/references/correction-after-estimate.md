@@ -12,7 +12,7 @@ Use this pattern when the user corrects a meal after it has already been logged 
 2. Rewrite the existing food-log entry in place.
 3. Recompute that meal's macros from the clarified items.
 4. Update today's daily-note totals by the delta from the old estimate.
-5. Append a short correction/update entry to `Log.md`.
+5. Append a short correction/update log entry with `log_append.py`.
 
 ## Do not
 - Do not append a second meal entry unless the user explicitly says it was an addition.

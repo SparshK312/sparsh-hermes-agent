@@ -52,7 +52,7 @@ When a material state shift affects more than one dashboard, update the source o
 
 - If a build/setup goal is already complete, reflect it in the relevant master context note and remove or convert stale backlog items that still treat it as pending.
 - If a priority changes materially, don't just add a new bullet — retitle the relevant section/stream to match the new urgency so the dashboard reads correctly at a glance.
-- Always append the matching `Log.md` entry in the same edit pass.
+- Always append the matching log entry (`log_append.py`) in the same edit pass.
 
 ### `00 - Dashboard/Action Items.md`
 
@@ -188,11 +188,13 @@ After any write:
 
 ## Log the Change (Karpathy LLM Wiki convention)
 
-After every successful vault write (excluding trivial edits — typo fixes, formatting-only, single-character changes), append a one-line entry to `$VAULT/Log.md`:
+After every successful vault write (excluding trivial edits — typo fixes, formatting-only, single-character changes), append ONE log entry. Since 2026-10-05 the log is **one file per day** (`Log/YYYY/YYYY-MM/YYYY-MM-DD.md`) and `Log.md` is a MOVED stub — **never write to `Log.md`, never hand-edit a day file.** Use the script; it picks the day file, takes a lock, and enforces the format:
 
+```bash
+python3 /home/hermes/.hermes/scripts/vault/log_append.py <action> "<scope>" "<one-line summary>" --body "optional markdown body"
 ```
-## [YYYY-MM-DD] <action> | <scope> — <one-line summary>
-```
+
+It writes `## [YYYY-MM-DD] <action> | <scope> — <one-line summary>` (+ body) and prints the file path.
 
 **Action vocabulary:**
 - `ingest` — new file created in the wiki layer (dashboard, MOC, context doc, internship folder, archive doc)
@@ -200,26 +202,19 @@ After every successful vault write (excluding trivial edits — typo fixes, form
 - `decision` — decision recorded for the first time
 - `archive` — file moved to `05 - Archive/`
 - `lint` — health-check pass results
-- `schema` — change to `CLAUDE.md`, `Index.md`, `Log.md`, or maintenance rules
+- `schema` — change to `CLAUDE.md`, `Index.md`, the log, or maintenance rules
 
 **Scope** is the human-readable name of what changed: `Grade Tracker`, `Internship Pipeline`, `Shopify 2026 MOC`, `Action Items`, etc.
 
-**Hermes-invoked context:** when this skill runs from a Hermes cron job (not an interactive Claude Code session), prefix the scope with the cron job name:
+**Hermes-invoked context:** when this runs from a Hermes cron job (not an interactive session), prefix the scope with the cron job name, e.g. `hermes:daily-note-prefill`. The identifier matches the entry in `~/.hermes/cron/jobs.json`.
 
-```
-## [2026-05-12] ingest | hermes:daily-note-prefill — 2026-05-12 daily note seeded with calendar events
-## [2026-05-12] update | hermes:internship-watcher — 3 new postings appended to Internship Pipeline
-```
+**Append, never edit prior entries.** If correcting a previous entry, write a new one that references the prior date.
 
-The cron job identifier matches the entry in `~/.hermes/cron/jobs.json` (e.g., `daily-note-prefill`, `internship-watcher`).
+**When in doubt, log.** The cost of an extra entry is near zero; the cost of a missed state change is a vault that drifts from its own history.
 
-**Append, never edit prior entries.** If correcting a previous entry, write a new one that references the prior date. Order is chronological top-to-bottom; newest at bottom.
+**Verify:** `grep "^## \[" <the path the script printed> | tail -3` should show the entry you just appended.
 
-**When in doubt, log.** The cost of an extra log line is near zero; the cost of a missed state change is a vault that drifts from its own history.
-
-**Verify:** `grep "^## \[" "$VAULT/Log.md" | tail -3` should show the entry you just appended.
-
-When `Index.md` also needs updating (new file created, file archived to a new path), update both `Index.md` and `Log.md` in the same operation. See `$VAULT/CLAUDE.md` → Wiki Maintenance Rules.
+When `Index.md` also needs updating (new file created, file archived to a new path), update both `Index.md` and the log in the same operation. See `$VAULT/CLAUDE.md` → Log Rules.
 
 ## Append-Only Discipline
 

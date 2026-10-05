@@ -68,7 +68,7 @@ Do **not** use for weights of food, equipment, or anything that's not the user's
 
 ## Log the change
 
-Skip routine weight logs. **Do** log a `Log.md` entry only if the user crosses a milestone they explicitly track (e.g., first day above 180 lb during a lean bulk). Use judgment — typically don't.
+Skip routine weight logs. **Do** write a log entry (`log_append.py`) only if the user crosses a milestone they explicitly track (e.g., first day above 180 lb during a lean bulk). Use judgment — typically don't.
 
 ## Pitfalls
 

@@ -6,7 +6,7 @@ Use this pattern when the user corrects a value already written into today's dai
 - Treat the user's correction as authoritative.
 - Overwrite the specific field in the existing daily note.
 - Do not preserve the earlier placeholder or guessed value.
-- If the value was logged earlier in the same session, update the same note and append one `Log.md` line describing the correction.
+- If the value was logged earlier in the same session, update the same note and append one log entry (`log_append.py`) describing the correction.
 
 ## Examples
 - `weight: 115` → user says "that was made up" → replace with the real ending weight.

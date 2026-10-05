@@ -53,7 +53,7 @@ Do **not** use this skill for caffeinated drinks, juice, milk, protein shakes �
 
 ## Log the change
 
-Skip `Log.md` for routine hydration logs — they're high-volume and not vault-state-changing in a way Log.md cares about. (Daily notes are raw sources per the wiki rules, not wiki pages.) Only the *first* water log of a day might be worth logging if you want adherence visibility — and that's optional.
+Skip the log for routine hydration logs — they're high-volume and not vault-state-changing in a way the log cares about. (Daily notes are raw sources per the wiki rules, not wiki pages.) Only the *first* water log of a day might be worth logging if you want adherence visibility — and that's optional.
 
 ## Pitfalls
 

@@ -284,12 +284,12 @@ Then relay `vault_log`'s own confirmation line verbatim (the `Today: <kcal>/2400
 
 ## Log the change
 
-Append a `Log.md` entry — meal logs are real state changes:
-```
-## [YYYY-MM-DD] update | log-food — <meal_type> logged, <kcal> kcal / <P>g protein (source: <template/mcp/estimated>)
+Append a log entry — meal logs are real state changes. The log is one file per day; write it ONLY with the script (never append to `Log.md`):
+```bash
+python3 /home/hermes/.hermes/scripts/vault/log_append.py update "log-food" "<meal_type> logged, <kcal> kcal / <P>g protein (source: <template/mcp/estimated>)"
 ```
 
-Skip Log.md only if the log was cancelled.
+Skip the log only if the log was cancelled.
 
 ## Pitfalls
 
@@ -317,7 +317,7 @@ Skip Log.md only if the log was cancelled.
 10. **Wrong day / date rollover.** Always resolve against the live Toronto date before writing. If it is past midnight, log to the new date even when the conversation just referenced "today" or the prior meal.
 10b. **Explicit date corrections beat the current day.** If the user says a meal belongs to yesterday / another date, move the entry to the corrected day in place. If the wrong-day placeholder already got written, restore that day to blank/zeroed totals rather than leaving a phantom entry behind. See `references/date-correction-flow.md`.
 11. **Frontmatter integer vs float.** kcal should be int. protein_g/carbs_g/fat_g should be int (round to nearest gram). water_l is float (1 decimal).
-12. **Time-only corrections are edits, not new meals.** If the user later says the logged meal happened at a different time (for example, "Lunch was at 2:30 pm"), update the existing food-log section header and append a correction line to Log.md. Do **not** create a second meal entry or recompute macros unless the food itself changed.
+12. **Time-only corrections are edits, not new meals.** If the user later says the logged meal happened at a different time (for example, "Lunch was at 2:30 pm"), update the existing food-log section header and append a correction log entry (`log_append.py`). Do **not** create a second meal entry or recompute macros unless the food itself changed.
 13. **Photo → notes-only anti-pattern (observed bug 2026-05-27).** When the user sends a photo with a brief caption ("Had this for breakfast"), the agent's lazy path is: call vision_analyze → save the description to the daily note's `## Notes` section → reply "Saved." → done. **THAT IS WRONG.** The macros never get written, week-summary stays empty, the failure-mode detection breaks. The correct path is: vision_analyze → synthesize items → run THIS skill end-to-end (template match → MCP search → clarify → write to BOTH Food Log file AND daily-note frontmatter `kcal`/`protein_g`/`carbs_g`/`fat_g`). The ## Notes section is for qualitative observations ("food felt heavy", "didn't like the dressing"), not the canonical macro record.
 20. **User-supplied photo reference in a correction.** If the user sends a photo in response to an estimate (e.g., "This is the nutrition sign for the pizza I had — use this instead of your guess"), the photo IS the correction authority. Ask them to read the key values aloud (calories, macros) or call `vision_analyze` immediately to extract them — do NOT re-estimate or ask a clarify menu. The photo is their evidence; trust it. Update the logged meal with the photo-sourced values and flag `source: photo-reference` in the log.
 

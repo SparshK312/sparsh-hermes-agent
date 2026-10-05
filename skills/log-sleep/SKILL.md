@@ -58,7 +58,7 @@ When the user reports last night's sleep. Examples:
 
 ## Log the change
 
-Skip routine logs. **Do** append a `Log.md` entry if sleep crosses an explicit watch-flag threshold (per Coach Memory):
+Skip routine logs. **Do** append a log entry (`log_append.py`) if sleep crosses an explicit watch-flag threshold (per Coach Memory):
 - `## [YYYY-MM-DD] update | log-sleep — sleep <X>h, under 6h flag triggered`
 
 Use sparingly; only on the threshold-trip, not every short night.
