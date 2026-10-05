@@ -131,6 +131,23 @@ if [ -f "$NUDGE" ]; then
   echo
 fi
 
+# ===== Step 0d: Vault log invariants — MUST PASS OR THE DEPLOY ABORTS =====
+# Added 2026-10-05 with the one-file-per-day log (log_append.py / log_shard.py). Every
+# agent writes the log through log_append.py; a broken writer would silently scatter or
+# drop entries on both machines, so it is gated like the board and the nudges.
+LOGT="$REPO_ROOT/scripts/vault/test_log_append.py"
+if [ -f "$LOGT" ]; then
+  echo "[0d/3] Vault log invariants..."
+  LOGT_OUT="$(python3 "$LOGT" 2>&1)"; LOGT_RC=$?
+  echo "$LOGT_OUT" | tail -2
+  if [ "$LOGT_RC" -ne 0 ]; then
+    echo "  ❌ VAULT LOG INVARIANTS FAILED (exit $LOGT_RC) — deploy aborted."
+    exit 1
+  fi
+  echo "  ✓ invariants hold"
+  echo
+fi
+
 # ===== Step 1: Push (Mac → GitHub) =====
 if [ "$DO_PUSH" = "true" ]; then
   echo "[1/3] Pushing local changes to GitHub..."

@@ -82,7 +82,7 @@ overdue_count: {n}
 
 
 def build(sess_days_ago: int, log_days_ago=None, snap_days_ago=None,
-          logmd_age_days: int = 0) -> Path:
+          logmd_age_days: int = 0, hermes_today: bool = False) -> Path:
     """A throwaway vault.
 
     `log_days_ago=None` -> Log.md holds no PREP entry.
@@ -95,12 +95,20 @@ def build(sess_days_ago: int, log_days_ago=None, snap_days_ago=None,
     (v / "09 - Systems" / "Hermes").mkdir(parents=True)
     sess = (date.today() - timedelta(days=sess_days_ago)).isoformat()
     (v / "00 - Dashboard" / "Interview Prep.md").write_text(TRACKER.format(sess=sess))
+    # 2026-10-05: the log is one file per day under Log/ (Log.md is a MOVED stub).
+    def _entry(d, text):
+        p = v / "Log" / d[:4] / d[:7] / f"{d}.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a") as f:
+            f.write(f"## [{d}] {text}\n")
+    (v / "Log.md").write_text("## [9999-12-31] schema | Log.md — MOVED\n")
     marker = (date.today() - timedelta(days=logmd_age_days)).isoformat()
-    log = f"## [{marker}] update | Action Items — unrelated day-to-day entry\n"
+    _entry(marker, "update | Action Items — unrelated day-to-day entry")
     if log_days_ago is not None:
         d = (date.today() - timedelta(days=log_days_ago)).isoformat()
-        log += f"## [{d}] update | Interview Prep / Microsoft — did a rep\n"
-    (v / "Log.md").write_text(log)
+        _entry(d, "update | Interview Prep / Microsoft — did a rep")
+    if hermes_today:
+        _entry(date.today().isoformat(), "ingest | hermes:daily-note-prefill — seeded")
     if snap_days_ago is not None:
         gen = (date.today() - timedelta(days=snap_days_ago)).isoformat()
         (v / "09 - Systems" / "Hermes" / "prep-queue-snapshot.md").write_text(
@@ -202,6 +210,20 @@ def test_the_prompt_cannot_assert_an_unknown_queue_is_clear():
 
 
 
+
+# ── HERMES'S OWN ENTRIES MUST NOT MAKE A STALE VAULT LOOK FRESH ───────────────
+# 2026-10-03/04: sync had been jammed for days, but the nudge printed "(fresh)" because
+# the newest log entry was Hermes's own daily-note-prefill line, written on the VPS.
+def test_hermes_entries_do_not_count_as_freshness():
+    print("N5. prep-nudge: a hermes: entry today does not make a 5-day-stale log fresh")
+    s = state(build(sess_days_ago=1, log_days_ago=None, snap_days_ago=0,
+                    logmd_age_days=5, hermes_today=True))
+    line = s.get("log_md_newest_entry", "")
+    check("the Mac side is reported STALE despite a hermes: entry today", "STALE" in line, True)
+    s2 = state(build(sess_days_ago=1, log_days_ago=None, snap_days_ago=0, logmd_age_days=0))
+    check("a genuinely fresh Mac entry still reads fresh",
+          "(fresh)" in s2.get("log_md_newest_entry", ""), True)
+
 # ── THE MORNING EMAIL TRIAGE MUST SEE EVERY APPLICATION ───────────────────────
 # 2026-10-04. email_triage.live_applications() read "My Applications!A1:K60" while the
 # tab held 189 rows, so 130 applications (Amazon, Google, Microsoft, Palantir…) were
@@ -258,7 +280,8 @@ for fn in (test_prep_nudge_reads_the_files_that_are_actually_updated,
            test_prep_nudge_validates_its_own_input,
            test_prep_nudge_never_calls_an_unread_queue_empty,
            test_the_prompt_cannot_assert_an_unknown_queue_is_clear,
-           test_email_triage_reads_every_application):
+           test_email_triage_reads_every_application,
+           test_hermes_entries_do_not_count_as_freshness):
     try:
         fn()
     except Exception as exc:  # noqa: BLE001

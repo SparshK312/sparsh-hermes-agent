@@ -106,15 +106,33 @@ log_dates = dates_in(section("Session log"))
 # two sessions. The table is curated by hand when someone remembers; Log.md is appended
 # by every session as it happens. Take the LATER of the two and say which one it came
 # from, so a disagreement is visible instead of silently resolved the wrong way.
+# 🔴 2026-10-05: the log is ONE FILE PER DAY (Log/YYYY/YYYY-MM/YYYY-MM-DD.md); Log.md is a
+# MOVED stub. Read the recent day files (plus the stub, which log_append --sweep empties).
+# 🔴 FRESHNESS MUST COME FROM THE MAC, NOT FROM HERMES. On 2026-10-03 this reported
+# "log fresh" on a vault three days stale, because the newest entry was Hermes's OWN
+# `hermes:daily-note-prefill` line, written on this machine. An entry this box wrote
+# proves nothing about whether the Mac's writes are arriving. So `newest` ignores
+# `hermes:` scopes; the prep dates still count every writer.
+LOG_LOOKBACK_DAYS = 60
+def _log_text():
+    parts = []
+    stub = V / "Log.md"
+    if stub.exists():
+        parts.append(stub.read_text("utf-8", "ignore"))
+    d = V / "Log"
+    if d.is_dir():
+        cutoff = (today - datetime.timedelta(days=LOG_LOOKBACK_DAYS)).isoformat()
+        for p in sorted(d.glob("*/*/????-??-??.md")):
+            if p.stem >= cutoff:
+                parts.append(p.read_text("utf-8", "ignore"))
+    return "\n".join(parts)
+
 def _log_prep_dates():
-    try:
-        raw = (V / "Log.md").read_bytes()[-900_000:].decode("utf-8", "ignore")
-    except Exception:
-        return [], None
+    raw = _log_text()
     out, newest = [], None
     for m in re.finditer(r"^## \[(20\d\d-\d{2}-\d{2})\]\s+(\w+)\s+\|([^\n]*)", raw, re.M):
         d, action, scope = m.group(1), m.group(2), m.group(3)
-        if newest is None or d > newest:
+        if not scope.strip().lower().startswith("hermes:") and (newest is None or d > newest):
             newest = d
         if re.search(r"interview prep|prep\b", scope, re.I) and action in ("update", "ingest"):
             out.append(d)
