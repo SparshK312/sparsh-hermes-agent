@@ -224,6 +224,60 @@ def test_hermes_entries_do_not_count_as_freshness():
     check("a genuinely fresh Mac entry still reads fresh",
           "(fresh)" in s2.get("log_md_newest_entry", ""), True)
 
+
+# ── THE SYNC WATCHDOG ALERTS ON STATE CHANGE AND CATCHES WHAT ACTUALLY JAMMED ──
+# 2026-10-05. Obsidian Sync was jammed most of Sep 14 → Oct 5 and nothing noticed; the
+# client never logs "limit exceeded" and kept printing "Fully synced". The watchdog reads
+# pending uploads + the error rate + the Mac heartbeat instead.
+def test_sync_watchdog():
+    print("W1. sync_watchdog: pending uploads + error rate detected; alerts only on change")
+    import sqlite3, os as _os
+    sys.path.insert(0, str(HERE.parent / "monitor"))
+    import sync_watchdog as W
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    now = _dt(2026, 10, 5, 20, 0, tzinfo=_tz.utc)
+    d = Path(tempfile.mkdtemp())
+    db = d / "state.db"
+    c = sqlite3.connect(db)
+    c.execute("create table local_files (path text primary key, data text not null)")
+    old_ms = int((now - _td(hours=5)).timestamp() * 1000)
+    new_ms = int((now - _td(minutes=5)).timestamp() * 1000)
+    rows = [("Log/2026/2026-10/2026-10-05.md", {"hash": "a", "synchash": "b", "mtime": old_ms}),
+            ("fresh.md", {"hash": "a", "synchash": "b", "mtime": new_ms}),
+            ("synced.md", {"hash": "a", "synchash": "a", "mtime": old_ms}),
+            ("Folder", {"folder": True, "hash": "", "synchash": ""})]
+    for p, dd in rows:
+        c.execute("insert into local_files values (?,?)", (p, json.dumps(dd)))
+    c.commit(); c.close()
+    pend = dict(W.pending_uploads(db, now))
+    check("a 5-hour-old unsynced change is pending", round(pend.get("Log/2026/2026-10/2026-10-05.md", 0)), 300)
+    check("a synced file is not pending", "synced.md" in pend, False)
+    log = d / "sync.log"
+    lines = [f"[{(now - _td(minutes=m)).strftime('%Y-%m-%dT%H:%M:%S')}.000Z] Sync error: {{}}" for m in range(0, 55, 5)]
+    lines += [f"[{(now - _td(hours=3)).strftime('%Y-%m-%dT%H:%M:%S')}.000Z] Sync error: {{}}"] * 30
+    lines += [f"[{now.strftime('%Y-%m-%dT%H:%M:%S')}.000Z] Fully synced"]
+    log.write_text("\n".join(lines) + "\n")
+    check("errors counted only within the last hour", W.errors_last_hour(log, now), 11)
+    # alert state machine
+    check("ok -> bad alerts", W.decide({}, ["x"], now), "alert")
+    check("still bad within 12h is silent", W.decide({"bad": True, "last_alert": (now - _td(hours=2)).isoformat()}, ["x"], now), None)
+    check("still bad after 12h re-alerts", W.decide({"bad": True, "last_alert": (now - _td(hours=13)).isoformat()}, ["x"], now), "realert")
+    check("bad -> ok says recovered", W.decide({"bad": True}, [], now), "recovered")
+    check("ok -> ok is silent", W.decide({"bad": False}, [], now), None)
+    # echo is write-if-changed
+    echo = d / "Sync Echo.md"
+    check("first sight of a nonce writes the echo", W.write_echo(echo, "abc123", now), True)
+    check("the same nonce never rewrites it (no Sync version per run)", W.write_echo(echo, "abc123", now + _td(minutes=30)), False)
+    hb = d / "hb.md"
+    hb.write_text("---\ntype: reference\n---\nts: 2026-10-05T18:00:00+00:00\nnonce: abc123\n")
+    when, nonce = W.read_heartbeat(hb)
+    check("heartbeat parsed", (when.isoformat() if when else None, nonce), ("2026-10-05T18:00:00+00:00", "abc123"))
+    # log rotation keeps the tail
+    big = d / "big.log"
+    big.write_bytes(b"x" * (W.LOG_MAX_BYTES + 10) + b"\nTAIL")
+    check("rotates past the cap", W.rotate(big), True)
+    check("keeps the most recent bytes", big.read_bytes().endswith(b"TAIL") and big.stat().st_size == W.LOG_KEEP_BYTES, True)
+
 # ── THE MORNING EMAIL TRIAGE MUST SEE EVERY APPLICATION ───────────────────────
 # 2026-10-04. email_triage.live_applications() read "My Applications!A1:K60" while the
 # tab held 189 rows, so 130 applications (Amazon, Google, Microsoft, Palantir…) were
@@ -281,7 +335,8 @@ for fn in (test_prep_nudge_reads_the_files_that_are_actually_updated,
            test_prep_nudge_never_calls_an_unread_queue_empty,
            test_the_prompt_cannot_assert_an_unknown_queue_is_clear,
            test_email_triage_reads_every_application,
-           test_hermes_entries_do_not_count_as_freshness):
+           test_hermes_entries_do_not_count_as_freshness,
+           test_sync_watchdog):
     try:
         fn()
     except Exception as exc:  # noqa: BLE001

@@ -247,7 +247,7 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # by name; db_snapshot.py was added to this directory a day later, was not
   # excluded, and became exactly the "never-executed decoy" the comment warns
   # about. Anything that runs from /usr/local/bin must NOT be mirrored here.
-  for _f in cost_monitor.py; do
+  for _f in cost_monitor.py sync_watchdog.py; do
     [ -f "scripts/monitor/\$_f" ] && cp "scripts/monitor/\$_f" ~/.hermes/scripts/monitor/
   done
   cp scripts/cron/cost_monitor.sh          ~/.hermes/scripts/cost_monitor.sh
@@ -277,6 +277,9 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   chmod +x ~/.hermes/scripts/email/email_triage.py
   cp scripts/cron/email_triage.sh ~/.hermes/scripts/email_triage.sh
   chmod +x ~/.hermes/scripts/email_triage.sh
+  # Vault-sync watchdog (2026-10-05): pending uploads + error rate + Mac heartbeat.
+  cp scripts/cron/sync_watchdog.sh ~/.hermes/scripts/sync_watchdog.sh
+  chmod +x ~/.hermes/scripts/sync_watchdog.sh
   # RETIRED 2026-08-26: internship_watch.sh -> internship_triage.py, the legacy
   # frontier watcher. Its cron job (internship-watcher) was disabled and last ran
   # 2026-06-21; the job record is removed and both files are deleted. Nothing
