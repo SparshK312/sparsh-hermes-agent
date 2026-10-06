@@ -55,9 +55,11 @@ Reading the table: `Hot` (brand tier × recency) is the priority signal across c
 python board.py applied  "<match>" --notes "..."                       # Applied + today's date
 python board.py status   "<match>" "Rejected after OA" --notes "..."   # any status
 python board.py status   "<match>" "OA - To Do" --due 2026-09-25       # a deadline he owes
-python board.py note     "<match>" "<text>"                            # replaces Notes
+python board.py note     "<match>" "<text>"                            # PREPENDS to Notes (--replace to overwrite)
 python board.py priority "<match>" P0|P1|P2|P3|clear --notes "..."
 ```
+
+**Notes are prepended, never replaced (since 2026-10-06).** `note` and every `--notes` write `<new> || <old notes>`, then read the cell back from the Sheet and exit 1 on a mismatch. Pass only the NEW text; never paste the old notes in. `--replace` overwrites; `note <match> "" --replace` clears. *(On 2026-10-05 three `note` writes wiped long triage notes because the cell was replaced.)*
 
 **A write accepts exactly one row: a unique literal match, or a unique every-word match.** Anything else is refused with exit 1 and the candidates printed **with their `id:`** — copy the one he means and re-run with it:
 

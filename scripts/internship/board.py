@@ -17,10 +17,15 @@ Human fields (Sheet owns): status · applied_date · notes · priority_override
 Machine fields (store owns): everything else — never hand-edit those.
 
 USAGE
-  board.py applied  <match> [--date YYYY-MM-DD] [--notes "..."]
-  board.py status   <match> "<Status>" [--due YYYY-MM-DD|clear] [--notes "..."]
-  board.py note     <match> "<text>"
-  board.py priority <match> <P0|P1|P2|P3|clear> [--notes "..."]
+  board.py applied  <match> [--date YYYY-MM-DD] [--notes "..."] [--replace]
+  board.py status   <match> "<Status>" [--due YYYY-MM-DD|clear] [--notes "..."] [--replace]
+  board.py note     <match> "<text>" [--replace]
+  board.py priority <match> <P0|P1|P2|P3|clear> [--notes "..."] [--replace]
+
+  NOTES ARE PREPENDED, never replaced (since 2026-10-06): `note` and every `--notes`
+  write `<new> || <old notes>`. Pass the bare new text; do NOT paste the old notes in
+  (if you do, it is detected and not doubled). `--replace` overwrites the cell, and
+  `note <match> "" --replace` clears it. Every Notes write is read back from the Sheet.
   board.py show     <match> [<match> ...]
   board.py list-live
 
@@ -68,6 +73,7 @@ from pathlib import Path
 # the same module cannot shadow it.
 from build_curated_xlsx import STATUS_OPTS  # noqa: E402
 from board_match import find_by_id, find_rows  # noqa: E402
+from board_notes import merge_notes, WARN_AT  # noqa: E402
 
 # 🔴 2026-10-04: this file used to PREPEND the vault's Scripts/ to sys.path here, and
 # that folder held a STALE copy of build_curated_gsheet.py (Sep 4, still hardcoding the
@@ -194,6 +200,36 @@ def _set(tab: str, row: int, headers: list, field: str, value: str) -> None:
     G.values_update(G.SHEET_ID_DEFAULT, f"{G._q(tab)}!{col}{row}", [[value]])
 
 
+def _write_notes(tab: str, row: int, headers: list, old: str, text: str) -> None:
+    """Every Notes write goes through here. Prepends unless --replace (board_notes.py has
+    the rule and the 2026-10-05 incident), then READS THE CELL BACK from the Sheet and
+    exits 1 if it does not hold exactly what was written: a Notes write that reports ✅
+    without landing is the failure this file keeps meeting."""
+    replace = "--replace" in sys.argv
+    new = merge_notes(old, text, replace=replace)
+    if "Notes" not in headers:
+        _set(tab, row, headers, "Notes", new)      # warns: no Notes column on this tab
+        return
+    if new == (old or "").strip():
+        print("   notes unchanged (that text is already there)")
+        return
+    if len(new) > WARN_AT:
+        print(f"   ⚠️  Notes cell is now {len(new):,} chars; the Sheets limit is 50,000.",
+              file=sys.stderr)
+    _set(tab, row, headers, "Notes", new)
+    col = G._col_letter(headers.index("Notes") + 1)
+    got = G.values_get(G.SHEET_ID_DEFAULT, f"{G._q(tab)}!{col}{row}")
+    got = (got[0][0] if got and got[0] else "").strip()
+    if got != new:
+        sys.exit(f"🔴 Notes read-back MISMATCH on {tab} row {row}.\n"
+                 f"   wrote: {new[:200]!r}\n   sheet: {got[:200]!r}\n"
+                 f"   old notes were: {(old or '')[:200]!r}")
+    if replace:
+        print(f"   notes REPLACED ({len((old or '').strip()):,} chars of old notes dropped)")
+    elif (old or "").strip():
+        print(f"   notes prepended; {len(old.strip()):,} chars of earlier notes kept (verified on the Sheet)")
+
+
 def _arg(flag: str, default=None):
     return sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv else default
 
@@ -267,8 +303,8 @@ def main() -> int:
     if cmd == "applied":
         _set(tab, row, headers, "Status", "Applied")
         _set(tab, row, headers, "Applied", _arg("--date", date.today().isoformat()))
-        if _arg("--notes"):
-            _set(tab, row, headers, "Notes", _arg("--notes"))
+        if _arg("--notes") is not None:
+            _write_notes(tab, row, headers, g("Notes"), _arg("--notes"))
         print(f"✅ Applied — {g('Company')} — {g('Role')[:54]}")
         print("   Moves to My Applications on the next curate.py run.")
         return 0
@@ -298,16 +334,16 @@ def main() -> int:
         # Only fills an EMPTY cell, so re-running never rewrites a real date.
         if val == "Applied" and not (g("Applied") or "").strip():
             _set(tab, row, headers, "Applied", _arg("--date", date.today().isoformat()))
-        if _arg("--notes"):
-            _set(tab, row, headers, "Notes", _arg("--notes"))
+        if _arg("--notes") is not None:
+            _write_notes(tab, row, headers, g("Notes"), _arg("--notes"))
         print(f"✅ {val} — {g('Company')} — {g('Role')[:54]}")
         return 0
 
     if cmd == "note":
         if len(sys.argv) < 4:
             sys.exit("usage: board.py note <match> \"<text>\"")
-        _set(tab, row, headers, "Notes", sys.argv[3])
-        print(f"✅ note set — {g('Company')} — {g('Role')[:54]}")
+        _write_notes(tab, row, headers, g("Notes"), sys.argv[3])
+        print(f"✅ note written — {g('Company')} — {g('Role')[:54]}")
         return 0
 
     if cmd == "date":
@@ -337,8 +373,8 @@ def main() -> int:
         # reason it was set is the "reviewed vs never opened" ambiguity the column exists
         # to remove, and a second round trip per row doubles a 280-row triage pass
         # (added 2026-09-13).
-        if _arg("--notes"):
-            _set(tab, row, headers, "Notes", _arg("--notes"))
+        if _arg("--notes") is not None:
+            _write_notes(tab, row, headers, g("Notes"), _arg("--notes"))
         print(f"\u2705 priority {val or '(cleared)'} -- {g('Company')} -- {g('Role')[:48]}")
         return 0
 

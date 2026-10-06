@@ -1495,6 +1495,43 @@ def test_confirmed_dead_rows_die_now():
 
 
 
+# ── A NOTES WRITE PREPENDS, IT NEVER REPLACES ────────────────────────────────
+# 2026-10-05: three `board.py note` writes (xAI 5252108007, Tesla 284924, Harvey Winter
+# d40e15aa) REPLACED long JD-triage notes that existed nowhere else. Every write path
+# (`note`, and --notes on applied/status/priority) called _set(..., "Notes", text) with
+# the row's old notes already in memory. Now all four go through board_notes.merge_notes
+# and a Sheet read-back. Mutation: make merge_notes return `text` -> red; route any path
+# back to a bare _set(.., "Notes", ..) -> red.
+def test_notes_are_prepended_not_replaced():
+    from board_notes import merge_notes, SEP
+    print("N. Notes writes prepend; --replace is explicit; hand-merges are not doubled")
+    old = "[Oct 1] staged, gates pass, Python allowed on the OA"
+    check("new text is prepended to the old notes",
+          merge_notes(old, "[Oct 5] APPLIED"), "[Oct 5] APPLIED" + SEP + old)
+    check("old notes survive a write, verbatim, at the end",
+          merge_notes(old, "anything").endswith(old), True)
+    check("empty cell -> just the new text", merge_notes("", "first note"), "first note")
+    check("empty write never clears without --replace", merge_notes(old, ""), old)
+    check("--replace overwrites", merge_notes(old, "fresh", replace=True), "fresh")
+    check("--replace with empty text clears", merge_notes(old, "", replace=True), "")
+    check("a hand-composed merge (old workaround) is written as-is, not doubled",
+          merge_notes(old, "[Oct 5] X" + SEP + old), "[Oct 5] X" + SEP + old)
+    once = merge_notes(old, "[Oct 5] X")
+    check("re-running the same write is a no-op", merge_notes(once, "[Oct 5] X"), once)
+    check("a short note that merely PREFIXES the old text is still kept",
+          merge_notes("Applied Mon 2026-09-21", "Applied"), "Applied" + SEP + "Applied Mon 2026-09-21")
+
+    brd = _code_only((Path(__file__).parent / "board.py").read_text())
+    check("no write path sets Notes directly from argv",
+          len(re.findall(r'_set\s*\(\s*tab\s*,\s*row\s*,\s*headers\s*,\s*"Notes"\s*,\s*(?:_arg|sys\s*\.\s*argv)', brd)), 0)
+    check("note + the three --notes flags all go through _write_notes",
+          len(re.findall(r"_write_notes\s*\(\s*tab\s*,\s*row\s*,\s*headers\s*,\s*g\s*\(\s*\"Notes\"\s*\)", brd)), 4)
+    wn = brd[brd.index("def _write_notes"):brd.index("def _arg")]
+    check("_write_notes merges with the old notes", re.search(r"merge_notes\s*\(", wn) is not None, True)
+    check("_write_notes reads the cell back from the Sheet", "values_get" in wn, True)
+    check("a read-back mismatch exits non-zero", re.search(r"sys\s*\.\s*exit", wn) is not None, True)
+
+
 # ── A READ IS AN ANSWER, NOT A REFUSAL ────────────────────────────────────────
 # 2026-09-21, 21:49–22:04 ET: a Telegram turn asked "did I already apply to all of
 # these" for 13 pasted titles. board.py show matched the whole fragment as a substring,
@@ -2238,7 +2275,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_write_board_migrates_the_queue_tab_losslessly,
            test_board_py_imports_the_repo_modules_and_new_tabs,
            test_board_fanout_is_bounded_and_queueing_is_not_a_timeout,
-           test_settled_applications_stay_on_my_applications):
+           test_settled_applications_stay_on_my_applications,
+           test_notes_are_prepended_not_replaced):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:
