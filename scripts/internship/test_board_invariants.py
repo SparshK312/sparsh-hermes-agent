@@ -1495,6 +1495,58 @@ def test_confirmed_dead_rows_die_now():
 
 
 
+# ── A MISLABELLED TERM IS NOT A MISSING JOB ──────────────────────────────────
+# 2026-10-07: Meta's Summer 2027 "Software Engineer Intern" (1952991802037374) was
+# active in SimplifyJobs' listings.json with terms ["N/A"]. The Summer-2027 README
+# renders only Summer-2027-tagged rows, and the README was the only surface read, so an
+# accept-bar company's flagship req never reached the board. Meta is `manual`, so the
+# aggregators are its only path. Mutations: yield labelled rows too -> red; drop the
+# aged-out export -> red; route wide_net back to its own if/else -> red.
+def test_unlabelled_simplify_rows_reach_the_board():
+    import json as _j
+    from datetime import datetime as _dt, timedelta as _td
+    import internship_scraper as S
+    print("U. SimplifyJobs rows with blank/N/A terms are read from listings.json")
+    now = _dt(2026, 10, 7, 12, 0)
+    ts = lambda d: int((now - _td(days=d)).timestamp())  # noqa: E731
+    row = lambda **k: {"company_name": "Meta", "title": "Software Engineer Intern", "active": True,  # noqa: E731
+                       "is_visible": True, "terms": ["N/A"], "date_posted": ts(1),
+                       "url": "https://www.metacareers.com/jobs/1952991802037374",
+                       "locations": ["Seattle, WA", "NYC"], **k}
+    raw = _j.dumps([
+        row(),
+        row(title="Data Scientist Intern", terms=["Summer 2027"], url="https://x.example/ds"),
+        row(title="Old SWE", terms=["Summer 2026"], url="https://x.example/old"),
+        row(title="Inactive", active=False, url="https://x.example/inactive"),
+        row(title="Empty terms", terms=[], url="https://x.example/empty"),
+        row(title="Aged", date_posted=ts(30), url="https://x.example/aged"),
+    ])
+    S.AGED_OUT_IDS.clear(); S.AGED_OUT_TRIPLES.clear()
+    got = list(S.parse_simplify_json(raw, "simplify-unlabelled", now=now))
+    titles = sorted(p.title for p in got)
+    check("only active, unlabelled, recent rows are yielded", titles, ["Empty terms", "Software Engineer Intern"])
+    meta = [p for p in got if p.title == "Software Engineer Intern"][0]
+    check("terms are blank so the row routes as an unconfirmed (Summer-tab) cycle", meta.terms, "")
+    check("location carries every city", meta.location, "Seattle, WA, NYC")
+    check("an aged-out unlabelled row is EXPORTED, not silently struck",
+          S.canonical_id("https://x.example/aged") in S.AGED_OUT_IDS, True)
+    S.AGED_OUT_IDS.clear(); S.AGED_OUT_TRIPLES.clear()
+    src = [x for x in S.SOURCES if x["name"] == "simplify-unlabelled"]
+    check("the source is wired", [x["format"] for x in src], ["simplify_json"])
+    try:
+        S.parse_source("", {"name": "z", "format": "nonsense"}); raised = False
+    except ValueError:
+        raised = True
+    check("an unknown source format raises instead of parsing as markdown", raised, True)
+    here = Path(__file__).parent
+    scr = _code_only((here / "internship_scraper.py").read_text())
+    wide = _code_only((here / "wide_net_source.py").read_text())
+    check("the scraper dispatches format in ONE place",
+          len(re.findall(r'==\s*"html_table"', scr)), 1)
+    check("wide_net uses the shared dispatch", re.search(r"parse_source\s*\(", wide) is not None, True)
+    check("wide_net has no private format branch", re.search(r'==\s*"html_table"', wide) is None, True)
+
+
 # ── A NOTES WRITE PREPENDS, IT NEVER REPLACES ────────────────────────────────
 # 2026-10-05: three `board.py note` writes (xAI 5252108007, Tesla 284924, Harvey Winter
 # d40e15aa) REPLACED long JD-triage notes that existed nowhere else. Every write path
@@ -2276,7 +2328,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_board_py_imports_the_repo_modules_and_new_tabs,
            test_board_fanout_is_bounded_and_queueing_is_not_a_timeout,
            test_settled_applications_stay_on_my_applications,
-           test_notes_are_prepended_not_replaced):
+           test_notes_are_prepended_not_replaced,
+           test_unlabelled_simplify_rows_reach_the_board):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

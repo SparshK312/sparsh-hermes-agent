@@ -906,6 +906,73 @@ def row_to_posting(row: dict, source_name: str) -> Posting | None:
     )
 
 
+# ── JSON parser (SimplifyJobs listings.json, UNLABELLED terms only) ───────────
+# 🔴 2026-10-07: Meta's Summer 2027 "Software Engineer Intern" (metacareers
+# 1952991802037374, Seattle / Menlo Park / NYC / Bellevue) never reached the board.
+# SimplifyJobs had it, active, posted Oct 6, but with terms ["N/A"], and its
+# Summer-2027 README renders only rows tagged Summer 2027, so the README this scraper
+# reads simply did not contain it. Meta is a `manual` ATS (no direct fetcher), so the
+# aggregators are the ONLY path, and a mislabel upstream silently removed an
+# accept-bar company's flagship req. This source reads the structured file and yields
+# ONLY active rows whose terms are blank / N/A: the README already carries every
+# labelled row, and a past-labelled row is left to classify_period, as before.
+UNLABELLED_TERMS = {"", "N/A", "NA", "TBD", "UNKNOWN"}
+
+
+def _terms_unlabelled(terms) -> bool:
+    if not terms:
+        return True
+    if isinstance(terms, str):
+        terms = [terms]
+    return all((t or "").strip().upper() in UNLABELLED_TERMS for t in terms)
+
+
+def parse_simplify_json(raw: str, source_name: str, now: datetime | None = None) -> Iterator[Posting]:
+    now = now or datetime.now()
+    for x in json.loads(raw):
+        if not isinstance(x, dict) or not x.get("active") or x.get("is_visible") is False:
+            continue
+        if not _terms_unlabelled(x.get("terms")):
+            continue
+        company = (x.get("company_name") or "").strip()
+        title = re.sub(r"\s+", " ", (x.get("title") or "")).strip()
+        url = (x.get("url") or "").strip()
+        if not company or not title or not url.startswith(("http://", "https://")):
+            continue
+        location = ", ".join(l.strip() for l in (x.get("locations") or []) if l and l.strip())
+        try:
+            age_days = max(0, int((now - datetime.fromtimestamp(int(x.get("date_posted") or 0))).days))
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+        if age_days > MAX_AGE_DAYS:
+            # Same rule as row_to_posting (2026-09-14): a row we decline to take
+            # because of age is NOT evidence the job closed, so export it.
+            AGED_OUT_IDS.add(canonical_id(url))
+            AGED_OUT_TRIPLES.add((normalize_company_name(company), title.lower(),
+                                  re.sub(r"\s+", " ", location).strip().lower()))
+            continue
+        yield Posting(
+            company=company, title=title, location=location,
+            url=canonicalize_url(url), posted_date=date_n_days_ago(age_days),
+            age_days=age_days, terms="", source=source_name,
+            canonical_id=canonical_id(url),
+        )
+
+
+def parse_source(raw: str, source: dict) -> list:
+    """The ONE dispatch from a SOURCES entry to its parser. Three loops used to carry
+    their own if/else, and two of them sent any unknown format to the markdown parser,
+    which silently yields nothing. An unknown format is now an error."""
+    fmt, name = source["format"], source["name"]
+    if fmt == "html_table":
+        return list(parse_html_table(raw, name))
+    if fmt == "markdown_table":
+        return list(parse_markdown_table(raw, name))
+    if fmt == "simplify_json":
+        return list(parse_simplify_json(raw, name))
+    raise ValueError(f"unknown source format {fmt!r} for {name}")
+
+
 # ── State (postings_seen.json) ────────────────────────────────────────────────
 
 
@@ -1140,10 +1207,7 @@ def run_triage_backlog() -> int:
         name = source["name"]
         try:
             raw = fetch_source(source["url"])
-            if source["format"] == "html_table":
-                all_postings.extend(parse_html_table(raw, name))
-            else:
-                all_postings.extend(parse_markdown_table(raw, name))
+            all_postings.extend(parse_source(raw, source))
             sources_ok.append(name)
         except Exception as e:
             failures.append((name, f"{type(e).__name__}: {e}"))
@@ -1304,13 +1368,7 @@ def main() -> int:
             continue
 
         try:
-            if source["format"] == "html_table":
-                postings = list(parse_html_table(raw, name))
-            elif source["format"] == "markdown_table":
-                postings = list(parse_markdown_table(raw, name))
-            else:
-                failures.append((name, f"unknown format: {source['format']}"))
-                continue
+            postings = parse_source(raw, source)
         except Exception as e:
             failures.append((name, f"parse failed: {type(e).__name__}: {e}"))
             continue

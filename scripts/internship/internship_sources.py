@@ -34,6 +34,16 @@ SOURCES = [
         "format": "html_table",
     },
     {
+        # 2026-10-07. The SAME SimplifyJobs repo, read from its structured listings
+        # file, yielding ONLY active rows whose terms are blank / "N/A". Its README
+        # (simplify-main, above) renders only Summer-2027-tagged rows, so a mislabelled
+        # req is invisible there: Meta's Summer 2027 SWE Intern was tagged "N/A" and
+        # never reached the board. Labelled rows still come from the README.
+        "name": "simplify-unlabelled",
+        "url": "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json",
+        "format": "simplify_json",
+    },
+    {
         "name": "vansh-main",
         "url": "https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/dev/README.md",
         "format": "markdown_table",

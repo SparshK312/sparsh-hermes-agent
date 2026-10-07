@@ -112,10 +112,7 @@ def _fetch_github() -> list:
     for src in SOURCES:
         try:
             raw = fetch_source(src["url"])
-            if src["format"] == "html_table":
-                posts.extend(parse_html_table(raw, src["name"]))
-            else:
-                posts.extend(parse_markdown_table(raw, src["name"]))
+            posts.extend(_scraper.parse_source(raw, src))
         except Exception as e:  # noqa: BLE001
             print(f"[wide-net] source {src['name']} failed: {type(e).__name__}: {e}",
                   file=sys.stderr)
