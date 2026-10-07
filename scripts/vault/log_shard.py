@@ -56,7 +56,7 @@ day file, takes a lock (parallel sessions are safe) and enforces the header form
 
     .venv/bin/python Scripts/catchup.py            # last 7 days of headers + prep state
     .venv/bin/python Scripts/recall.py "kaisa"     # find anything, ranked, compact
-    grep -rh '^## \\[' Log/ | sort | tail -20       # latest headers, all days
+    grep -rh '^## \\[' Log/ | sort -s -k2,2 | tail -20       # latest headers, all days
     grep -rl 'Grade Tracker' Log/                   # which days mention something
 
 `Log.md` is a stub containing only a MOVED sentinel header; anything appended to it is

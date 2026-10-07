@@ -18,10 +18,23 @@ if [ ! -d "$GIT_DIR" ]; then
   printf '%s\n' '*' '!*/' '!*.md' '!*.csv' '!*.json' '!*.py' '!*.canvas' \
     '.obsidian/' '*.bak' '*.CORRUPT*' > "$GIT_DIR/info/exclude"
 fi
-cd "$GIT_WORK_TREE" || exit 1
-git add -A >/dev/null 2>&1
+# A failed snapshot must be loud (audit 2026-10-07: errors went to /dev/null and the
+# script always exited 0, so e.g. a stale index.lock would stop history silently).
+# Telegram once when it starts failing and once when it recovers, never every hour.
+FLAG="$HOME/.hermes/health/vault_git_snapshot.FAILING"
+alert() { "$HOME/.local/bin/hermes" send -t telegram -q -s "$1" "$2" >/dev/null 2>&1 || true; }
+fail() {
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) FAILED: $1" >> "$LOG"
+  [ -f "$FLAG" ] || { touch "$FLAG"; alert "⚠️ Vault git snapshot failing" "vault_git_snapshot.sh: $1. Hourly vault history has stopped (log: ~/.hermes/health/vault_git_snapshot.log)."; }
+  exit 1
+}
+cd "$GIT_WORK_TREE" || fail "cannot cd to $GIT_WORK_TREE"
+err=$(git add -A 2>&1) || fail "git add: ${err:0:300}"
 if ! git diff --cached --quiet; then
   n=$(git diff --cached --name-only | wc -l)
-  git commit -q -m "snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) ($n files)" && echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) committed $n files" >> "$LOG"
+  err=$(git commit -q -m "snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) ($n files)" 2>&1) || fail "git commit: ${err:0:300}"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) committed $n files" >> "$LOG"
 fi
+if [ -f "$FLAG" ]; then rm -f "$FLAG"; alert "✅ Vault git snapshot recovered" "Hourly vault history is being recorded again."; fi
 tail -c 100000 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+exit 0

@@ -173,12 +173,15 @@ def evaluate(now: datetime) -> tuple[list[str], dict]:
     return problems, info
 
 
-def send(subject: str, body: str) -> None:
+def send(subject: str, body: str) -> bool:
+    """True only if `hermes send` exited 0. A lost alert must not be recorded as sent."""
     try:
         subprocess.run([HERMES, "send", "-t", "telegram", "-q", "-s", subject, body],
                        check=True, timeout=30)
+        return True
     except Exception as e:  # noqa: BLE001
         print(f"send failed: {e}", file=sys.stderr)
+        return False
 
 
 def decide(prev: dict, problems: list[str], now: datetime) -> str | None:
@@ -196,25 +199,52 @@ def decide(prev: dict, problems: list[str], now: datetime) -> str | None:
     return None
 
 
-def main() -> int:
+def next_state(prev: dict, action: str | None, problems: list[str], now: datetime,
+               sent: bool) -> dict:
+    """The state to persist — pure, so it is testable. (Audit 2026-10-07: a failed
+    `hermes send` used to be saved as alerted, so the alert was lost and nothing retried
+    for REALERT_H hours.) If the message did not go out, keep the PREVIOUS state so the
+    next run decides the same action again and retries it."""
+    st = dict(prev)
+    st["checked"] = now.isoformat()
+    if action is not None and not sent:
+        return st
+    if action in ("alert", "realert"):
+        st["last_alert"] = now.isoformat()
+    st["bad"] = bool(problems)
+    return st
+
+
+def run() -> int:
     now = _now()
     problems, info = evaluate(now)
     prev = json.loads(STATE.read_text()) if STATE.exists() else {}
     action = decide(prev, problems, now)
+    sent = True
     if action in ("alert", "realert"):
-        send("⚠️ Vault sync problem",
-             "The VPS copy of your vault is not syncing properly, so Hermes may be working "
-             "from old data:\n- " + "\n- ".join(problems))
-        prev["last_alert"] = now.isoformat()
+        sent = send("⚠️ Vault sync problem",
+                    "The VPS copy of your vault is not syncing properly, so Hermes may be "
+                    "working from old data:\n- " + "\n- ".join(problems))
     elif action == "recovered":
-        send("✅ Vault sync recovered", "The VPS vault is syncing again.")
-    prev["bad"] = bool(problems)
-    prev["checked"] = now.isoformat()
+        sent = send("✅ Vault sync recovered", "The VPS vault is syncing again.")
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps(prev))
+    STATE.write_text(json.dumps(next_state(prev, action, problems, now, sent)))
     print(f"[sync-watchdog] {now:%Y-%m-%dT%H:%M}Z {'BAD' if problems else 'ok'} {info} "
-          f"{problems if problems else ''} action={action}")
-    return 0
+          f"{problems if problems else ''} action={action} sent={sent}")
+    return 0 if sent else 1
+
+
+def main() -> int:
+    """A watchdog that dies silently is the failure it exists to catch (audit 2026-10-07:
+    a crash went only to a log nobody reads while the cron still read `ok`)."""
+    try:
+        return run()
+    except Exception as e:  # noqa: BLE001
+        print(f"[sync-watchdog] CRASHED: {type(e).__name__}: {e}", file=sys.stderr)
+        send("⚠️ Vault sync watchdog crashed",
+             f"sync_watchdog.py raised {type(e).__name__}: {e}. Sync is UNMONITORED until "
+             "this is fixed (log: ~/.hermes/health/sync_watchdog.log).")
+        return 2
 
 
 if __name__ == "__main__":

@@ -277,6 +277,65 @@ def test_sync_watchdog():
     big.write_bytes(b"x" * (W.LOG_MAX_BYTES + 10) + b"\nTAIL")
     check("rotates past the cap", W.rotate(big), True)
     check("keeps the most recent bytes", big.read_bytes().endswith(b"TAIL") and big.stat().st_size == W.LOG_KEEP_BYTES, True)
+    # (audit 2026-10-07) a lost alert is NOT recorded as sent, so the next run retries it
+    st = W.next_state({}, "alert", ["x"], now, sent=True)
+    check("a sent alert is recorded", (st.get("bad"), bool(st.get("last_alert"))), (True, True))
+    st = W.next_state({}, "alert", ["x"], now, sent=False)
+    check("a FAILED alert keeps the old state", (st.get("bad"), st.get("last_alert")), (None, None))
+    check("…so the next run alerts again", W.decide(st, ["x"], now + _td(minutes=30)), "alert")
+    st = W.next_state({"bad": True}, "recovered", [], now, sent=False)
+    check("a FAILED recovery message is retried next run", W.decide(st, [], now), "recovered")
+    # a crash alerts instead of dying silently
+    calls = []
+    real_run, real_send = W.run, W.send
+    try:
+        W.run = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+        W.send = lambda subj, body: calls.append(subj) or True
+        rc = W.main()
+    finally:
+        W.run, W.send = real_run, real_send
+    check("a crash exits non-zero", rc, 2)
+    check("a crash sends an alert", len(calls) == 1 and "crashed" in calls[0], True)
+    # the cron wrappers report the real status, and a failing snapshot alerts once
+    home = Path(tempfile.mkdtemp())
+    (home / ".hermes/scripts/monitor").mkdir(parents=True)
+    (home / ".hermes/scripts/monitor/sync_watchdog.py").write_text("import sys; sys.exit(3)\n")
+    (home / ".local/bin").mkdir(parents=True)
+    sent_log = home / "sent.txt"
+    hermes_stub = home / ".local/bin/hermes"
+    hermes_stub.write_text(f"#!/bin/sh\necho \"$6\" >> '{sent_log}'\n")
+    hermes_stub.chmod(0o755)
+    env = dict(_os.environ, HOME=str(home))
+    rc = subprocess.run(["bash", str(HERE / "sync_watchdog.sh")], env=env).returncode
+    check("sync_watchdog.sh exits with the watchdog's status", rc, 3)
+    if not Path("/home/hermes/vault").exists():   # on the VPS the real vault exists; test off-box
+        snap = HERE / "vault_git_snapshot.sh"
+        rcs = [subprocess.run(["bash", str(snap)], env=env, capture_output=True).returncode for _ in range(2)]
+        msgs = sent_log.read_text().splitlines() if sent_log.exists() else []
+        check("a failing snapshot exits non-zero", rcs, [1, 1])
+        check("…and alerts ONCE, not every hour", sum("failing" in m for m in msgs), 1)
+
+# ── THE "RECENT EVENTS" RECIPE HERMES IS GIVEN MUST RETURN THE NEWEST ENTRIES ──
+# Audit 2026-10-07: `.hermes.md` said `grep -rh '^## \[' Log/ | sort | tail -30`. `sort`
+# orders the WHOLE header, so within a day entries sorted by action name and `tail`
+# returned only `update`s — a live Hermes turn missed all 5 of that day's decisions.
+# Behavioural: run the exact command from .hermes.md against a fixture log.
+def test_hermes_recent_events_recipe():
+    print("L1. .hermes.md 'Recent events' recipe returns the newest entries of every action")
+    md = (HERE.parent.parent / "vault-context" / ".hermes.md").read_text()
+    m = re.search(r"Recent events: `([^`]+)`", md)
+    check("recipe present in .hermes.md", bool(m), True)
+    if not m:
+        return
+    v = Path(tempfile.mkdtemp())
+    day = v / "Log/2026/2026-10"; day.mkdir(parents=True)
+    (day / "2026-10-06.md").write_text("## [2026-10-06] update | old — older day\n")
+    (day / "2026-10-07.md").write_text(
+        "## [2026-10-07] update | a — first\n\n## [2026-10-07] update | b — second\n\n"
+        "## [2026-10-07] decision | c — NEWEST, a decision\n")
+    cmd = m.group(1).replace("/home/hermes/vault/", "").replace("tail -30", "tail -1")
+    out = subprocess.run(["bash", "-c", cmd], cwd=v, capture_output=True, text=True).stdout.strip()
+    check("the newest entry is returned even when it is a decision", out.endswith("NEWEST, a decision"), True)
 
 # ── THE MORNING EMAIL TRIAGE MUST SEE EVERY APPLICATION ───────────────────────
 # 2026-10-04. email_triage.live_applications() read "My Applications!A1:K60" while the
@@ -336,7 +395,7 @@ for fn in (test_prep_nudge_reads_the_files_that_are_actually_updated,
            test_the_prompt_cannot_assert_an_unknown_queue_is_clear,
            test_email_triage_reads_every_application,
            test_hermes_entries_do_not_count_as_freshness,
-           test_sync_watchdog):
+           test_sync_watchdog, test_hermes_recent_events_recipe):
     try:
         fn()
     except Exception as exc:  # noqa: BLE001
