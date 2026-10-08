@@ -43,7 +43,11 @@ ECHO = VAULT / "09 - Systems" / "Hermes" / "Sync Echo.md"
 
 PENDING_MAX_MIN = 45
 ERRORS_PER_HOUR_MAX = 10
-HEARTBEAT_MAX_H = 26
+# 72 h, not 26 (changed 2026-10-08): the Mac heartbeat only runs while the Mac is awake
+# (launchd counts awake time), so a day or a weekend with the laptop closed is normal and
+# must not page him. The Mac-side catchup.py round-trip check catches a real Mac→VPS jam
+# at the start of his next session; this is the backstop for long silences.
+HEARTBEAT_MAX_H = 72
 REALERT_H = 12
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_KEEP_BYTES = 1024 * 1024
@@ -165,8 +169,9 @@ def evaluate(now: datetime) -> tuple[list[str], dict]:
         age_h = (now - hb_when).total_seconds() / 3600
         info["heartbeat_age_h"] = round(age_h, 1)
         if age_h > HEARTBEAT_MAX_H:
-            problems.append(f"the Mac's last heartbeat arrived {age_h:.0f} h ago "
-                            f"(Mac asleep / Obsidian closed, or Mac→VPS sync broken)")
+            problems.append(f"the Mac hasn't checked in for {age_h:.0f} h. Fine if the Mac has "
+                            f"been closed; if you've been using it with Obsidian open, Mac→VPS "
+                            f"sync is broken")
         if hb_nonce:
             info["echoed"] = write_echo(ECHO, hb_nonce, now)
     info["rotated"] = rotate(d / "sync.log")

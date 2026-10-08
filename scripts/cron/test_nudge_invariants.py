@@ -277,6 +277,9 @@ def test_sync_watchdog():
     big.write_bytes(b"x" * (W.LOG_MAX_BYTES + 10) + b"\nTAIL")
     check("rotates past the cap", W.rotate(big), True)
     check("keeps the most recent bytes", big.read_bytes().endswith(b"TAIL") and big.stat().st_size == W.LOG_KEEP_BYTES, True)
+    # 2026-10-08: the heartbeat only runs while the Mac is awake; a closed-laptop weekend
+    # (Fri evening → Mon morning ≈ 62 h) must not page him
+    check("heartbeat alarm tolerates a closed-Mac weekend", W.HEARTBEAT_MAX_H >= 66, True)
     # (audit 2026-10-07) a lost alert is NOT recorded as sent, so the next run retries it
     st = W.next_state({}, "alert", ["x"], now, sent=True)
     check("a sent alert is recorded", (st.get("bad"), bool(st.get("last_alert"))), (True, True))
