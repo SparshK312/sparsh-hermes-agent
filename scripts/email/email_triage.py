@@ -45,7 +45,10 @@ VAULT = Path(os.environ.get("HERMES_VAULT", "/home/hermes/vault"))
 INBOUND_LOG = VAULT / "06 - Internships" / "Job Search" / "Inbound Leads.md"
 MODEL = "claude-sonnet-4-6"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-PROMPT_VERSION = "triage-v1"
+PROMPT_VERSION = "triage-v2"   # v2 2026-10-08: done-aware (sent mail + vault log + thread/board rules)
+SENT_DAYS = 4            # his sent mail considered when deciding if a step is done
+MAX_SENT = 80            # cap on sent messages read (announced when hit)
+DONE_DAYS = 4            # vault-log days given to the model as evidence
 
 # 2026-08-28: measured his actual volume at ~400 messages per 15 days (~27/day), so a
 # 2-day window is ~54 — which was UNDER the old cap of 60 by six messages. A busy
@@ -126,17 +129,27 @@ def _save_state(state: dict) -> None:
 
 
 # ── fetch ─────────────────────────────────────────────────────────────────────
+def _parse_search(raw: str) -> list[dict]:
+    """google_api.py prints the literal "No messages found." (exit 0) for an empty result.
+    That is an answer, not an error: v1 raised on it, so a quiet weekend would have crashed
+    the triage (found by review, 2026-10-08)."""
+    t = (raw or "").strip()
+    if not t or t.lower().startswith("no messages found"):
+        return []
+    try:
+        msgs = json.loads(t)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"gmail search returned non-JSON: {t[:250]}")
+    if isinstance(msgs, dict):
+        msgs = msgs.get("messages") or msgs.get("results") or []
+    return msgs if isinstance(msgs, list) else []
+
+
 def fetch_candidates(days: int, seen: set[str], query: str | None = None,
                      cap: int | None = None) -> list[dict]:
     """Recent mail, minus obvious machine noise, minus anything already reported."""
     q = query or f"newer_than:{days}d -in:sent -in:draft"
-    raw = _gapi("gmail", "search", q, "--max", str(cap or MAX_FETCH), timeout=180)
-    try:
-        msgs = json.loads(raw)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"gmail search returned non-JSON: {raw[:250]}")
-    if isinstance(msgs, dict):
-        msgs = msgs.get("messages") or msgs.get("results") or []
+    msgs = _parse_search(_gapi("gmail", "search", q, "--max", str(cap or MAX_FETCH), timeout=180))
 
     out, skipped = [], 0
     for m in msgs:
@@ -152,6 +165,7 @@ def fetch_candidates(days: int, seen: set[str], query: str | None = None,
         body = str(m.get("snippet") or m.get("body") or m.get("plaintext_body") or "")
         out.append({"id": mid, "from": sender, "subject": subject,
                     "date": str(m.get("date") or ""), "body": body[:BODY_CHARS],
+                    "thread": str(m.get("threadId") or m.get("thread_id") or ""),
                     "full": False})
     limit = cap or MAX_FETCH
     if len(msgs) >= limit:
@@ -201,6 +215,43 @@ MAX_APPS = 600
 # Statuses that say nothing is moving — trimmed first, oldest first, if the cap is hit.
 _SETTLED = ("applied", "rejected", "rejected after oa", "rejected after interview",
             "closed", "skip", "not a fit")
+
+
+def fetch_sent(days: int = SENT_DAYS) -> tuple[list[dict], str]:
+    """His own recent sent mail (metadata only) — the cheapest proof he already replied.
+
+    FAIL-SOFT by design: any problem returns ([], "unavailable: …") and the prompt says so,
+    because "no sent mail" must never be read as "he did not reply"."""
+    try:
+        raw = _gapi("gmail", "search", f"newer_than:{days}d in:sent", "--max", str(MAX_SENT), timeout=90)
+        msgs = _parse_search(raw)
+    except Exception as e:  # noqa: BLE001
+        log(f"⚠️  sent mail UNAVAILABLE ({type(e).__name__}: {str(e)[:120]}) — done-checks rely on the log only")
+        return [], f"unavailable: {type(e).__name__}"
+    if len(msgs) >= MAX_SENT:
+        log(f"⚠️  AT CAP ({MAX_SENT}) sent messages — older sent mail in the window was NOT seen")
+    out = [{"to": str(m.get("to") or ""), "subject": str(m.get("subject") or ""),
+            "date": str(m.get("date") or ""),
+            "thread": str(m.get("threadId") or m.get("thread_id") or "")} for m in msgs]
+    log(f"sent mail: {len(out)} message(s) in the last {days} days")
+    return out, "ok"
+
+
+def done_evidence() -> tuple[list[str], str, int]:
+    """Vault-log lines (scripts/vault/done_facts.py). Fail-soft like fetch_sent."""
+    try:
+        here = Path(__file__).resolve().parent
+        for cand in (here.parent / "vault", HERMES / "scripts" / "vault"):
+            if (cand / "done_facts.py").is_file() and str(cand) not in sys.path:
+                sys.path.insert(0, str(cand))
+        import done_facts  # noqa: PLC0415
+        lines, omitted = done_facts.done_lines(VAULT, DONE_DAYS)
+        if omitted:
+            log(f"done list: {len(lines)} lines kept, {omitted} lower-priority lines omitted for size")
+        return lines, ("ok" if lines else "empty"), omitted
+    except Exception as e:  # noqa: BLE001
+        log(f"⚠️  vault log UNAVAILABLE for done-checks ({type(e).__name__}: {str(e)[:120]})")
+        return [], f"unavailable: {type(e).__name__}", 0
 
 
 def live_applications() -> list[dict]:
@@ -275,7 +326,8 @@ Return ONLY a JSON object, no prose and no code fence:
      "certainty": "stated" | "derived",
      "why": "<the exact phrase in the email that fixes the date>"
    },
-   "action": "<what he should do, or empty if nothing>",
+   "action": "<what he should do, or empty if nothing — see DONE CHECK>",
+   "done_evidence": "<only when the step is already done: the sent email or log line that shows it, else omit>",
    "urgency": "high" | "normal" | "low"}
 ]}
 
@@ -307,10 +359,39 @@ RULES
   entirely for marketing "sale ends Sunday", newsletters, or anything without a date
   that binds HIM.
 - Write like a person, not a press release. No emoji, no exclamation marks.
-- If two emails contradict each other, say so rather than reporting both flatly."""
+- If two emails contradict each other, say so rather than reporting both flatly.
+- ✅ DONE CHECK — do this before giving any item an `action`. You also get HIS SENT MAIL
+  from the last few days and VAULT LOG lines (his own record of what happened). Log lines
+  are tagged: [DONE?] = a record that something happened (look for ✅ / SENT / SUBMITTED /
+  APPLIED / BOOKED / CONFIRMED); [PLAN] = a plan or decision — NEVER evidence that a step
+  was done, even if it lists that step; [NOTE] = context only.
+  * A SENT email counts only if it is in the SAME thread (match the Thread id) or to the
+    same person, AND it is dated AFTER the email you are triaging — an older message in a
+    long thread is not a reply to a new question.
+  * Set `action` to "" and fill `done_evidence` ONLY when a sent email or a [DONE?] line
+    shows THE SAME STEP for THE SAME company/thread already happened (e.g. "submit your
+    availability" + a log line "availability SUBMITTED"). A different step at the same
+    company does NOT count: "interviews BOOKED" does not complete "prepare for the
+    interviews"; "test SUBMITTED" does not complete a different round; an offer accepted
+    at one company says nothing about another company.
+  * Also no action when the email is about an application whose tracked status is Closed,
+    Rejected (any kind), Skip or Not a Fit AND the email asks nothing new of him (a
+    receipt, a bulk status note). If such an email DOES ask for something new (a
+    recruiter re-engaging, a new interview), keep the action.
+  * When `done_evidence` is set, write the summary as information ("you already
+    submitted…"), never as an instruction.
+  * A [PLAN] line never proves a step was DONE. But a recorded decision NOT to do it
+    ("skip", "not doing", "declined") does remove the action — then say in
+    `done_evidence` that he decided to skip it, quoting the line. A plan TO do something
+    leaves the action in place.
+  * Never drop an item or change its category because it is done — he still needs to
+    know the email arrived.
+  * If sent mail or the log is marked UNAVAILABLE, do not infer anything from its absence."""
 
 
-def classify(cands: list[dict], apps: list[dict]) -> dict:
+def classify(cands: list[dict], apps: list[dict], sent: list[dict] | None = None,
+             sent_status: str = "not fetched", done: list[str] | None = None,
+             done_status: str = "not fetched", done_omitted: int = 0) -> dict:
     key = env("ANTHROPIC_API_KEY")
     if not key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
@@ -318,9 +399,21 @@ def classify(cands: list[dict], apps: list[dict]) -> dict:
         f"- {a['company']} — {a['role']} (status: {a['status']}, applied {a['applied']})"
         for a in apps) or "(board unavailable)"
     mail = "\n\n".join(
-        f"[id: {c['id']}]\nFrom: {c['from']}\nDate: {c['date']}\nSubject: {c['subject']}\n{c['body']}"
+        f"[id: {c['id']}]\nFrom: {c['from']}\nDate: {c['date']}\nThread: {c.get('thread') or '?'}\n"
+        f"Subject: {c['subject']}\n{c['body']}"
         for c in cands)
+    sent_lines = "\n".join(f"- {m['date']} | to {m['to']} | {m['subject']} | thread {m['thread']}"
+                           for m in (sent or [])) or f"(none — status: {sent_status})"
+    if sent_status != "ok":
+        sent_lines = f"UNAVAILABLE ({sent_status}) — do not infer anything from its absence"
+    log_lines = "\n".join(done or []) or f"(none — status: {done_status})"
+    if done_status.startswith("unavailable"):
+        log_lines = f"UNAVAILABLE ({done_status}) — do not infer anything from its absence"
     user = (f"His tracked applications:\n{app_lines}\n\n"
+            f"=== HIS SENT MAIL, last {SENT_DAYS} days ===\n{sent_lines}\n\n"
+            f"=== VAULT LOG, last {DONE_DAYS} days (newest first; [DONE?] / [PLAN] / [NOTE]) ===\n{log_lines}\n"
+            + (f"({done_omitted} lower-priority lines omitted for size — absence from this list proves nothing)\n"
+               if done_omitted else "") + "\n"
             f"=== {len(cands)} emails from the last day ===\n\n{mail}")
 
     body = {
@@ -355,6 +448,89 @@ def classify(cands: list[dict], apps: list[dict]) -> dict:
         if not m:
             raise RuntimeError(f"model returned non-JSON: {text[:250]}")
         return json.loads(m.group(0))
+
+
+# ── deterministic done-checks (hard facts only) ──────────────────────────────────
+def _when(raw: str):
+    try:
+        from email.utils import parsedate_to_datetime
+        d = parsedate_to_datetime(raw)
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _status_sets():
+    """(terminal, live) lowercase status sets from status_vocab — never retyped here."""
+    here = Path(__file__).resolve().parent
+    for cand in (here.parent / "internship", HERMES / "scripts" / "internship"):
+        if (cand / "status_vocab.py").is_file() and str(cand) not in sys.path:
+            sys.path.insert(0, str(cand))
+    import status_vocab as V  # noqa: PLC0415
+    terminal = {x.lower() for x in V.REVIEWED_STATUSES} | {x.lower() for x in V.REJECTED_STATUSES}
+    live = {x.lower() for x in V.PIPELINE_STATUSES} - {"applied", "networking", "on hold"}
+    return terminal, live
+
+
+# Only these actions can be PROVEN done by a hard fact (review, 2026-10-08): a later reply
+# proves a reply-shaped action, not "complete the form"; a dead board row proves a passive
+# "check the portal", not a new request.
+REPLY_ACTION = re.compile(r"^\s*(reply|respond|answer|write back|get back|follow up|email (him|her|them) back)", re.I)
+PASSIVE_ACTION = re.compile(r"^\s*(check|monitor|keep an eye|watch|wait|no action|nothing to do|ignore|note)", re.I)
+
+
+def reconcile(items: list[dict], cands: list[dict], sent: list[dict], apps: list[dict]) -> int:
+    """Clear `action` only where a HARD fact proves the step is done. Returns how many.
+
+    1. needs-reply + he sent a message in the SAME Gmail thread after it arrived → replied.
+    2. application-update / worth-knowing matched EXACTLY and UNIQUELY to a board row in a
+       terminal status (Closed / Rejected* / Skip / Not a Fit), with no status change other
+       than Rejected, and no OTHER row at that company that is live (Offer, OA, interview…)
+       — so a new onboarding email at a company where one req is Closed and another is the
+       Offer is never silenced (review, 2026-10-08). Everything else is left to the model.
+    Items are never removed or re-categorised; only `action` is cleared, with evidence."""
+    by_id = {c["id"]: c for c in cands}
+    n = 0
+    replies: dict[str, list] = {}
+    for m in sent or []:
+        if m.get("thread"):
+            replies.setdefault(m["thread"], []).append(_when(m.get("date", "")))
+    try:
+        terminal, live = _status_sets()
+    except Exception as e:  # noqa: BLE001
+        log(f"status vocabulary unavailable ({type(e).__name__}) — board done-check skipped")
+        terminal, live = set(), set()
+    for it in items:
+        if not it.get("action"):
+            continue
+        c = by_id.get(it.get("id"), {})
+        got = _when(c.get("date", ""))
+        if it.get("category") == "needs-reply" and c.get("thread") and got:
+            later = [w for w in replies.get(c["thread"], []) if w and w > got]
+            if later:
+                if REPLY_ACTION.match(it["action"]):
+                    it["action"] = ""
+                    it["done_evidence"] = f"you replied in this thread on {max(later):%a %b %-d}"
+                    n += 1
+                    continue
+                # a reply does not prove a non-reply step: keep the action, add the fact
+                it["note"] = f"you replied in this thread on {max(later):%a %b %-d}; this step may still be open"
+        mapp = (it.get("matched_application") or "").strip()
+        sc = it.get("status_change") or ""
+        if (terminal and mapp and it.get("category") in ("application-update", "worth-knowing")
+                and (sc == "Rejected" or (sc == "" and PASSIVE_ACTION.match(it["action"])))):
+            rows = [a for a in apps if f"{a.get('company','')} — {a.get('role','')}".strip() == mapp]
+            if len(rows) == 1 and (rows[0].get("status") or "").strip().lower() in terminal:
+                co = (rows[0].get("company") or "").strip().lower()
+                others_live = [a for a in apps if (a.get("company") or "").strip().lower() == co
+                               and (a.get("status") or "").strip().lower() in live]
+                if not others_live:
+                    it["action"] = ""
+                    it["done_evidence"] = f"board row is {rows[0].get('status')}"
+                    n += 1
+    if n:
+        log(f"done-check: cleared {n} action(s) on hard evidence")
+    return n
 
 
 # ── rendering ─────────────────────────────────────────────────────────────────
@@ -441,6 +617,10 @@ def render(items: list[dict]) -> str:
         out.append(line)
         if it.get("action"):
             out.append(f"    - ▶️ {it['action'].strip()}")
+            if it.get("note"):
+                out.append(f"    - ℹ️ {it['note']}")
+        elif it.get("done_evidence"):
+            out.append(f"    - ✅ already handled: {str(it['done_evidence']).strip()}")
         if it.get("matched_application"):
             out.append(f"    - board row: {it['matched_application']}")
         cal = it.get("calendar") or {}
@@ -473,12 +653,17 @@ def main() -> int:
     try:
         cands = fetch_candidates(days, seen, query, cap)
         items = []
+        sent_status = done_status = "not fetched"
         if cands:
             enrich_bodies(cands)
             apps = live_applications()
-            items = (classify(cands, apps) or {}).get("items", []) or []
+            sent, sent_status = fetch_sent()
+            done, done_status, done_omitted = done_evidence()
+            items = (classify(cands, apps, sent, sent_status, done, done_status, done_omitted)
+                     or {}).get("items", []) or []
             valid = {c["id"] for c in cands}
             items = [i for i in items if i.get("id") in valid]   # no invented ids
+            reconcile(items, cands, sent, apps)
             for c in cands:
                 seen.add(c["id"])
         try:
@@ -490,6 +675,7 @@ def main() -> int:
         OUT_JSON.write_text(json.dumps(
             {"generated_at": datetime.now(timezone.utc).isoformat(),
              "prompt_version": PROMPT_VERSION, "considered": len(cands),
+             "sent_mail": sent_status, "vault_log": done_status,
              "items": items}, indent=1))
         OUT_MD.write_text(md)
         state["seen"] = sorted(seen)
@@ -509,6 +695,12 @@ def main() -> int:
                         "(and sheets.googleapis.com for board matching). The token already has the scopes.")
             OUT_MD.write_text(f"## 📬 Inbox\n\n⚠️ Inbox scan failed: {type(e).__name__}. "
                               f"Nothing was read this morning.{hint}\n")
+            # Rewrite the JSON too: v1 left YESTERDAY's items in place, and the morning
+            # brief served them as today's (review, 2026-10-08).
+            OUT_JSON.write_text(json.dumps(
+                {"generated_at": datetime.now(timezone.utc).isoformat(),
+                 "prompt_version": PROMPT_VERSION, "failed": f"{type(e).__name__}: {str(e)[:200]}",
+                 "items": []}, indent=1))
         except Exception:  # noqa: BLE001
             pass
         return 1

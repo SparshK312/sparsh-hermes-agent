@@ -221,7 +221,9 @@ def run_meal_rescue() -> int:
 # ----------------------------------------------------------------- missed-workout rescue
 WORKOUT_SYS = (
     "You are Sparsh's coach sending a MISSED-WORKOUT RESCUE. His #2 failure mode is training "
-    "consistency collapsing under load. He hasn't lifted in a couple days and is behind this week. "
+    "consistency collapsing under load. No workout has been LOGGED for a couple of days and the week is "
+    "behind. That is a gap in the log, not proof he skipped (2026-10-08: workouts are often logged the "
+    "next day), so say 'no workout logged since …' and ask, never 'you haven't lifted'. "
     "Do NOT guilt-trip. Offer the 25-minute fallback session (one compound push, one compound pull, "
     "one leg movement — keep it minimal-viable) so the week stays alive, and ask him to reply 'done' "
     "when finished. <50 words, blunt and supportive, plain markdown. Use ONLY the numbers given."
@@ -252,8 +254,9 @@ def run_workout_rescue() -> int:
     if not NO_LLM:
         msg = E.compose_text(WORKOUT_SYS, f"Training state:\n{json.dumps(facts, indent=2)}", max_tokens=300)
     if not msg:
-        msg = (f"🏋️ *{idle} days since your last lift* — {t['sessions_done']}/{t['planned_per_week']} this week. "
-               f"Keep the week alive with the 25-min fallback: squat variant + bench/press + a row. "
+        msg = (f"🏋️ *No workout logged in {idle} days* — {t['sessions_done']}/{t['planned_per_week']} logged this week. "
+               f"If you trained and didn't log it, reply with what you did. Otherwise, "
+               f"keep the week alive with the 25-min fallback: squat variant + bench/press + a row. "
                f"Reply *done* when finished.")
     return _emit(msg, "workout-rescue")
 

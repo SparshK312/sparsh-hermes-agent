@@ -186,7 +186,7 @@ while probe.isoformat() in have:
 # Read that. If it is missing or stale, say UNKNOWN — "we could not look" is not the
 # same fact as "nothing is due", and reporting one as the other is how this broke.
 SNAPSHOT_MAX_AGE_DAYS = 3
-redo_due, redo_state = [], "unknown"
+redo_due, redo_state, snap_rated = [], "unknown", []
 snap = V / "09 - Systems" / "Hermes" / "prep-queue-snapshot.md"
 try:
     stxt = snap.read_text(encoding="utf-8")
@@ -196,14 +196,75 @@ try:
     if age is not None and age <= SNAPSHOT_MAX_AGE_DAYS:
         redo_state = "fresh"
         for ln in stxt.splitlines():
-            if ln.startswith("|") and ln.rstrip().endswith("YES |"):
+            if ln.startswith("|"):
                 cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-                if len(cells) >= 2:
+                if len(cells) >= 5 and re.match(r"20\d\d-\d{2}-\d{2}$", cells[4]):
+                    snap_rated.append(cells[4])          # the scorecard's rating date = a rep
+                if ln.rstrip().endswith("YES |") and len(cells) >= 2:
                     redo_due.append(cells[1])
     else:
         redo_state = f"stale (snapshot generated {gen_date}, {age}d old)"
 except Exception:
     redo_state = "unknown (no snapshot — run Scripts/catchup.py on the Mac)"
+
+# 2026-10-08 (review): the hand-kept Session log stopped at Sep 24 while the scorecard has
+# ratings through Sep 27, so "days since your last rep" was 3 days too long. A rating IS a
+# rep (he solved it and rated it). Take the later of the two and say which.
+snap_last = max(snap_rated) if snap_rated else None
+if snap_last and (not last_rep or snap_last > last_rep):
+    last_rep, last_rep_src = snap_last, "scorecard rating"
+    days_since = (today - datetime.date.fromisoformat(last_rep)).days
+
+# ---- the LIVE TARGET: structured fields, never a hard-coded company -----------------
+# 2026-10-08: this printed a hard-coded target company for a week while the real target was a
+# different, already-booked interview. The Interview Prep banner is free
+# text and goes stale ("Oct 15 or 16"), so the target is read from three frontmatter fields
+# Claude sessions keep current: live_target, live_target_date (YYYY-MM-DD), live_plan
+# (vault-relative path of the plan note whose day table names each day's work).
+def _fm(key):
+    head = txt.split("\n---", 1)[0] if txt.startswith("---") else ""   # the frontmatter block
+    m = re.search(rf"^{key}:\s*(.+?)\s*$", head, re.M)
+    return m.group(1).strip().strip('"') if m else None
+live_target, live_date, live_plan = _fm("live_target"), _fm("live_target_date"), _fm("live_plan")
+days_to_target = None
+try:
+    if live_date:
+        days_to_target = (datetime.date.fromisoformat(live_date) - today).days
+except ValueError:
+    live_date = f"{live_date} (unparseable)"
+todays_plan, todays_hours, plan_state = None, None, "no live_plan field"
+if live_plan:
+    try:
+        ptxt = (V / live_plan).read_text(encoding="utf-8")
+        label = f"{today:%a} {today:%b} {today.day}"          # "Thu Oct 8"
+        hdr = None
+        for ln in ptxt.splitlines():
+            if not ln.startswith("|"):
+                hdr = None if not ln.strip() else hdr
+                continue
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            if cells and cells[0].lower() == "day":
+                # Only the table with a "work" column is the plan. The same note also has a
+                # §5B MIDLINE day table, which he ruled is NOT the plan (Oct 8) and which
+                # came first, so the first "Day" table returned the wrong work (caught in testing).
+                hdr = [c.lower() for c in cells] if any("work" in c.lower() for c in cells) else None
+                continue
+            if hdr and re.search(rf"\b{re.escape(label)}\b", re.sub(r"[*🔥]", "", cells[0])):
+                wi = next((i for i, h in enumerate(hdr) if "work" in h), len(cells) - 1)
+                hi = next((i for i, h in enumerate(hdr) if h.endswith(" h") or "hours" in h), None)
+                todays_plan = cells[wi] if wi < len(cells) else None
+                todays_hours = cells[hi].strip("* ") if hi is not None and hi < len(cells) else None
+                break
+        plan_state = "found" if todays_plan else f"no row for {label} in the plan's day table"
+    except Exception as e:
+        plan_state = f"plan unreadable ({type(e).__name__})"
+# what he LOGGED as prep today (the done half of done-vs-planned)
+prep_today = []
+for m in re.finditer(r"^## \[" + today_s + r"\]\s+(\w+)\s+\|([^\n]*)", _log_text(), re.M):
+    scope_summary = m.group(2)
+    if re.search(r"interview prep|\bprep\b|leetcode|re-solve|mock", scope_summary, re.I) \
+            and not scope_summary.strip().lower().startswith("hermes:"):
+        prep_today.append(re.sub(r"\s+", " ", scope_summary).strip()[:180])
 
 fresh_start = (done == 0 and not log_dates)
 days_since_start = (today - datetime.date.fromisoformat(PREP_START_DATE)).days
@@ -245,7 +306,17 @@ L.append(f"redo_source: {redo_state}")
 L.append(f"escalate: {'yes' if escalate else 'no'}")
 L.append(f"fresh_start: {'yes' if fresh_start else 'no'}")
 L.append(f"days_since_prep_went_live: {days_since_start}")
-L.append("target: Mercor (referral-guaranteed interview, triggers when ready) + bigger brands")
-L.append("plan: [[Technical Interview Study Plan]] · log a rep by replying e.g. 'did Two Sum + Valid Anagram'")
+if live_target:
+    L.append(f"target: {live_target[:200]}"
+             + (f"  (on {live_date}; {days_to_target} day(s) away)" if days_to_target is not None and days_to_target >= 0
+                else (f"  (date {live_date} has PASSED — the target may be stale)" if days_to_target is not None else "")))
+else:
+    L.append("target: UNKNOWN — Interview Prep.md has no live_target field. Do not name a company.")
+L.append(f"todays_plan: {todays_plan[:700] if todays_plan else 'none — ' + plan_state}"
+         + (f"  ({todays_hours} h planned)" if todays_plan and todays_hours else ""))
+L.append("prep_logged_today: " + (" || ".join(prep_today[:4]) if prep_today else
+                                  "nothing prep-scoped in today's log yet (he may simply not have logged it)"))
+plan_link = f"[[{Path(live_plan).stem}]]" if live_plan else "[[Interview Prep]]"
+L.append(f"plan: {plan_link} · log a rep by replying e.g. 'did 78 Subsets + 46 Permutations'")
 print("\n".join(L))
 PY

@@ -330,23 +330,45 @@ def _condense_deadlines(section: str, per_block: int = 14) -> str:
     return "\n".join(out).strip()
 
 
-def gather_action_items() -> dict:
-    """Hard Deadlines section text + a trimmed 'this week' slice from Action Items."""
-    text = _read(ACTION_ITEMS)
-    hard = _section(text, "## 🔴 hard deadlines") or _section(text, "## hard deadlines")
-    pruned = _condense_deadlines(hard)
-    # Only accept the pruned version if it kept something — never let a heading-format
-    # change silently empty the most important input to the brief.
-    if pruned:
-        hard = pruned
-    # 'this week' = the dated plan section if present, else the streams' urgent slice
-    plan = ""
-    m = re.search(r"^##\s*🗓️.*$", text, re.MULTILINE)
-    if m:
-        start = m.start()
-        nxt = re.search(r"\n##\s", text[start + 3:])
-        plan = text[start: start + 3 + (nxt.start() if nxt else 2600)]
-    return {"hard_deadlines": _clip(hard, 2600), "this_week": _clip(plan, 2600)}
+def _vault_module(name: str):
+    """Import a stdlib-only helper from scripts/vault (repo) or ~/.hermes/scripts/vault (VPS)."""
+    here = Path(__file__).resolve().parent
+    for cand in (here.parent / "vault", here / "vault", Path.home() / ".hermes" / "scripts" / "vault"):
+        if (cand / f"{name}.py").is_file():
+            if str(cand) not in sys.path:
+                sys.path.insert(0, str(cand))
+            break
+    return __import__(name)
+
+
+def gather_action_items(today: str = "") -> dict:
+    """The open rows of Action Items' THIS WEEK table (via today_actions.build).
+
+    2026-10-08: this used to look for "## 🔴 hard deadlines" / "## 🗓️" headings that no
+    longer exist, so both fields were EMPTY every morning and the brief planned from stale
+    daily-note tasks alone. The keys are kept for compatibility (compose_templated reads
+    `hard_deadlines`); `hard_deadlines` now holds the open rows. Fail-soft and LOUD: an
+    unreadable list is reported as UNKNOWN, never as an empty plan."""
+    try:
+        ta = _vault_module("today_actions")
+        d = datetime.date.fromisoformat(today) if today else datetime.datetime.now(TZ).date()
+        text = _read(ACTION_ITEMS)
+        if not text:
+            return {"hard_deadlines": "UNKNOWN — Action Items.md could not be read", "this_week": ""}
+        return {"hard_deadlines": ta.build(text, d), "this_week": ""}
+    except Exception as e:  # noqa: BLE001
+        _log(f"action items unavailable: {type(e).__name__}: {e}")
+        return {"hard_deadlines": f"UNKNOWN — could not extract open tasks ({type(e).__name__})",
+                "this_week": ""}
+
+
+def vault_sync() -> dict:
+    """Is the VPS vault copy receiving changes? Only 'sync_broken' is ever mentioned (his
+    call, 2026-10-08: a closed laptop is not a problem)."""
+    try:
+        return _vault_module("done_facts").freshness()
+    except Exception as e:  # noqa: BLE001
+        return {"state": "unknown", "why": f"{type(e).__name__}"}
 
 
 def gather_facts(today: str, yesterday: str) -> dict:
@@ -373,7 +395,8 @@ def gather_facts(today: str, yesterday: str) -> dict:
         if v is not None:
             activity[k] = int(v)
 
-    ai = gather_action_items()
+    ai = gather_action_items(today)
+    inbox, inbox_status = gather_inbox_checked(today)
     return {
         "date": today,
         "sleep_synced": sleep_present,
@@ -383,7 +406,9 @@ def gather_facts(today: str, yesterday: str) -> dict:
         "tasks": gather_tasks(today),
         "health_yesterday": gather_health_yesterday(yesterday),
         "training_today": gather_training(today),
-        "inbox": gather_inbox(),
+        "inbox": inbox,
+        "inbox_status": inbox_status,
+        "vault_sync": vault_sync(),
         "board": gather_board(),
         "hard_deadlines": ai["hard_deadlines"],
         "this_week": ai["this_week"],
@@ -440,15 +465,22 @@ def compose_templated(facts: dict) -> str:
     if facts["tasks"]:
         parts += ["", "*Due today*"] + [f"• {t}" for t in facts["tasks"]]
 
-    # hard deadlines: pull the bolded item lines, SKIPPING anything already done
-    hd = []
-    for ln in facts["hard_deadlines"].split("\n"):
-        if "✅" in ln or "~~" in ln or re.match(r"^\s*-\s*\[x\]", ln, re.I):
-            continue  # completed — never surface as upcoming
-        m = re.search(r"\*\*(.+?)\*\*(.*)", ln)
-        if m:
-            tail = re.sub(r"\s+", " ", m.group(2)).strip(" —-")
-            hd.append(f"• {m.group(1)}" + (f" — {tail[:80]}" if tail else ""))
+    # The open rows from today_actions ("- [TODAY] <when> — <what>"), already filtered for
+    # done. Show today's first, the What cell (not the When), and keep the ⬜ step of a row
+    # whose When starts with ✅ (2026-10-08 review: the old ✅ filter dropped "… · ⬜ X still to do").
+    hd_src = facts["hard_deadlines"]
+    today_rows, week_rows = [], []
+    for ln in hd_src.split("\n"):
+        m = re.match(r"^- \[(TODAY|WEEK)\]\s*(.*)$", ln)
+        if not m or "STALE" in ln:
+            continue
+        when, _, what = m.group(2).partition(" — ")
+        text = re.sub(r"\*\*|\s+", " ", (what or when)).strip()
+        if "⬜" in when and "⬜" not in text:
+            text += " · " + re.sub(r"\*\*", "", when[when.index("⬜"):]).strip()
+        (today_rows if m.group(1) == "TODAY" else week_rows).append(f"• {text[:110]}")
+    hd = (["• I couldn't read your task list this morning"] if hd_src.startswith("UNKNOWN") else []) \
+        + today_rows + week_rows
     if hd:
         parts += ["", "*This week*"] + hd[:4]
 
@@ -558,18 +590,44 @@ def gather_training(today: str) -> dict:
 
 
 def gather_inbox() -> list:
-    """Today's email triage, already classified by the 06:40 job."""
+    """Today's email triage, already classified by the 06:40 job (no freshness check —
+    use gather_inbox_checked)."""
     try:
         d = json.loads(TRIAGE_JSON.read_text())
     except Exception:  # noqa: BLE001
         return []
-    items = d.get("items") or []
+    return _inbox_items(d)
+
+
+def _inbox_items(d: dict) -> list:
     out = []
-    for it in items:
+    for it in d.get("items") or []:
         out.append({k: it.get(k) for k in
-                    ("category", "company", "summary", "action", "urgency",
+                    ("category", "company", "summary", "action", "done_evidence", "note", "urgency",
                      "status_change", "matched_application") if it.get(k)})
     return out
+
+
+def gather_inbox_checked(today: str = "") -> tuple:
+    """(items, status). status is "ok", "failed: …", "stale: …" or "missing".
+
+    2026-10-08: a failed triage used to leave YESTERDAY's JSON in place, and the brief
+    served those items as this morning's inbox. Items are only used when the triage ran
+    today (Toronto date) and did not fail."""
+    try:
+        d = json.loads(TRIAGE_JSON.read_text())
+    except Exception:  # noqa: BLE001
+        return [], "missing"
+    if d.get("failed"):
+        return [], f"failed: {str(d['failed'])[:80]}"
+    try:
+        ran = datetime.datetime.fromisoformat(str(d.get("generated_at"))).astimezone(TZ).date()
+    except (TypeError, ValueError):
+        return [], "stale: no timestamp"
+    want = datetime.date.fromisoformat(today) if today else datetime.datetime.now(TZ).date()
+    if ran != want:
+        return [], f"stale: last ran {ran.isoformat()}"
+    return _inbox_items(d), "ok"
 
 
 def gather_board() -> dict:
@@ -616,7 +674,12 @@ _STYLE = (
     "WHAT YOU HAVE — skip anything empty, and never announce that something is empty:\n"
     "• `schedule` — today's calendar.\n"
     "• `inbox` — already-triaged email. Lead with a status_change or urgency=high: an "
-    "assessment invite, an interview request, a rejection, a real person waiting.\n"
+    "assessment invite, an interview request, a rejection, a real person waiting. An item "
+    "with `done_evidence` and no `action` is ALREADY HANDLED — mention it as news at most, "
+    "never as something to do. If `inbox_status` is not \"ok\", say once, plainly, that the "
+    "inbox check didn't run this morning — never present old items as today's.\n"
+    "• `vault_sync` — ONLY if `state` is \"sync_broken\", say once that your copy of his "
+    "vault may be behind because sync is having trouble. Otherwise never mention it.\n"
     "• `board` — the live job board. Name 2-4 specific roles from `top_targets`, "
     "preferring `new_last_2_days`, since applying early is the entire thesis.\n"
     "• `health_yesterday` — `not_logged` is what he never recorded. Mention it lightly "
@@ -624,7 +687,11 @@ _STYLE = (
     "• `training_today` — what his split calls for. If it is a rest day, say so.\n"
     "• `sleep` / `yesterday_activity` — flag genuinely low sleep (floor 7h) or a clear "
     "trend, once. Otherwise leave it.\n"
-    "• `tasks`, `hard_deadlines`, `this_week` — the plan.\n\n"
+    "• `tasks`, `hard_deadlines`, `this_week` — the plan. `hard_deadlines` is the OPEN "
+    "rows of his THIS WEEK list (finished rows already removed; ⬜ = a step still to do). "
+    "Rows tagged [TODAY] are today's work; [WEEK] rows are later this week — mention one only "
+    "if it connects to today; a row marked STALE is carry-over, not today's plan. If it says "
+    "UNKNOWN, say you couldn't read his task list rather than implying there is nothing to do.\n\n"
 
     "❌ NEVER WRITE LIKE THIS — these are real failures from earlier versions:\n"
     "❌ '**Due today**\\n• Applications ×5\\n• Health logging' — a form being filled in.\n"

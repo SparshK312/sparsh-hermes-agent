@@ -340,11 +340,322 @@ def test_hermes_recent_events_recipe():
     out = subprocess.run(["bash", "-c", cmd], cwd=v, capture_output=True, text=True).stdout.strip()
     check("the newest entry is returned even when it is a decision", out.endswith("NEWEST, a decision"), True)
 
+# ── THE PREFILL'S TASK SOURCE MUST BE TODAY'S OPEN ROWS, NOT OLD SECTIONS ─────────
+# 2026-10-08: today_actions.py printed ~30 KB a day — "🗄️ Thu Sep 17 (was TODAY)", "today's
+# wave is staged", and "Thu Oct 1" (weekday+month matched every Thursday in October) — and
+# the prefill turned them into tasks. The live list is the THIS WEEK table. Synthetic
+# fixture with the real file's SHAPE (the repo is public: no real entries here).
+_TA_FIXTURE = """# Action Items
+## 🥇 THE STACK — re-cut Mon Sep 14 · 🗄️ OVER. Rows moved to THIS WEEK below.
+### 🗄️ Thu Sep 17 *(was "TODAY")* — all done
+- old task A
+### 📈 APPLICATIONS — today's wave is staged
+- old task B
+### 📄 RÉSUMÉ REBUILD — his call, Thu Oct 1 2026
+- old task C
+## 🔴 THE FORWARD CALENDAR
+### 🔥 THIS WEEK — rebuilt Wed Sep 30
+> 🗄️ cleared items quoted here
+| When | What | Note |
+|---|---|---|
+| 🔴 **DAILY Wed Oct 7 → Thu Oct 15** | 🟢 **ACME: interview prep ladder** | n |
+| ✅ **SENT Wed Oct 7** | 📧 **ACME: availability submitted** | n |
+| 🗄️ *(superseded)* | 🎯 **OLDCO: dead thread** | n |
+| ✅ ~~**Mon Oct 5**~~ | ✅ **ROUND: sat** | n |
+| ✅ **TEST SUBMITTED Thu Oct 8** · ⬜ **VOICE ROUND still to do: closes Sat Oct 10** · 🗄️ was: TODAY Wed Oct 7 | 🧪 **WIDGETCO OAs** | n |
+| 🔴 **TODAY Tue Oct 6** | 🟢 **ACME: old today row** | n |
+| 🔴 **TODAY Thu Oct 8** | 🟢 **ACME: today row** | n |
+| ✅ **HELD Tue Oct 6** | 💼 **EXT: meeting held** | ⬜ stale open-decision note in the NOTE column |
+| 🟡 **After passing** | 🟢 **ACME: questions for later** | n |
+| 🔴 **By Sat Oct 10** | 📝 **APPLY: deadline soon** | n |
+| 🔴 **By Mon Oct 19** | 📝 **APPLY: deadline later** | n |
+| 🟡 **Next** | 📄 **{long} ⬜ LATE OPEN STEP past the cut** | n |
+### 📅 Thu Oct 8 — dated section
+- dated task D
+#### sub-heading inside the dated section
+- dated task E
+### 📅 Fri Oct 9 — tomorrow
+- not today F
+"""
+
+def test_today_actions_reads_open_rows_only():
+    print("T1. today_actions: open THIS WEEK rows + today's dated sections; no stale sections; capped")
+    sys.path.insert(0, str(HERE.parent / "vault"))
+    import today_actions as TA
+    fx = _TA_FIXTURE.replace("{long}", "x" * 400)
+    out = TA.build(fx, date(2026, 10, 8))
+    for gone in ("old task A", "old task B", "old task C", "availability submitted",
+                 "dead thread", "ROUND: sat", "not today F", "dated task D", "meeting held"):
+        check(f"dropped: {gone}", gone in out, False)
+    for kept in ("interview prep ladder", "VOICE ROUND still to do", "today row", "LATE OPEN STEP"):
+        check(f"kept: {kept}", kept in out, True)
+    tag = {k: next((l[2:9] for l in out.splitlines() if k in l), None) for k in
+           ("interview prep ladder", "today row", "questions for later", "deadline soon",
+            "deadline later", "VOICE ROUND")}
+    check("today's work is [TODAY]; later work is [WEEK]", tag,
+          {"interview prep ladder": "[TODAY]", "today row": "[TODAY]", "questions for later": "[WEEK] ",
+           "deadline soon": "[TODAY]", "deadline later": "[WEEK] ", "VOICE ROUND": "[TODAY]"})
+    stale = [l for l in out.splitlines() if "STALE" in l]
+    check("only the past TODAY row is flagged stale", [("old today row" in l) for l in stale], [True])
+    check("small", len(out) < 3000, True)
+    nofmt = TA.build("# Action Items\n### Some other heading\n- x\n", date(2026, 10, 8))
+    check("a missing THIS WEEK table says UNKNOWN, never 'nothing due'",
+          ("UNKNOWN" in nofmt, "nothing due" in nofmt), (True, False))
+    big = _TA_FIXTURE.replace("| 🔴 **TODAY Thu Oct 8**",
+                              "".join(f"| 🔴 **Open {i}** | {'x' * 200} | n |\n" for i in range(40)) + "| 🔴 **TODAY Thu Oct 8**")
+    capped = TA.build(big, date(2026, 10, 8))
+    check("the size cap announces itself", (len(capped) <= TA.TOTAL_MAX + 200, "TRUNCATED" in capped), (True, True))
+
 # ── THE MORNING EMAIL TRIAGE MUST SEE EVERY APPLICATION ───────────────────────
 # 2026-10-04. email_triage.live_applications() read "My Applications!A1:K60" while the
 # tab held 189 rows, so 130 applications (Amazon, Google, Microsoft, Palantir…) were
 # invisible and an email from any of them could not be matched to its application.
 # Behavioural: drive the REAL function with a fake Sheet of 700 rows.
+# ── THE TRIAGE MUST NOT TURN A FINISHED STEP INTO A TASK ─────────────────────
+# 2026-10-08: "submit your availability" became a task the morning after it was submitted,
+# and a bulk note on a Closed req became "check the Action Center". Synthetic fixtures only
+# (the repo is public). The cases that must NOT be silenced matter as much as the drops.
+def test_email_triage_done_checks():
+    print("E2. email_triage: empty searches, fail-soft sent mail, thread + board done-checks, prompt evidence")
+    sys.path.insert(0, str(HERE.parent / "email"))
+    import email_triage as T
+    real_gapi, real_log = T._gapi, T.log
+    T.log = lambda *a, **k: None
+    try:
+        check("'No messages found.' is an empty result, not a crash", T._parse_search("No messages found.\n"), [])
+        T._gapi = lambda *a, **k: "No messages found."
+        check("an empty sent window is ok", T.fetch_sent(), ([], "ok"))
+        def boom(*a, **k): raise RuntimeError("token expired")
+        T._gapi = boom
+        sent, st = T.fetch_sent()
+        check("a failing sent fetch degrades, loudly labelled", (sent, st.startswith("unavailable")), ([], True))
+    finally:
+        T._gapi, T.log = real_gapi, real_log
+    T.log = lambda *a, **k: None
+    try:
+        cands = [
+            {"id": "m1", "date": "Wed, 07 Oct 2026 10:00:00 -0400", "thread": "t1"},   # he replied after
+            {"id": "m2", "date": "Wed, 07 Oct 2026 10:00:00 -0400", "thread": "t2"},   # his mail was BEFORE
+            {"id": "m3", "date": "Wed, 07 Oct 2026 10:00:00 -0400", "thread": "t3"},   # Closed row, nothing new
+            {"id": "m4", "date": "Wed, 07 Oct 2026 10:00:00 -0400", "thread": "t4"},   # Closed row, but Offer row at same co
+            {"id": "m5", "date": "Wed, 07 Oct 2026 10:00:00 -0400", "thread": "t5"},   # Closed row, recruiter re-engages
+            {"id": "m6", "date": "Wed, 07 Oct 2026 10:00:00 -0400", "thread": "t6"},   # ambiguous match (2 rows)
+            {"id": "m7", "date": "Wed, 07 Oct 2026 10:00:00 -0400", "thread": "t7"},   # replied, but the step is a FORM
+            {"id": "m8", "date": "Wed, 07 Oct 2026 10:00:00 -0400", "thread": "t8"},   # Rejected row, recruiter re-engages
+        ]
+        sent = [{"thread": "t1", "date": "Wed, 07 Oct 2026 12:00:00 -0400"},
+                {"thread": "t7", "date": "Wed, 07 Oct 2026 12:00:00 -0400"},
+                {"thread": "t2", "date": "Tue, 06 Oct 2026 09:00:00 -0400"}]
+        apps = [{"company": "Acme", "role": "SWE Intern", "status": "Closed"},
+                {"company": "Widgetco", "role": "Data Intern", "status": "Closed"},
+                {"company": "Widgetco", "role": "SWE Intern", "status": "Offer"},
+                {"company": "Gizmo", "role": "SWE Intern", "status": "Closed"},
+                {"company": "Dup", "role": "SWE Intern", "status": "Closed"},
+                {"company": "Dup", "role": "SWE Intern", "status": "Rejected"},
+                {"company": "Kappa", "role": "SWE Intern", "status": "Rejected"}]
+        items = [
+            {"id": "m1", "category": "needs-reply", "action": "reply to the recruiter"},
+            {"id": "m2", "category": "needs-reply", "action": "reply to the recruiter"},
+            {"id": "m3", "category": "application-update", "matched_application": "Acme — SWE Intern",
+             "status_change": "", "action": "check the portal"},
+            {"id": "m4", "category": "application-update", "matched_application": "Widgetco — Data Intern",
+             "status_change": "", "action": "complete onboarding form"},
+            {"id": "m5", "category": "application-update", "matched_application": "Gizmo — SWE Intern",
+             "status_change": "Interview", "action": "book the interview"},
+            {"id": "m6", "category": "application-update", "matched_application": "Dup — SWE Intern",
+             "status_change": "", "action": "check the portal"},
+            {"id": "m7", "category": "needs-reply", "action": "complete the onboarding form"},
+            {"id": "m8", "category": "application-update", "matched_application": "Kappa — SWE Intern",
+             "status_change": "", "action": "complete the new assessment by Friday"},
+        ]
+        n = T.reconcile(items, cands, sent, apps)
+        got = {i["id"]: bool(i.get("action")) for i in items}
+        check("replied in the same thread AFTER the email -> action cleared", got["m1"], False)
+        check("his earlier mail in the thread does NOT count as a reply", got["m2"], True)
+        check("exact unique Closed row, nothing new -> action cleared", got["m3"], False)
+        check("Closed row but a live Offer row at the same company -> KEPT", got["m4"], True)
+        check("Closed row but a new interview -> KEPT", got["m5"], True)
+        check("ambiguous board match -> KEPT", got["m6"], True)
+        check("a reply does not prove a NON-reply step -> KEPT, with the fact noted",
+              (got["m7"], "replied" in (items[6].get("note") or "")), (True, True))
+        check("Rejected row but a new request (no status change) -> KEPT", got["m8"], True)
+        check("cleared items carry evidence, items are never removed",
+              (n, len(items), all(i.get("done_evidence") for i in items if not i.get("action"))), (2, 8, True))
+        md = T.render([{"category": "needs-reply", "company": "Acme", "summary": "s", "action": "",
+                        "done_evidence": "you replied"}])
+        check("a done item renders as handled, with no ▶️ action", ("already handled" in md, "▶️" in md), (True, False))
+        # the prompt carries the evidence, tagged, and says when it is unavailable
+        captured = {}
+        class _R:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps({"content": [{"type": "text", "text": '{"items": []}'}],
+                                               "usage": {}, "stop_reason": "end_turn"}).encode()
+        real_open, real_env = T.urllib.request.urlopen, T.env
+        T.urllib.request.urlopen = lambda req, timeout=0: (captured.update(body=json.loads(req.data)), _R())[1]
+        T.env = lambda k: "test-key"
+        try:
+            T.classify([{"id": "x", "from": "a", "date": "d", "subject": "s", "body": "b"}], [],
+                       [], "unavailable: RuntimeError", ["2026-10-07 [DONE?] Acme — ✅ availability SUBMITTED"], "ok")
+        finally:
+            T.urllib.request.urlopen, T.env = real_open, real_env
+        u = captured["body"]["messages"][0]["content"]
+        sysmsg = captured["body"]["system"][0]["text"]
+        check("prompt carries the tagged log evidence", "[DONE?] Acme — ✅ availability SUBMITTED" in u, True)
+        check("prompt says sent mail is UNAVAILABLE (not 'none')", "UNAVAILABLE" in u, True)
+        check("each email carries its thread id", "Thread: " in u, True)
+        check("rules: a sent email must be dated AFTER the email", "dated AFTER the email" in sysmsg, True)
+        check("rules: a [PLAN] line is never evidence", "NEVER evidence" in sysmsg, True)
+        check("rules: same step, not just same company", "different step at the same" in sysmsg, True)
+    finally:
+        T.log = real_log
+
+# ── THE MORNING BRIEF MUST NOT SERVE YESTERDAY'S INBOX OR AN EMPTY PLAN ──────
+def test_brief_inbox_and_plan_are_current():
+    print("B1. brief: only today's, non-failed triage is used; the plan is the open THIS WEEK rows")
+    sys.path.insert(0, str(HERE.parent / "hae"))
+    import health_morning_brief_gate as G
+    d = Path(tempfile.mkdtemp())
+    real_tj, real_ai, real_log = G.TRIAGE_JSON, G.ACTION_ITEMS, G._log
+    G._log = lambda *a, **k: None
+    try:
+        G.TRIAGE_JSON = d / "t.json"
+        item = {"category": "needs-reply", "company": "Acme", "summary": "s", "action": "",
+                "done_evidence": "you replied"}
+        G.TRIAGE_JSON.write_text(json.dumps({"generated_at": "2026-10-07T10:40:00+00:00", "items": [item]}))
+        check("yesterday's triage is NOT today's inbox", G.gather_inbox_checked("2026-10-08"), ([], "stale: last ran 2026-10-07"))
+        G.TRIAGE_JSON.write_text(json.dumps({"generated_at": "2026-10-08T10:40:00+00:00", "failed": "boom", "items": []}))
+        check("a failed triage is reported as failed", G.gather_inbox_checked("2026-10-08")[1].startswith("failed"), True)
+        G.TRIAGE_JSON.write_text(json.dumps({"generated_at": "2026-10-08T10:40:00+00:00", "items": [item]}))
+        items, st = G.gather_inbox_checked("2026-10-08")
+        check("today's triage is used, done evidence kept", (st, items[0].get("done_evidence")), ("ok", "you replied"))
+        G.ACTION_ITEMS = d / "ai.md"
+        G.ACTION_ITEMS.write_text(_TA_FIXTURE)
+        hd = G.gather_action_items("2026-10-08")["hard_deadlines"]
+        check("the plan carries the open rows", ("interview prep ladder" in hd, "old task A" in hd), (True, False))
+        G.ACTION_ITEMS = d / "missing.md"
+        check("an unreadable task list says UNKNOWN, not nothing",
+              G.gather_action_items("2026-10-08")["hard_deadlines"].startswith("UNKNOWN"), True)
+    finally:
+        G.TRIAGE_JSON, G.ACTION_ITEMS, G._log = real_tj, real_ai, real_log
+
+# ── THE PREP NUDGE AIMS AT THE LIVE TARGET AND TONIGHT'S PLANNED WORK ─────────
+# 2026-10-08: it printed a hard-coded target company for a week while the
+# real target was a booked interview, and "days since rep" ignored the scorecard. Synthetic.
+def test_prep_nudge_live_target_and_plan():
+    print("P1. prep-nudge: target from frontmatter, tonight's row from the plan's WORK table, last rep = max(log, scorecard)")
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    t = _dt.now(ZoneInfo("America/Toronto")).date()     # prep_nudge uses Toronto time (review: no flake near midnight)
+    lab = f"{t:%a} {t:%b} {t.day}"
+    v = build(sess_days_ago=20, snap_days_ago=0)
+    rated = (t - timedelta(days=2)).isoformat()
+    (v / "09 - Systems" / "Hermes" / "prep-queue-snapshot.md").write_text(
+        SNAPSHOT.format(gen=t.isoformat(), n=2).replace("| GREEN | 2026-09-12 |", f"| GREEN | {rated} |"))
+    tr = v / "00 - Dashboard" / "Interview Prep.md"
+    tr.write_text(tr.read_text().replace("type: prep-tracker\n",
+        "type: prep-tracker\nlive_target: \"Acme SWE interviews\"\n"
+        f"live_target_date: {(t + timedelta(days=5)).isoformat()}\nlive_plan: \"Plans/Acme Plan.md\"\n"))
+    (v / "Plans").mkdir()
+    (v / "Plans" / "Acme Plan.md").write_text(
+        "## Midline (not the plan)\n| Day | Block | Must |\n|---|---|---|\n"
+        f"| **{lab}** | evening | WRONG midline work |\n\n"
+        "## Ceiling\n| Day | Where | Ceiling h | The work | Analogue |\n|---|---|---|---|---|\n"
+        f"| **🔥 {lab}** | home | **6** | RIGHT ceiling work | x |\n")
+    st = state(v)
+    check("target read from frontmatter, with the countdown",
+          (st.get("target", "").startswith("Acme SWE interviews"), "5 day(s) away" in st.get("target", "")), (True, True))
+    check("tonight's row comes from the WORK table, not the midline",
+          ("RIGHT ceiling work" in st.get("todays_plan", ""), "WRONG" in st.get("todays_plan", "")), (True, False))
+    check("planned hours carried", "(6 h planned)" in st.get("todays_plan", ""), True)
+    check("last rep = the scorecard rating when it is newer", (st.get("last_rep_date", "")[:10], st.get("days_since_rep")), (rated, "2"))
+    v2 = build(sess_days_ago=1, snap_days_ago=0)
+    st2 = state(v2)
+    check("no live_target field -> UNKNOWN, and no company is invented",
+          (st2.get("target", "").startswith("UNKNOWN"), "bigger brands" in st2["_raw"]), (True, False))
+    cfg = json.loads((HERE.parent.parent / "config" / "cron_additions.json").read_text())
+    p = next(j["prompt"] for j in cfg["jobs_to_append"] if j["name"] == "prep-nudge")
+    check("the prompt names no hard-coded company and uses tonight's plan",
+          ("bigger brands" in p, "todays_plan" in p, "is NOT proof he skipped it" in p), (False, True, True))
+
+# ── THE EVENING CHECK-IN: BLANK IS "NOT LOGGED", NEVER ZERO ──────────────────
+def test_evening_summary_blank_is_unknown():
+    print("V1. evening summary: nothing logged -> one-line ask; blanks are 'not logged'; vitamins are a question")
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    td = _dt.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d")
+    def run(fm_extra="", meal=False):
+        v = Path(tempfile.mkdtemp())
+        (v / "04 - Daily Notes").mkdir(parents=True)
+        (v / "04 - Daily Notes" / f"{td}.md").write_text(f"---\ntype: daily\nkcal: \nprotein_g: \nwater_l: \n{fm_extra}---\n# day\n")
+        if meal:
+            (v / "07 - Health" / "Food Log").mkdir(parents=True)
+            (v / "07 - Health" / "Food Log" / f"{td}.md").write_text("## 7:30 PM · Dinner\n- pasta\n")
+        out = subprocess.run(["bash", str(HERE / "evening_summary.sh")], capture_output=True, text=True,
+                             env={"PATH": "/usr/bin:/bin", "HERMES_VAULT": str(v)}).stdout
+        return dict(l.split(": ", 1) for l in out.splitlines() if ": " in l)
+    a = run()
+    check("nothing logged -> tracked_today no", a.get("tracked_today", "").startswith("no"), True)
+    check("blank kcal is 'not logged', never 0", a.get("kcal_so_far", "").startswith("not logged"), True)
+    check("no 'missing' claims on an untracked day", a.get("missing", "").startswith("unknown"), True)
+    b = run("kcal: 1500\n", meal=True)
+    check("logged day: real numbers, dinner seen, water missing",
+          (b.get("tracked_today"), b.get("kcal_so_far", "")[:4], b.get("dinner_logged"), b.get("missing")),
+          ("yes", "1500", "yes", "water"))
+    check("vitamins are a question, not 'not taken'", b.get("vitamins", "").startswith("unknown — ask"), True)
+    cfg = json.loads((HERE.parent.parent / "config" / "cron_additions.json").read_text())
+    p = next(j["prompt"] for j in cfg["jobs_to_append"] if j["name"] == "health-evening-summary-nudge")
+    check("prompt: one-line ask when nothing is logged; vitamins asked", ("tracked_today` is no" in p, "Vitamins today?" in p), (True, True))
+
+# ── done_facts: the shared "what is already done / is the vault current" helper ──
+def test_done_facts():
+    print("N1. done_facts: machine scopes excluded, day window, tags, priority budget, freshness kinds")
+    sys.path.insert(0, str(HERE.parent / "vault"))
+    import done_facts as DF
+    from datetime import datetime as _dt, timezone as _tz
+    v = Path(tempfile.mkdtemp())
+    def day(d, *lines):
+        p = v / "Log" / d[:4] / d[:7] / f"{d}.md"; p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("---\ntype: log\n---\n\n" + "\n\n".join(lines) + "\n")
+    day("2026-10-01", "## [2026-10-01] update | Acme — ✅ OLD outside the window")
+    day("2026-10-06", "## [2026-10-06] update | Acme — availability SUBMITTED",
+        "## [2026-10-06] decision | Plan — his list for tomorrow: submit the Acme form")
+    day("2026-10-07", "## [2026-10-07] ingest | hermes:daily-note-prefill — machine entry",
+        "## [2026-10-07] update | log-food — machine entry 2",
+        "## [2026-10-07] update | Widgetco — reply sent to the recruiter",
+        "## [2026-10-07] update | Gizmo — " + "x" * 450 + " finally SUBMITTED",
+        "## [2026-10-07] update | Misc — closes Sat Oct 10, nothing finished")
+    lines, om = DF.done_lines(v, days=4, today=date(2026, 10, 7))
+    txt = "\n".join(lines)
+    check("machine scopes (hermes:, log-) are excluded", ("machine entry" in txt), False)
+    check("entries outside the day window are excluded", "OLD outside" in txt, False)
+    check("a decision is tagged PLAN, never DONE", "[PLAN] Plan — his list" in txt, True)
+    check("completion words tag DONE? (case-insensitive)", ("[DONE?] Acme" in txt, "[DONE?] Widgetco" in txt), (True, True))
+    check("a completion word past the cut still tags DONE?", "[DONE?] Gizmo" in txt, True)
+    check("'Sat' (Saturday) is not a completion", "[NOTE] Misc" in txt, True)
+    small, om2 = DF.done_lines(v, days=4, today=date(2026, 10, 7), max_total=160)
+    check("a tight budget keeps DONE? lines first and reports what it omitted",
+          (all("[DONE?]" in l for l in small), om2 > 0), (True, True))
+    now = _dt(2026, 10, 7, 20, 0, tzinfo=_tz.utc)
+    sp = v / "wd.json"
+    def fr(kinds, checked_h_ago=0.5):
+        sp.write_text(json.dumps({"bad": bool(kinds), "kinds": kinds,
+                                  "checked": (now - timedelta(hours=checked_h_ago)).isoformat()}))
+        return DF.freshness(now, sp)["state"]
+    check("no problems -> ok", fr([]), "ok")
+    check("a closed Mac (heartbeat only) is NOT 'sync_broken'", fr(["heartbeat"]), "ok")
+    check("pending uploads -> sync_broken", fr(["pending"]), "sync_broken")
+    check("a watchdog that stopped running -> unknown", fr([], checked_h_ago=5), "unknown")
+    check("no state file -> unknown", DF.freshness(now, v / "missing.json")["state"], "unknown")
+    sys.path.insert(0, str(HERE.parent.parent / "scripts" / "internship"))
+    import role_exclusions as RX
+    check("role exclusions: analyst/scientist/firmware/embedded out; data/analytics ENGINEER, SWE, ML in",
+          [RX.excluded(t) for t in ("Data Analyst Intern", "Data Scientist Intern", "Firmware Intern",
+                                    "SWE Intern (Embedded Systems)", "Data Engineer Intern",
+                                    "Data Analytics Engineer Intern", "Software Engineer Intern",
+                                    "Machine Learning Intern")],
+          [True, True, True, True, False, False, False, False])
+
 def test_email_triage_reads_every_application():
     print("E1. email_triage reads the whole My Applications tab; only the PROMPT is capped, loudly")
     sys.path.insert(0, str(HERE.parent / "email"))
@@ -398,7 +709,10 @@ for fn in (test_prep_nudge_reads_the_files_that_are_actually_updated,
            test_the_prompt_cannot_assert_an_unknown_queue_is_clear,
            test_email_triage_reads_every_application,
            test_hermes_entries_do_not_count_as_freshness,
-           test_sync_watchdog, test_hermes_recent_events_recipe):
+           test_sync_watchdog, test_hermes_recent_events_recipe,
+           test_today_actions_reads_open_rows_only, test_email_triage_done_checks,
+           test_brief_inbox_and_plan_are_current, test_prep_nudge_live_target_and_plan,
+           test_evening_summary_blank_is_unknown, test_done_facts):
     try:
         fn()
     except Exception as exc:  # noqa: BLE001

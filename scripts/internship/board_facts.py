@@ -41,6 +41,7 @@ from status_vocab import (STATUS_OPTS, PIPELINE_STATUSES,                # noqa:
 # Apply - Winter / Apply - Summer / Below Bar). A literal here is how a rename would
 # have silently emptied the morning brief and the evening nudge.
 import board_tabs as BT  # noqa: E402
+from role_exclusions import excluded as _excluded_role  # noqa: E402
 
 
 def _rng(tab: str) -> str:
@@ -153,10 +154,14 @@ def board_facts(top_n: int = 8) -> dict:
         })
     # Winter first, then the old order: Winter 2027 is the open slot he is filling.
     _winter_first = lambda x: 0 if x["season"] == "winter" else 1  # noqa: E731
-    scored = [x for x in open_roles if x["fit"] is not None]
+    # Never SUGGEST a role type he has ruled out, or one nobody has scored (2026-10-08: the
+    # newest row was an unscored "Data Analyst Intern", and the 7 PM nudge would have
+    # pitched it). open_roles_total still counts everything.
+    pickable = [x for x in open_roles if x["fit"] is not None and not _excluded_role(x["role"])]
+    scored = list(pickable)
     scored.sort(key=lambda x: (_winter_first(x), -x["hot"], -(x["fit"] or 0)))
 
-    fresh = [x for x in open_roles if x["age_days"] <= 2]
+    fresh = [x for x in pickable if x["age_days"] <= 2]
     fresh.sort(key=lambda x: (-x["hot"], x["age_days"]))
 
     applied, pipeline = [], []

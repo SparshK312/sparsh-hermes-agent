@@ -68,23 +68,31 @@ kcal = fnum("kcal")
 protein = fnum("protein_g")
 dinner = "dinner" in ml
 vitamins = fm.get("vitamins_taken", "").lower() == "true"
+# 2026-10-08: a BLANK field is "not logged", never 0. This used to print kcal_so_far: 0
+# on days logging was down ("you're 2,400 kcal short"), and "vitamins not taken" every
+# night because vault_log writes vitamins_taken only when he says yes. His calls: on a day
+# with nothing logged, ONE line asking whether he wants to log; vitamins as a question.
+tracked = bool(ml) or any(v is not None for v in (water, kcal, protein))
+
+def _num(v, unit=""):
+    return f"{int(v) if float(v).is_integer() else v}{unit}" if v is not None else "not logged"
 
 missing = []
-if not dinner:
-    missing.append("dinner")
-if water is None or water < 2.5:
-    missing.append("water")
-if not vitamins:
-    missing.append("vitamins")
+if tracked:
+    if not dinner:
+        missing.append("dinner")
+    if water is None or water < 2.5:
+        missing.append("water")
 
 L = [
     f"[evening-nudge state · {today}]",
-    f"dinner_logged: {'yes' if dinner else 'no'}",
-    f"water_l: {water if water is not None else 'none'} (target 2.5)",
-    f"vitamins_taken: {'yes' if vitamins else 'no'}",
-    f"kcal_so_far: {int(kcal) if kcal is not None else 0} (target 2400)",
-    f"protein_so_far_g: {int(protein) if protein is not None else 0} (target 140)",
-    f"missing: {', '.join(missing) or 'nothing'}",
+    f"tracked_today: {'yes' if tracked else 'no — nothing logged today (food, water, macros all blank)'}",
+    f"dinner_logged: {'yes' if dinner else ('no' if tracked else 'unknown')}",
+    f"water_l: {_num(water)} (target 2.5)",
+    f"vitamins: {'taken (logged)' if vitamins else 'unknown — ask as a question; it is only recorded when he says yes'}",
+    f"kcal_so_far: {_num(kcal)} (target 2400)",
+    f"protein_so_far_g: {_num(protein)} (target 140)",
+    f"missing: {', '.join(missing) or ('nothing' if tracked else 'unknown (nothing logged)')}",
 ]
 print("\n".join(L))
 PY

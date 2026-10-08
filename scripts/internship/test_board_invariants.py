@@ -1793,6 +1793,27 @@ def test_board_facts_reads_everything_and_derives_the_vocabulary():
           sorted(r["status"] for r in f["live_pipeline"]), ["OA - Done", "Technical Interview"])
     check("rows_read reports what was actually read", f.get("rows_read"),
           {"queue": 3, "winter": 1, "summer": 2, "apps": 5})
+    # (g) 2026-10-08: never SUGGEST a role type he has ruled out or an unscored row. The
+    # newest row was an unscored "Data Analyst Intern" and the 7 PM nudge would have
+    # pitched it. Fresh rows: an excluded title, an unscored row, and one real target.
+    fx2 = dict(fixture)
+    fx2["'Apply - Winter'!A1:Z"] = fixture["'Apply - Winter'!A1:Z"] + [
+        {"Status": "To Apply", "Company": "Nu", "Role": "Data Analyst Intern", "Fit": "95",
+         "Hot": "99", "Cycle": "Winter 2027", "Age": "0"},
+        {"Status": "To Apply", "Company": "Xi", "Role": "Firmware Engineer Intern", "Fit": "94",
+         "Hot": "99", "Cycle": "Winter 2027", "Age": "0"},
+        {"Status": "To Apply", "Company": "Omicron", "Role": "SWE Intern", "Fit": "",
+         "Hot": "99", "Cycle": "Winter 2027", "Age": "0"},
+    ]
+    try:
+        board_facts._rows = lambda rng: fx2.get(rng, [])
+        f2 = board_facts.board_facts(top_n=5)
+    finally:
+        board_facts._rows = real_rows
+    check("excluded role types and unscored rows are never suggested",
+          ([r["company"] for r in f2["new_last_2_days"]], [r["company"] for r in f2["top_targets"]]),
+          (["Yotta", "Zeta"], ["Zeta", "Yotta"]))
+    check("…but they still count as open roles", f2.get("open_roles_total"), 5)
     # Before the migration refresh only the legacy tab exists: the nudge must still see it.
     legacy_fixture = {"'Apply Now'!A1:Z": fixture["'Apply - Winter'!A1:Z"],
                       "'My Applications'!A1:Z": fixture["'My Applications'!A1:Z"]}

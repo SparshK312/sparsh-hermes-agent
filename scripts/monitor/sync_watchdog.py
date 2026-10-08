@@ -145,30 +145,38 @@ def rotate(log: Path) -> bool:
 
 
 def evaluate(now: datetime) -> tuple[list[str], dict]:
-    problems, info = [], {}
+    # info["kinds"] names WHICH checks failed, so done_facts.freshness() can tell "sync is
+    # broken" (pending/errors/service/nostate) from "the Mac is just closed" (heartbeat).
+    problems, info = [], {"kinds": []}
     d = sync_dir()
     if d is None:
+        info["kinds"].append("nostate")
         return ["no obsidian-headless sync state found"], info
     pend = pending_uploads(d / "state.db", now)
     stuck = [(p, a) for p, a in pend if a > PENDING_MAX_MIN]
     info["pending"] = len(pend)
     if stuck:
         worst = max(a for _, a in stuck)
+        info["kinds"].append("pending")
         problems.append(f"{len(stuck)} file(s) changed here have not uploaded for up to "
                         f"{worst/60:.1f} h (e.g. {stuck[0][0]})")
     errs = errors_last_hour(d / "sync.log", now)
     info["errors_1h"] = errs
     if errs >= ERRORS_PER_HOUR_MAX:
+        info["kinds"].append("errors")
         problems.append(f"{errs} 'Sync error' lines in the last hour")
     if not service_active():
+        info["kinds"].append("service")
         problems.append("obsidian-sync.service is not active")
     hb_when, hb_nonce = read_heartbeat(HEARTBEAT)
     if hb_when is None:
+        info["kinds"].append("heartbeat")
         problems.append("no Mac heartbeat yet (Sync Heartbeat.md missing or unreadable)")
     else:
         age_h = (now - hb_when).total_seconds() / 3600
         info["heartbeat_age_h"] = round(age_h, 1)
         if age_h > HEARTBEAT_MAX_H:
+            info["kinds"].append("heartbeat")
             problems.append(f"the Mac hasn't checked in for {age_h:.0f} h. Fine if the Mac has "
                             f"been closed; if you've been using it with Obsidian open, Mac→VPS "
                             f"sync is broken")
@@ -233,7 +241,9 @@ def run() -> int:
     elif action == "recovered":
         sent = send("✅ Vault sync recovered", "The VPS vault is syncing again.")
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps(next_state(prev, action, problems, now, sent)))
+    st = next_state(prev, action, problems, now, sent)
+    st["kinds"] = info.get("kinds", [])     # current, whatever happened to the alert
+    STATE.write_text(json.dumps(st))
     print(f"[sync-watchdog] {now:%Y-%m-%dT%H:%M}Z {'BAD' if problems else 'ok'} {info} "
           f"{problems if problems else ''} action={action} sent={sent}")
     return 0 if sent else 1

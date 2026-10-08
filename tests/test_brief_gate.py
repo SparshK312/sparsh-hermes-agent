@@ -59,11 +59,25 @@ def test_templated_marks_good_sleep_ok():
 
 
 def test_templated_excludes_completed_deadlines():
+    # 2026-10-08: hard_deadlines is now today_actions' open rows ("- [TODAY] <when> — <what>"),
+    # finished rows already removed upstream. The fallback shows the What, today's first,
+    # keeps an open ⬜ step, skips STALE rows, and never shows a non-row line.
     g = _load()
-    deadlines = "- **Ship it** due Fri\n- ✅ **Done thing** done\n- ~~**Cancelled**~~"
+    deadlines = ("# header line\n"
+                 "- [WEEK] 🟡 **Later** — **Week thing**\n"
+                 "- [TODAY] 🔴 **TODAY** — **Ship it**\n"
+                 "- [TODAY] ✅ **TEST SUBMITTED** · ⬜ **VOICE ROUND still to do** — **Widgetco OAs**\n"
+                 "- [WEEK] 🔴 **TODAY Tue Oct 6** — **Old row** ⚠️ STALE (labelled TODAY Oct 6)")
     out = g.compose_templated(_facts(deadlines=deadlines))
-    assert "Ship it" in out
-    assert "Done thing" not in out and "Cancelled" not in out
+    assert "Ship it" in out and "VOICE ROUND still to do" in out
+    assert out.index("Ship it") < out.index("Week thing")
+    assert "Old row" not in out and "header line" not in out
+
+
+def test_templated_says_when_task_list_unreadable():
+    g = _load()
+    out = g.compose_templated(_facts(deadlines="UNKNOWN — Action Items.md could not be read"))
+    assert "couldn't read your task list" in out
 
 
 def test_templated_never_empty_even_with_no_facts():
