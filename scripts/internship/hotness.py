@@ -65,6 +65,12 @@ TIER_A = {
     # added Jun 20 (user target list + probe hits)
     "adobe", "coinbase", "visa", "waymo", "mongodb", "datadog", "airbnb",
     "snowflake", "github",
+    # Added 2026-10-09, his call: "this in my opinion is definitely A tier". Figure AI
+    # (humanoid robotics, one of the most valuable private AI companies) was in NO
+    # table, so it defaulted to tier C: ranked like an unknown, enrichment-capped, never
+    # polled by hot_watch, and its 9 Winter reqs sat on Below Bar. Board names it
+    # "Figure"; "figure ai" covers the long form. Guarded by test BF2.
+    "figure", "figure ai",
 }
 TIER_B = {
     # Added 2026-09-08 for the same reason as the TIER_A block above. The Big Five

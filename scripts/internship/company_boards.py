@@ -98,6 +98,10 @@ BOARDS = [
     # Summer 2027 San Francisco (same band), and Winter 2027 TORONTO (CA$45-55/hr).
     # The Winter/Toronto one matters disproportionately: Winter is his scarcest cycle.
     {"name": "Harvey", "tier": "A", "ats_type": "ashby", "org": "harvey"},
+    # Figure AI wired 2026-10-09 (his call: A tier). Aggregator-only until now; its
+    # Greenhouse board carried 9 Winter 2027 intern reqs on Oct 6 that reached the board
+    # only through Simplify. Board polled directly from here on, so hot_watch fires.
+    {"name": "Figure", "tier": "A", "ats_type": "greenhouse", "token": "figureai"},
     {"name": "Mercury", "tier": "A", "ats_type": "greenhouse", "token": "mercury"},
     {"name": "Coinbase", "tier": "A", "ats_type": "greenhouse", "token": "coinbase"},
     {"name": "SoFi", "tier": "B", "ats_type": "greenhouse", "token": "sofi"},

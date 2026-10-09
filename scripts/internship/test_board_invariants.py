@@ -1905,6 +1905,26 @@ def test_title_meta_rescues_metadata_only_intern_signal():
 
 
 
+# BF2. A brand he has called top-tier must never fall to the tier-C default.
+# Added 2026-10-09 after Figure AI turned out to be in NO table: tier C by absence means
+# enrichment-capped, never hot-watched, ranked like an unknown, and on Below Bar. These
+# names are his explicit tier calls; a refactor that drops one goes red here.
+def test_brand_floor():
+    print("BF2. brand floor: his named top brands are tier A+ and wired where they have a board")
+    import hotness as H, company_boards as CB, target_bar as TB
+    floor = {"Figure": "A", "Figure AI": "A", "Harvey": "A", "Replit": "A", "Together AI": "A",
+             "Perplexity": "A", "Scale AI": "A", "Databricks": "A", "Stripe": "A", "Waymo": "A",
+             "OpenAI": "S", "Anthropic": "S", "xAI": "S", "Google DeepMind": "S"}
+    rank = {"S": 0, "A": 1, "B": 2, "C": 3}
+    for name, want in floor.items():
+        got = CB.tier_of(name)
+        check(f"{name} tier is {want} or better (got {got})", rank.get(got, 9) <= rank[want], True)
+    for name in ("Figure", "Figure AI"):
+        for season in (TB.SUMMER, TB.WINTER):
+            check(f"{name} {season} bar is apply", TB.bar_of(name, season), TB.APPLY)
+    wired = {(b.get("name"), b.get("token") or b.get("org")) for b in CB.boards()}
+    check("Figure's Greenhouse board (figureai) is wired", ("Figure", "figureai") in wired, True)
+
 # ── THE TARGET BAR (2026-10-04) ───────────────────────────────────────────────
 # Microsoft Summer 2027 was accepted on 2026-10-02 and his bar split in two: an ACCEPT
 # list (worth reneging for) and an APPLY list; everything else renders on Below Bar.
@@ -1943,7 +1963,7 @@ def test_target_bar_names_and_collisions():
     check("Microsoft Summer is below (already secured)", TB.bar_of("Microsoft", S_), TB.BELOW)
     check("Microsoft Winter is apply", TB.bar_of("Microsoft", W_), TB.APPLY)
     # 2026-10-09 group A: Winter-only promotion; Summer exclusions above still hold.
-    for name in ("Cloudflare", "AMD", "Figure", "Abridge", "Zip", "Kodiak Robotics",
+    for name in ("Cloudflare", "AMD", "Abridge", "Zip", "Kodiak Robotics",
                  "Gemini", "Geotab", "StackAdapt", "Kinaxis", "Domino Data Lab",
                  "Formlabs", "PrizePicks", "KnowBe4", "Entrust", "SOTI"):
         check(f"{name} Winter is apply (group A)", TB.bar_of(name, W_), TB.APPLY)
@@ -1970,6 +1990,7 @@ def test_target_bar_names_and_collisions():
     check("GM SWE fit 60 Winter -> Below Bar", _qp("General Motors", "SWE", 60), BT.TAB_BELOW)
     check("GM SWE fit 85 Summer -> Below Bar", _qp("General Motors", "SWE", 85, "Summer 2027"), BT.TAB_BELOW)
     check("Cloudflare Winter (any fit) -> Apply - Winter", _qp("Cloudflare", "SWE", None), BT.TAB_WINTER)
+
     # Season: Spring 2027 is the US label for Jan-Apr; blank defaults to Summer.
     for cyc, want in (("Winter 2027", W_), ("Spring 2027", W_),
                       ("Winter 2027, Spring 2027", W_), ("Fall 2026, Winter 2027", W_),
@@ -2372,6 +2393,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_board_facts_reads_everything_and_derives_the_vocabulary,
            test_board_reads_whole_tabs,
            test_target_bar_names_and_collisions,
+           test_brand_floor,
            test_queue_placement_partitions_the_queue,
            test_write_board_migrates_the_queue_tab_losslessly,
            test_board_py_imports_the_repo_modules_and_new_tabs,

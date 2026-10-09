@@ -62,6 +62,9 @@ APPLY_NAMES = {
     "imc trading", "five rings", "drw",
     "lyft", "robinhood", "coinbase", "doordash", "adobe", "salesforce",
     "together ai", "harvey",
+    # 2026-10-09, his call: Figure AI is A tier, both seasons (was Winter-only for an
+    # hour as part of the group-A batch).
+    "figure", "figure ai",
     # Round 2 (2026-10-04)
     "pinterest", "uber", "airbnb", "datadog", "plaid", "vercel", "duolingo",
     "anduril", "neuralink", "perplexity", "glean", "epic games", "rubrik",
@@ -95,7 +98,7 @@ WINTER_ONLY_APPLY = {
     # Known tech/AI names that sat on Below Bar. WINTER ONLY: Summer is filled by
     # Microsoft, and several of these (Cloudflare, AMD, Abridge, Domino) are his
     # explicit Oct-4 Summer exclusions, which TB1 still pins.
-    "cloudflare", "amd", "figure", "abridge", "zip", "kodiak robotics", "gemini",
+    "cloudflare", "amd", "abridge", "zip", "kodiak robotics", "gemini",
     "geotab", "stackadapt", "kinaxis", "domino data lab", "formlabs", "prizepicks",
     "knowbe4", "entrust", "soti",
 }
