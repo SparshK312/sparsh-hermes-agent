@@ -186,6 +186,12 @@ def queue_placement(rec: dict) -> tuple[str, str]:
     m, h = rec.get("machine", {}) or {}, rec.get("human", {}) or {}
     season = TB.season_of(m.get("cycle", ""), m.get("role", ""))
     bar = TB.bar_of(m.get("company", ""), season)
+    # 2026-10-09 group B: a big-name enterprise's Winter row is promoted only on a
+    # direct résumé fit (lane + scored JD), never on the company alone.
+    if season == TB.WINTER and bar == TB.BELOW and TB.winter_fit_promotes(
+            m.get("company", ""), m.get("lane", ""), m.get("fit_score"),
+            m.get("fit_disqualifier", "")):
+        bar = TB.APPLY
     season_tab = BT.TAB_WINTER if season == TB.WINTER else BT.TAB_SUMMER
     if (h.get("status") or "").strip().lower() == "on hold":
         return season_tab, bar

@@ -88,7 +88,31 @@ APPLY_NAMES = {
 # Applies only to WINTER rows. Microsoft Summer 2027 is accepted (2026-10-02), so a
 # Summer Microsoft req is moot; a Winter one stays worth applying to (his call
 # 2026-10-04: "Keep Winter reqs on the Winter tab").
-WINTER_ONLY_APPLY = {"microsoft"}
+WINTER_ONLY_APPLY = {
+    "microsoft",
+    # 2026-10-09, his call the day Wealthsimple (the Winter backup) said no and the
+    # Shopify extension became a 50/50 floor: "promote the group A companies".
+    # Known tech/AI names that sat on Below Bar. WINTER ONLY: Summer is filled by
+    # Microsoft, and several of these (Cloudflare, AMD, Abridge, Domino) are his
+    # explicit Oct-4 Summer exclusions, which TB1 still pins.
+    "cloudflare", "amd", "figure", "abridge", "zip", "kodiak robotics", "gemini",
+    "geotab", "stackadapt", "kinaxis", "domino data lab", "formlabs", "prizepicks",
+    "knowbe4", "entrust", "soti",
+}
+
+# 2026-10-09, same call, group B: big-name enterprises, but "promote only roles that
+# are a direct fit for my resume". So the COMPANY alone never promotes these; a Winter
+# row is promoted only when its role clears winter_fit_promotes() below. Everything
+# else at these companies stays on Below Bar.
+WINTER_FIT_ONLY = {
+    "general motors", "johnson & johnson", "honeywell", "royal bank of canada", "rbc",
+    "manulife", "sun life", "cibc", "intact", "liberty mutual", "home depot", "bose",
+    "bosch", "nokia", "ge aerospace",
+}
+# "Direct fit": an SWE or AI/ML lane, a scored JD at or above this, no disqualifier.
+# An unscored row (no JD read) is NOT promoted: unread is not evidence of fit.
+WINTER_FIT_LANES = {"SWE", "AI/ML"}
+WINTER_FIT_MIN = 80
 
 # Look-alikes that borrow a listed name but are a different company. Measured
 # 2026-10-04 against the 887-name corpus + adversarial probes. hotness.TIER_EXCEPTIONS
@@ -97,6 +121,7 @@ EXTRA_EXCEPTIONS = {
     "imc companies", "imc health", "ramp network", "mercury marine",
     "mercury financial", "cohere health", "citadel federal credit union",
     "epic systems", "stand together", "intel 471", "uber freight",
+    "robert bosch venture capital",
 }
 
 
@@ -151,6 +176,26 @@ def bar_of(company: str, season: str) -> str:
     if season == WINTER and _matches_any(WINTER_ONLY_APPLY, nn, w):
         return APPLY
     return BELOW
+
+
+def winter_fit_promotes(company: str, lane: str, fit_score, disqualifier: str = "") -> bool:
+    """True when a WINTER_FIT_ONLY company's row is a direct résumé fit (group B rule).
+
+    Called only for Winter rows that bar_of() put BELOW. Never promotes on the company
+    alone, never on an unscored row, never past a fit disqualifier."""
+    nn = normalize_company_name(company or "")
+    if not nn or is_excepted(company):
+        return False
+    if not _matches_any(WINTER_FIT_ONLY, nn, words0(nn)):
+        return False
+    if (lane or "") not in WINTER_FIT_LANES:
+        return False
+    if (disqualifier or "none") not in ("none", ""):
+        return False
+    try:
+        return fit_score is not None and float(fit_score) >= WINTER_FIT_MIN
+    except (TypeError, ValueError):
+        return False
 
 
 BAR_RANK = {ACCEPT: 0, APPLY: 1, BELOW: 2}

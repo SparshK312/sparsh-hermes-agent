@@ -1942,6 +1942,34 @@ def test_target_bar_names_and_collisions():
     # Microsoft: Summer is accepted, so a Summer req is moot; a Winter one is worth it.
     check("Microsoft Summer is below (already secured)", TB.bar_of("Microsoft", S_), TB.BELOW)
     check("Microsoft Winter is apply", TB.bar_of("Microsoft", W_), TB.APPLY)
+    # 2026-10-09 group A: Winter-only promotion; Summer exclusions above still hold.
+    for name in ("Cloudflare", "AMD", "Figure", "Abridge", "Zip", "Kodiak Robotics",
+                 "Gemini", "Geotab", "StackAdapt", "Kinaxis", "Domino Data Lab",
+                 "Formlabs", "PrizePicks", "KnowBe4", "Entrust", "SOTI"):
+        check(f"{name} Winter is apply (group A)", TB.bar_of(name, W_), TB.APPLY)
+        check(f"{name} Summer stays below (group A is Winter-only)", TB.bar_of(name, S_), TB.BELOW)
+    # 2026-10-09 group B: the company alone never promotes; only a direct-fit row does.
+    for name in ("General Motors", "Johnson & Johnson", "Honeywell", "Royal Bank of Canada",
+                 "Manulife Financial", "Sun Life", "CIBC", "The Home Depot", "Bosch", "Nokia"):
+        check(f"{name} Winter company-level stays below (group B)", TB.bar_of(name, W_), TB.BELOW)
+        check(f"{name} SWE fit 85 promotes", TB.winter_fit_promotes(name, "SWE", 85), True)
+        check(f"{name} AI/ML fit 80 promotes", TB.winter_fit_promotes(name, "AI/ML", 80), True)
+        check(f"{name} SWE fit 79 does not", TB.winter_fit_promotes(name, "SWE", 79), False)
+        check(f"{name} Data lane does not", TB.winter_fit_promotes(name, "Data", 95), False)
+        check(f"{name} unscored does not", TB.winter_fit_promotes(name, "SWE", None), False)
+        check(f"{name} disqualified does not", TB.winter_fit_promotes(name, "SWE", 95, "citizenship"), False)
+    check("non-group-B company never promotes on fit", TB.winter_fit_promotes("Some Unknown Startup", "SWE", 99), False)
+    check("Robert Bosch Venture Capital is excepted", TB.winter_fit_promotes("Robert Bosch Venture Capital", "SWE", 99), False)
+    # queue_placement wires group B in: a direct-fit Winter row reaches Apply - Winter.
+    import build_curated_xlsx as BX, board_tabs as BT
+    def _qp(company, lane, fit, cycle="Winter 2027"):
+        return BX.queue_placement({"machine": {"company": company, "lane": lane, "fit_score": fit,
+                                               "cycle": cycle, "role": "Software Engineer Intern"},
+                                   "human": {}})[0]
+    check("GM SWE fit 85 Winter -> Apply - Winter", _qp("General Motors", "SWE", 85), BT.TAB_WINTER)
+    check("GM SWE fit 60 Winter -> Below Bar", _qp("General Motors", "SWE", 60), BT.TAB_BELOW)
+    check("GM SWE fit 85 Summer -> Below Bar", _qp("General Motors", "SWE", 85, "Summer 2027"), BT.TAB_BELOW)
+    check("Cloudflare Winter (any fit) -> Apply - Winter", _qp("Cloudflare", "SWE", None), BT.TAB_WINTER)
     # Season: Spring 2027 is the US label for Jan-Apr; blank defaults to Summer.
     for cyc, want in (("Winter 2027", W_), ("Spring 2027", W_),
                       ("Winter 2027, Spring 2027", W_), ("Fall 2026, Winter 2027", W_),
