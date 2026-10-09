@@ -187,6 +187,43 @@ STALE_STRIKES = 2
 # still open on the employer's own ATS). Needs many more strikes than a direct
 # API dropout before we believe it.
 WIDE_STALE_STRIKES = 14          # ~1 week at 2 runs/day
+# 🔴 STRIKES ARE COUNTED PER RUN, SO EVERY EXTRA REFRESH SHORTENED THE CLOCK (fixed
+# 2026-10-09). STALE_STRIKES=2 was tuned for 2 runs/day, i.e. "missing for about a
+# day"; three refreshes in one evening made it "missing for a few hours", which is how
+# five live applications died on 2026-09-08. A row now goes dead only when BOTH hold:
+# it has the strikes AND it has been continuously missing for at least this long since
+# its first missed run. So a manual refresh can never kill a row faster than the
+# scheduled cadence would. Tested by SK1 (behaviour, not text).
+STALE_MIN_HOURS = 12
+WIDE_STALE_MIN_HOURS = 6 * 24
+
+
+def _strike(m: dict, now: datetime, strikes_needed: int, min_hours: float) -> bool:
+    """Record one missed run on a machine record; return True if it just went dead.
+
+    Starts the clock (`first_missed_at`) on the first miss. A legacy row that already
+    carries strikes but no clock starts it now, which can only delay a death, never
+    cause one."""
+    m["fail_count"] = int(m.get("fail_count", 0)) + 1
+    started = m.get("first_missed_at")
+    if not started:
+        m["first_missed_at"] = started = now.isoformat(timespec="seconds")
+    try:
+        missing_h = (now - datetime.fromisoformat(started)).total_seconds() / 3600
+    except (TypeError, ValueError):
+        m["first_missed_at"] = now.isoformat(timespec="seconds")
+        missing_h = 0.0
+    if m["fail_count"] >= strikes_needed and missing_h >= min_hours and not m.get("dead"):
+        m["dead"] = True
+        return True
+    return False
+
+
+def _clear_strikes(m: dict) -> None:
+    """The row was seen this run: it was never dead."""
+    m["fail_count"] = 0
+    m["first_missed_at"] = ""
+    m["dead"] = False
 # A healthy lane-1 harvest is ~68 roles (median over 108 logged runs, min 25).
 # Below this, treat lane 1 as collapsed and exempt its postings from striking.
 LANE1_MIN_HEALTHY = 25
@@ -566,6 +603,7 @@ async def refresh(notify: bool = False) -> int:
     # the board until Excel was closed). read_back_human can still read an open .xlsx.
     _wait_for_network()      # scheduled runs fire on wake before wifi is up — wait for it
     today = date.today().isoformat()
+    run_now = datetime.now()          # one clock for every strike this run (SK1)
     store = CuratedStore(STORE_PATH).load()
     prior_cids = set(store.postings.keys())   # to detect genuinely-new postings
     # Pre-merge routing snapshot for step 1c. A date may be stamped ONLY on a row that
@@ -815,15 +853,13 @@ async def refresh(notify: bool = False) -> int:
             or capped_out                  # (f) we declined to look; feed still lists it
         )
         strikes_needed = WIDE_STALE_STRIKES if is_wide else STALE_STRIKES
+        min_hours = WIDE_STALE_MIN_HOURS if is_wide else STALE_MIN_HOURS
 
         if (is_brand or is_wide) and cid not in harvested and not exempt:
-            m["fail_count"] = int(m.get("fail_count", 0)) + 1
-            if m["fail_count"] >= strikes_needed and not m.get("dead"):
-                m["dead"] = True
+            if _strike(m, run_now, strikes_needed, min_hours):
                 stale += 1
         elif cid in harvested:
-            m["fail_count"] = 0
-            m["dead"] = False               # reappeared -> it was never dead
+            _clear_strikes(m)               # reappeared -> it was never dead
             # 🔴 AND CLEAR THE REASON. Leaving it made `dead_reason` a permanent,
             # unclearable brand: a row collapsed as a duplicate, then re-harvested here,
             # kept the string; if its twin later vanished and this row rolled off the

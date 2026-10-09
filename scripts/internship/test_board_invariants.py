@@ -1905,6 +1905,50 @@ def test_title_meta_rescues_metadata_only_intern_signal():
 
 
 
+# SK1. A manual refresh must not kill a row faster than the scheduled cadence would.
+# Added 2026-10-09: strikes were counted per RUN, so three refreshes in an evening turned
+# "missing about a day" into "missing a few hours" (five live applications, 2026-09-08).
+def test_strikes_are_time_bounded():
+    print("SK1. stale strikes need BOTH the count and the elapsed time")
+    import curate as C
+    from datetime import datetime, timedelta
+    t0 = datetime(2026, 10, 9, 18, 0)
+    m = {"fail_count": 0, "dead": False}
+    check("1st miss does not kill", C._strike(m, t0, C.STALE_STRIKES, C.STALE_MIN_HOURS), False)
+    check("2nd miss 1h later does not kill (manual refresh)",
+          C._strike(m, t0 + timedelta(hours=1), C.STALE_STRIKES, C.STALE_MIN_HOURS), False)
+    check("3rd miss 2h later still alive", C._strike(m, t0 + timedelta(hours=2), C.STALE_STRIKES, C.STALE_MIN_HOURS), False)
+    check("row still alive after 3 quick misses", m["dead"], False)
+    check("a miss 12h after the first kills it",
+          C._strike(m, t0 + timedelta(hours=12), C.STALE_STRIKES, C.STALE_MIN_HOURS), True)
+    m2 = {"fail_count": 0, "dead": False}
+    C._strike(m2, t0, C.STALE_STRIKES, C.STALE_MIN_HOURS)
+    check("one miss 13h later alone is not enough strikes... (2nd strike + 13h) kills",
+          C._strike(m2, t0 + timedelta(hours=13), C.STALE_STRIKES, C.STALE_MIN_HOURS), True)
+    m3 = {"fail_count": 0, "dead": False}
+    C._strike(m3, t0, C.STALE_STRIKES, C.STALE_MIN_HOURS)
+    C._clear_strikes(m3)
+    check("seen again resets the clock", (m3["fail_count"], m3["first_missed_at"], m3["dead"]), (0, "", False))
+    check("after a reset, a single miss 20h later does not kill",
+          C._strike(m3, t0 + timedelta(hours=20), C.STALE_STRIKES, C.STALE_MIN_HOURS), False)
+    legacy = {"fail_count": 5, "dead": False}          # strikes from before the clock existed
+    check("legacy strikes with no clock cannot kill instantly",
+          C._strike(legacy, t0, C.STALE_STRIKES, C.STALE_MIN_HOURS), False)
+    w = {"fail_count": 0, "dead": False}
+    for h in range(14):
+        C._strike(w, t0 + timedelta(hours=h), C.WIDE_STALE_STRIKES, C.WIDE_STALE_MIN_HOURS)
+    check("wide-net: 14 misses in 14 hours do not kill", w["dead"], False)
+    # The strike block really uses the helper (code with comments stripped).
+    src = _code_only((Path(__file__).parent / "curate.py").read_text())
+    import re as _re
+    check("curate's strike block calls _strike",
+          bool(_re.search(r"if\s+_strike\s*\(\s*m\s*,\s*run_now\s*,\s*strikes_needed\s*,\s*min_hours\s*\)", src)), True)
+    check("curate's harvested branch calls _clear_strikes",
+          bool(_re.search(r"_clear_strikes\s*\(\s*m\s*\)", src)), True)
+    check("the old inline per-run kill is gone",
+          bool(_re.search(r"fail_count\s*\]\s*>=\s*strikes_needed\s+and\s+not", src)), False)
+
+
 # BF2. A brand he has called top-tier must never fall to the tier-C default.
 # Added 2026-10-09 after Figure AI turned out to be in NO table: tier C by absence means
 # enrichment-capped, never hot-watched, ranked like an unknown, and on Below Bar. These
@@ -2394,6 +2438,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_board_reads_whole_tabs,
            test_target_bar_names_and_collisions,
            test_brand_floor,
+           test_strikes_are_time_bounded,
            test_queue_placement_partitions_the_queue,
            test_write_board_migrates_the_queue_tab_losslessly,
            test_board_py_imports_the_repo_modules_and_new_tabs,
