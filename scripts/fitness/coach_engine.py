@@ -224,28 +224,58 @@ def _metrics_rows() -> list[dict]:
         return list(csv.DictReader(fh))
 
 
+BASELINE_MIN_DAYS = 7
+
+
 def recovery_baseline() -> dict:
+    """Today's HRV / resting HR against a 28-day baseline FROM THE SAME SOURCE.
+
+    2026-10-08 (Fitbit Air): the Air reports HRV as nightly RMSSD (`hrv_rmssd_ms`), Apple as
+    daytime SDNN (`hrv_ms`) — different measures — and the two devices estimate resting HR
+    differently. A baseline mixing them would read the change of device as a change in
+    recovery for ~4 weeks. So each comparison uses one source only, and says
+    "baseline building" until it has BASELINE_MIN_DAYS same-source days."""
     rows = _metrics_rows()
     if not rows:
         return {}
     today = now().date().isoformat()
-    recent = [r for r in rows if r.get("date", "") < today][-28:]
-
-    def col(k):
-        return [v for r in recent if (v := _f(r, k)) is not None]
-    hrv, rhr = col("hrv_ms"), col("resting_hr")
-    last = rows[-1] if rows else {}
+    past = [r for r in rows if r.get("date", "") < today][-28:]
+    last = rows[-1]
     out = {}
-    if hrv:
-        base = sum(hrv) / len(hrv)
-        cur = _f(last, "hrv_ms")
-        out["hrv_ms"] = cur
-        out["hrv_vs_baseline_pct"] = round((cur - base) / base * 100) if (cur and base) else None
-    if rhr:
-        base = sum(rhr) / len(rhr)
-        cur = _f(last, "resting_hr")
-        out["resting_hr"] = cur
-        out["rhr_vs_baseline_bpm"] = round(cur - base) if (cur and base) else None
+
+    def vs(col, cur, same=lambda r: True):
+        base_vals = [v for r in past if same(r) and (v := _f(r, col)) is not None]
+        if len(base_vals) < BASELINE_MIN_DAYS:
+            return None, f"baseline building ({len(base_vals)}/{BASELINE_MIN_DAYS} days)"
+        return sum(base_vals) / len(base_vals), None
+
+    rmssd = _f(last, "hrv_rmssd_ms")
+    if rmssd is not None:
+        base, why = vs("hrv_rmssd_ms", rmssd)
+        out["hrv_rmssd_ms"] = rmssd
+        out["hrv_measure"] = "RMSSD (Fitbit Air, nightly)"
+        out["hrv_vs_baseline_pct"] = round((rmssd - base) / base * 100) if base else None
+        if why:
+            out["hrv_baseline_note"] = why
+    else:
+        sdnn = _f(last, "hrv_ms")
+        if sdnn is not None:
+            base, why = vs("hrv_ms", sdnn)
+            out["hrv_ms"] = sdnn
+            out["hrv_measure"] = "SDNN (Apple Watch)"
+            out["hrv_vs_baseline_pct"] = round((sdnn - base) / base * 100) if base else None
+            if why:
+                out["hrv_baseline_note"] = why
+
+    rhr = _f(last, "resting_hr")
+    if rhr is not None:
+        src = last.get("rhr_source") or "apple"
+        base, why = vs("resting_hr", rhr, lambda r: (r.get("rhr_source") or "apple") == src)
+        out["resting_hr"] = rhr
+        out["rhr_source"] = src
+        out["rhr_vs_baseline_bpm"] = round(rhr - base) if base else None
+        if why:
+            out["rhr_baseline_note"] = why
     return out
 
 

@@ -96,7 +96,9 @@ def _refresh() -> None:
     try:
         with open(LOG, "a") as lf:
             lf.write(f"\n=== {datetime.datetime.now(TZ).isoformat()} brief-gate refresh ===\n")
-            for s in ("hae_process.py", "hae_daily_ingest.py"):
+            # Fitbit Air first (2026-10-08): the brief waits for last night's sleep, and the
+            # Air's arrives through the Google Health API, not the Apple export.
+            for s in ("fitbit_sync.py", "hae_process.py", "hae_daily_ingest.py"):
                 try:
                     subprocess.run([sys.executable, str(SCRIPTS / s)],
                                    stdout=lf, stderr=lf, timeout=120)
@@ -379,27 +381,49 @@ def gather_facts(today: str, yesterday: str) -> dict:
     sleep = {}
     if sleep_present:
         for k in ("sleep_total_h", "sleep_core_h", "sleep_deep_h", "sleep_rem_h",
-                  "sleep_awake_h", "resting_hr", "hrv_ms"):
+                  "sleep_awake_h", "resting_hr", "hrv_ms", "hrv_rmssd_ms", "spo2_avg"):
             v = _fnum(trow, k)
             if v is not None:
                 sleep[k] = v
+        if trow.get("sleep_source"):
+            sleep["source"] = trow["sleep_source"]
         with CSVP.open(newline="") as fh:
             recent = [v for r in csv.DictReader(fh)
                       if r.get("date", "") < today and (v := _fnum(r, "sleep_total_h")) is not None]
         if recent[-7:]:
             sleep["avg7_h"] = round(sum(recent[-7:]) / len(recent[-7:]), 1)
 
+    # Activity (his call, 2026-10-08): steps + Active Zone Minutes once the Fitbit Air is in
+    # use; Apple's active kcal / exercise minutes only on days without Air data.
     activity = {}
-    for k in ("steps", "active_kcal", "exercise_min"):
+    air_day = _fnum(yrow, "steps_air") is not None or _fnum(yrow, "azm") is not None
+    for k in (("steps", "azm") if air_day else ("steps", "active_kcal", "exercise_min")):
         v = _fnum(yrow, k)
         if v is not None:
             activity[k] = int(v)
+    # The band misses steps when it is off the wrist (charging): when it saw far fewer than
+    # the phone, ask him rather than silently trusting either (his call).
+    sa, sx = _fnum(yrow, "steps_apple"), _fnum(yrow, "steps_air")
+    if sa and sx is not None and sx < 0.6 * sa and sa - sx > 2000:
+        activity["band_gap"] = {"band_steps": int(sx), "phone_steps": int(sa)}
+    # In use = the band synced in the last 36 h (fb_last_sync is the DEVICE's last sync, not
+    # the run time). If he stops wearing it, the brief offers /sleep again (review M6).
+    air_in_use = False
+    try:
+        ls = trow.get("fb_last_sync") or yrow.get("fb_last_sync") or ""
+        if ls:
+            age = datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.fromisoformat(ls.replace("Z", "+00:00"))
+            air_in_use = age.total_seconds() < 36 * 3600
+    except ValueError:
+        pass
+    air_in_use = air_in_use or air_day
 
     ai = gather_action_items(today)
     inbox, inbox_status = gather_inbox_checked(today)
     return {
         "date": today,
         "sleep_synced": sleep_present,
+        "air_in_use": air_in_use,
         "sleep": sleep,
         "yesterday_activity": activity,
         "schedule": gather_schedule(today),
@@ -416,11 +440,13 @@ def gather_facts(today: str, yesterday: str) -> dict:
 
 
 # ----------------------------------------------------------------------------- compose: shared sleep block
-def _sleep_lines(s: dict, synced: bool) -> list[str]:
+def _sleep_lines(s: dict, synced: bool, air: bool = False) -> list[str]:
     """The sleep + recovery bullet lines — shared by the morning brief AND the
     later sleep-follow-up (so both render identically). Returns the lines (or a
     'didn't sync yet' note when sleep isn't in the archive)."""
     if not (synced and s):
+        if air:   # his call, 2026-10-08: with the band, don't ask him to type sleep in
+            return ["_(Your Fitbit hasn't synced last night's sleep yet — open the Fitbit app on your phone.)_"]
         return ["_(Apple Watch sleep hasn't synced yet — `/sleep <hrs>` to log manually.)_"]
     out = []
     tot = s.get("sleep_total_h")
@@ -431,7 +457,12 @@ def _sleep_lines(s: dict, synced: bool) -> list[str]:
     out.append(line)
     extras = []
     for k, lab, fmt in (("sleep_deep_h", "deep", "{:.1f}h"), ("sleep_rem_h", "REM", "{:.1f}h"),
-                        ("resting_hr", "RHR", "{:.0f}"), ("hrv_ms", "HRV", "{:.0f}ms")):
+                        ("resting_hr", "RHR", "{:.0f}"),
+                        # different measures, never shown as the same number (2026-10-08)
+                        ("hrv_rmssd_ms", "HRV", "{:.0f}ms (RMSSD)"),
+                        ("hrv_ms", "HRV", "{:.0f}ms (SDNN)")):
+        if k == "hrv_ms" and "hrv_rmssd_ms" in s:
+            continue
         if k in s:
             extras.append(f"{lab} " + fmt.format(s[k]))
     if extras:
@@ -445,13 +476,15 @@ def _sleep_lines(s: dict, synced: bool) -> list[str]:
 def compose_templated(facts: dict) -> str:
     now = datetime.datetime.now(TZ)
     parts = [f"🌅 *Morning, Sparsh.* {now.strftime('%a %b %-d')}.", ""]
-    parts += _sleep_lines(facts["sleep"], facts["sleep_synced"])
+    parts += _sleep_lines(facts["sleep"], facts["sleep_synced"], facts.get("air_in_use", False))
 
     a = facts["yesterday_activity"]
     if a:
         bits = []
         if "steps" in a:
             bits.append(f"{a['steps']:,} steps")
+        if "azm" in a:
+            bits.append(f"{a['azm']} zone min")
         if "active_kcal" in a:
             bits.append(f"{a['active_kcal']} active kcal")
         if "exercise_min" in a:
@@ -685,6 +718,12 @@ _STYLE = (
     "• `health_yesterday` — `not_logged` is what he never recorded. Mention it lightly "
     "and offer to log it. Do not moralise.\n"
     "• `training_today` — what his split calls for. If it is a rest day, say so.\n"
+    "• `yesterday_activity.azm` = Fitbit Active Zone Minutes. If `yesterday_activity.band_gap` is "
+    "present, the band saw far fewer steps than the phone — ask once, lightly, whether he took "
+    "it off (charging?) rather than treating either number as the truth. `sleep.hrv_rmssd_ms` "
+    "and `sleep.hrv_ms` are DIFFERENT measures (RMSSD vs SDNN): never compare one with the "
+    "other. If sleep has not synced and `air_in_use` is true, tell him to open the Fitbit app "
+    "— do not ask him to log sleep by hand.\n"
     "• `sleep` / `yesterday_activity` — flag genuinely low sleep (floor 7h) or a clear "
     "trend, once. Otherwise leave it.\n"
     "• `tasks`, `hard_deadlines`, `this_week` — the plan. `hard_deadlines` is the OPEN "
@@ -790,7 +829,7 @@ def compose_followup(facts: dict, brief_steps) -> str:
     wake ~9am, so HAE often pushes it AFTER the 9am brief). Also corrects yesterday's
     step total if the morning re-sync filled it in materially higher than the brief had."""
     parts = ["😴 *Sleep synced.*", ""]
-    parts += _sleep_lines(facts["sleep"], facts["sleep_synced"])
+    parts += _sleep_lines(facts["sleep"], facts["sleep_synced"], facts.get("air_in_use", False))
     cur = facts["yesterday_activity"].get("steps")
     if cur is not None and brief_steps is not None and cur > brief_steps + 500:
         parts += ["", f"📊 Yesterday's steps updated to *{cur:,}* "

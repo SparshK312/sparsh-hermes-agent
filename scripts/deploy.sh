@@ -148,6 +148,22 @@ if [ -f "$LOGT" ]; then
   echo
 fi
 
+# ===== Step 0e: Wearable (Fitbit Air + Apple) merge invariants =====
+# 2026-10-08. metrics.csv is now DERIVED from apple.csv + fitbit.csv; a broken merge would
+# silently mix the sources (Air HRV read as Apple HRV, Apple data lost on the first run).
+WEAR="$REPO_ROOT/scripts/hae/test_wearable_invariants.py"
+if [ -f "$WEAR" ]; then
+  echo "[0e/3] Wearable merge invariants..."
+  WEAR_OUT="$(python3 "$WEAR" 2>&1)"; WEAR_RC=$?
+  echo "$WEAR_OUT" | tail -2
+  if [ "$WEAR_RC" -ne 0 ]; then
+    echo "  ❌ WEARABLE INVARIANTS FAILED (exit $WEAR_RC) — deploy aborted."
+    exit 1
+  fi
+  echo "  ✓ invariants hold"
+  echo
+fi
+
 # ===== Step 1: Push (Mac → GitHub) =====
 if [ "$DO_PUSH" = "true" ]; then
   echo "[1/3] Pushing local changes to GitHub..."
@@ -227,6 +243,14 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   cp scripts/hae/hae_process.py            ~/.hermes/scripts/hae_process.py
   cp scripts/hae/hae_daily_ingest.py       ~/.hermes/scripts/hae_daily_ingest.py
   cp scripts/hae/health_morning_brief_gate.py ~/.hermes/scripts/health_morning_brief_gate.py
+  # Fitbit Air (2026-10-08): flat beside hae_process.py (they import each other; a
+  # sub-package would not import here). Credentials live in ~/.hermes/google_health/,
+  # never under scripts/ (this step overwrites scripts).
+  cp scripts/hae/google_health.py         ~/.hermes/scripts/google_health.py
+  cp scripts/hae/wearable_merge.py        ~/.hermes/scripts/wearable_merge.py
+  cp scripts/hae/fitbit_sync.py           ~/.hermes/scripts/fitbit_sync.py
+  cp scripts/cron/fitbit_sync.sh          ~/.hermes/scripts/fitbit_sync.sh
+  chmod +x ~/.hermes/scripts/fitbit_sync.sh
   chmod +x ~/.hermes/scripts/health_morning_brief_gate.py
 
   # Mirror the fitness package (muscle-coverage card + report engine + body-SVG

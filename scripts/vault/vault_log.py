@@ -507,7 +507,11 @@ def cmd_sleep(a) -> dict:
         raise SystemExit("sleep: need --hours")
     if not (0 <= a.hours <= 14):
         raise SystemExit(f"sleep: {a.hours}h outside sane range 0–14")
-    sets = {"sleep_hours": f"{a.hours:g}"}
+    # sleep_source: hermes marks this as a Hermes-logged estimate, which the Fitbit Air's
+    # recorded night may replace (his call, 2026-10-08). A hand edit in Obsidian has no marker.
+    # sleep_hermes_h records the exact value /sleep wrote, so the Air replaces it only while the
+    # note still shows it (a later hand edit in Obsidian changes the number and is protected).
+    sets = {"sleep_hours": f"{a.hours:g}", "sleep_source": "hermes", "sleep_hermes_h": f"{a.hours:g}"}
     if a.quality is not None:
         sets["sleep_quality"] = str(int(a.quality))
     daily = edit_frontmatter(ensure_daily_note(date), sets=sets)

@@ -56,7 +56,13 @@ def _default_vault() -> Path:
 
 
 VAULT = _default_vault()
-CSV_PATH = VAULT / "07 - Health" / "Metrics" / "metrics.csv"
+# Since 2026-10-08 this script owns ONLY apple.csv. metrics.csv is DERIVED from apple.csv +
+# fitbit.csv by wearable_merge.rebuild() (see that module for why). Readers keep reading
+# metrics.csv; nothing but wearable_merge writes it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import wearable_merge as WM  # noqa: E402
+CSV_PATH = VAULT / "07 - Health" / "Metrics" / "apple.csv"
+LEGACY_METRICS = VAULT / "07 - Health" / "Metrics" / "metrics.csv"
 
 # Column order for the CSV. date first, then the Tier-1 accountability core,
 # then the secondary archive metrics. Adding a metric here is the only change
@@ -280,15 +286,13 @@ def process_payload(path: Path, days: dict, seen_sleep: set | None = None) -> No
                         row["sleep_end"] = str(p["sleepEnd"])
 
 
+def _apple_only(row: dict) -> dict:
+    return WM.apple_only(row, COLUMNS)
+
+
 def load_existing() -> dict:
-    days = {}
-    if CSV_PATH.exists():
-        with CSV_PATH.open(newline="") as fh:
-            for row in csv.DictReader(fh):
-                d = row.get("date")
-                if d:
-                    days[d] = {k: v for k, v in row.items() if v not in ("", None)}
-    return days
+    WM.ensure_apple_seeded(COLUMNS)      # first run after the split (shared with fitbit_sync)
+    return {d: {k: v for k, v in r.items() if k in COLUMNS} for d, r in WM.read_rows(CSV_PATH).items()}
 
 
 def mark_completeness(days: dict) -> None:
@@ -316,13 +320,10 @@ def mark_completeness(days: dict) -> None:
 
 
 def write_csv(days: dict) -> None:
+    """Write apple.csv atomically, then re-derive metrics.csv. Caller holds WM.locked()."""
     mark_completeness(days)
-    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with CSV_PATH.open("w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=COLUMNS, extrasaction="ignore")
-        w.writeheader()
-        for d in sorted(days):
-            w.writerow(days[d])
+    WM.write_rows(CSV_PATH, COLUMNS, days)
+    WM.rebuild(COLUMNS)
 
 
 def main(argv) -> int:
@@ -332,17 +333,18 @@ def main(argv) -> int:
     if not files:
         print("no payloads to process", file=sys.stderr)
         return 1
-    days = load_existing()
-    before = len(days)
-    skipped = 0
-    seen_sleep: set = set()          # dates whose sleep block this run has written
-    for f in files:
-        try:
-            process_payload(f, days, seen_sleep)
-        except Exception as e:  # noqa: BLE001 — one bad payload must not abort the rebuild
-            skipped += 1
-            print(f"skip {Path(f).name}: {e}", file=sys.stderr)
-    write_csv(days)
+    with WM.locked():      # every writer of the metrics files serialises here (review 2026-10-08)
+        days = load_existing()
+        before = len(days)
+        skipped = 0
+        seen_sleep: set = set()          # dates whose sleep block this run has written
+        for f in files:
+            try:
+                process_payload(f, days, seen_sleep)
+            except Exception as e:  # noqa: BLE001 — one bad payload must not abort the rebuild
+                skipped += 1
+                print(f"skip {Path(f).name}: {e}", file=sys.stderr)
+        write_csv(days)
     print(f"processed {len(files) - skipped} payload(s) -> {CSV_PATH}"
           + (f" ({skipped} skipped)" if skipped else ""))
     print(f"days in archive: {len(days)} (was {before})")

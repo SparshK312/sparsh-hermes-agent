@@ -67,8 +67,15 @@ FIELD_MAP = {
     "resting_hr":    "resting_hr",
     "hrv_ms":        "hrv_ms",
     "vo2_max":       "vo2_max",
+    # Fitbit Air (2026-10-08). hrv_rmssd_ms is a DIFFERENT measure from hrv_ms (Apple SDNN);
+    # never merge them. sleep_source moves with the sleep block ("air" / "apple").
+    "hrv_rmssd_ms":  "hrv_rmssd_ms",
+    "azm":           "azm",
+    "spo2_avg":      "spo2_avg",
+    "sleep_source":  "sleep_source",
 }
-SLEEP_FIELDS = {"sleep_hours", "sleep_rem_h", "sleep_deep_h", "sleep_core_h", "sleep_awake_h"}
+SLEEP_FIELDS = {"sleep_hours", "sleep_rem_h", "sleep_deep_h", "sleep_core_h", "sleep_awake_h",
+                "sleep_source"}
 
 
 DEFAULT_BACKFILL_DAYS = 7
@@ -157,7 +164,20 @@ def update_frontmatter(note_path: Path, updates: dict, prev: dict, protected: se
     # sleep stage fields either — a 4.64h watch-fragment breakdown would contradict the
     # manual total and leave the note self-inconsistent (which is what made the bot
     # thrash trying to reconcile). Either HAE owns the whole sleep block, or it stays out.
-    if "sleep_hours" in existing:
+    # Exception (his call, 2026-10-08): a sleep total logged through Hermes (`/sleep`, which
+    # marks the note `sleep_source: hermes`) is an estimate the Fitbit Air may replace once
+    # the band has recorded that night. A hand edit in Obsidian carries no such marker and
+    # stays protected exactly as before.
+    # Three conditions (review 2026-10-08): the note is still exactly what /sleep wrote (a hand
+    # edit changes sleep_hours and is protected), the Air did NOT already own this night (a
+    # /sleep AFTER the Air night is his correction and wins), and the incoming night is Air.
+    air_beats_hermes = ("sleep_source" in existing
+                        and _field_value(fm[existing["sleep_source"]]) == "hermes"
+                        and "sleep_hours" in existing and "sleep_hermes_h" in existing
+                        and _field_value(fm[existing["sleep_hours"]]) == _field_value(fm[existing["sleep_hermes_h"]])
+                        and prev.get("sleep_source") != "air"
+                        and updates.get("sleep_source") == "air")
+    if "sleep_hours" in existing and not air_beats_hermes:
         cur = _field_value(fm[existing["sleep_hours"]])
         last = prev.get("sleep_hours")
         if cur != "" and (last is None or cur != last):
@@ -187,7 +207,7 @@ def update_frontmatter(note_path: Path, updates: dict, prev: dict, protected: se
             # day silently reverted any hand-correction to a past day's activity fields
             # (verified: `steps: 14200  # watch was off my wrist` on 2026-08-08 → back to
             # 10015.0 on the next sync).
-            enforce = (k in protected) or not is_today
+            enforce = ((k in protected) or not is_today) and not (air_beats_hermes and k in protected)
             if enforce:
                 last = prev.get(k)
                 if last is None and current != "":
@@ -224,9 +244,14 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict) -> None:
+    """Atomic (tmp + os.replace). Callers hold WM.locked(): two overlapping runs used to each
+    load-then-save this file, losing one run's record — and a field missing from the state
+    reads as a hand edit next time, freezing it for that date (review, 2026-10-08)."""
     try:
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        STATE_PATH.write_text(json.dumps(state))
+        tmp = STATE_PATH.with_name(STATE_PATH.name + ".tmp")
+        tmp.write_text(json.dumps(state))
+        os.replace(str(tmp), str(STATE_PATH))
     except Exception:  # noqa: BLE001
         pass
 
@@ -285,14 +310,18 @@ def main() -> int:
         print(f"refusing malformed date(s): {bad!r}", file=sys.stderr)
         return 1
     # Load state ONCE and persist ONCE, so a multi-day walk is a single atomic
-    # update rather than one rewrite per day.
-    state = _load_state()
+    # update rather than one rewrite per day — under the shared metrics lock, so the
+    # Apple sync, the Fitbit sync and the brief's refresh never interleave here.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import wearable_merge as WM  # noqa: PLC0415
     total_written = 0
-    for date in dates:
-        n, line = ingest_one(date, state)
-        total_written += n
-        print(line)
-    _save_state(state)
+    with WM.locked():
+        state = _load_state()
+        for date in dates:
+            n, line = ingest_one(date, state)
+            total_written += n
+            print(line)
+        _save_state(state)
     if len(dates) > 1:
         print(f"backfill: {len(dates)} day(s) walked, {total_written} field(s) written")
     return 0
