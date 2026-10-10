@@ -65,6 +65,11 @@ APPLY_NAMES = {
     # 2026-10-09, his call: Figure AI is A tier, both seasons (was Winter-only for an
     # hour as part of the group-A batch).
     "figure", "figure ai",
+    # 2026-10-09, his OK: Exa (AI web-search lab, formerly Metaphor; boards still use
+    # both names). BOTH seasons, not Winter-only: its intern posting names no term
+    # ("take a semester off"), so the row's cycle is blank and blank routes as Summer.
+    # Winter-only left it on Below Bar after the first deploy (8ace000).
+    "exa", "metaphor",
     # Round 2 (2026-10-04)
     "pinterest", "uber", "airbnb", "datadog", "plaid", "vercel", "duolingo",
     "anduril", "neuralink", "perplexity", "glean", "epic games", "rubrik",
@@ -101,10 +106,6 @@ WINTER_ONLY_APPLY = {
     "cloudflare", "amd", "abridge", "zip", "kodiak robotics", "gemini",
     "geotab", "stackadapt", "kinaxis", "domino data lab", "formlabs", "prizepicks",
     "knowbe4", "entrust", "soti",
-    # 2026-10-09, his OK: Exa (AI web-search lab, formerly Metaphor; boards still use
-    # both names). Its SWE intern sat on Below Bar as "Metaphor" because neither name
-    # was listed.
-    "exa", "metaphor",
 }
 
 # 2026-10-09, same call, group B: big-name enterprises, but "promote only roles that

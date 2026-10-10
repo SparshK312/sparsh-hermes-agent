@@ -1963,9 +1963,14 @@ def test_brand_floor():
     for name, want in floor.items():
         got = CB.tier_of(name)
         check(f"{name} tier is {want} or better (got {got})", rank.get(got, 9) <= rank[want], True)
-    for name in ("Figure", "Figure AI"):
+    for name in ("Figure", "Figure AI", "Exa", "Metaphor"):
         for season in (TB.SUMMER, TB.WINTER):
             check(f"{name} {season} bar is apply", TB.bar_of(name, season), TB.APPLY)
+    # A term-less posting (blank cycle -> Summer) at Exa must reach a queue tab, not Below Bar.
+    import build_curated_xlsx as BX, board_tabs as BT
+    tab = BX.queue_placement({"machine": {"company": "Metaphor", "role": "Software Engineer - Intern",
+                                          "cycle": "", "lane": "SWE"}, "human": {}})[0]
+    check("Exa/Metaphor blank-cycle intern lands on a queue tab, not Below Bar", tab != BT.TAB_BELOW, True)
     wired = {(b.get("name"), b.get("token") or b.get("org")) for b in CB.boards()}
     check("Figure's Greenhouse board (figureai) is wired", ("Figure", "figureai") in wired, True)
 
@@ -2009,7 +2014,7 @@ def test_target_bar_names_and_collisions():
     # 2026-10-09 group A: Winter-only promotion; Summer exclusions above still hold.
     for name in ("Cloudflare", "AMD", "Abridge", "Zip", "Kodiak Robotics",
                  "Gemini", "Geotab", "StackAdapt", "Kinaxis", "Domino Data Lab",
-                 "Formlabs", "PrizePicks", "KnowBe4", "Entrust", "SOTI", "Exa", "Metaphor"):
+                 "Formlabs", "PrizePicks", "KnowBe4", "Entrust", "SOTI"):
         check(f"{name} Winter is apply (group A)", TB.bar_of(name, W_), TB.APPLY)
         check(f"{name} Summer stays below (group A is Winter-only)", TB.bar_of(name, S_), TB.BELOW)
     # 2026-10-09 group B: the company alone never promotes; only a direct-fit row does.
