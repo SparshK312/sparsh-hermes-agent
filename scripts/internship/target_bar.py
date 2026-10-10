@@ -101,6 +101,10 @@ WINTER_ONLY_APPLY = {
     "cloudflare", "amd", "abridge", "zip", "kodiak robotics", "gemini",
     "geotab", "stackadapt", "kinaxis", "domino data lab", "formlabs", "prizepicks",
     "knowbe4", "entrust", "soti",
+    # 2026-10-09, his OK: Exa (AI web-search lab, formerly Metaphor; boards still use
+    # both names). Its SWE intern sat on Below Bar as "Metaphor" because neither name
+    # was listed.
+    "exa", "metaphor",
 }
 
 # 2026-10-09, same call, group B: big-name enterprises, but "promote only roles that

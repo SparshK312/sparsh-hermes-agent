@@ -2009,7 +2009,7 @@ def test_target_bar_names_and_collisions():
     # 2026-10-09 group A: Winter-only promotion; Summer exclusions above still hold.
     for name in ("Cloudflare", "AMD", "Abridge", "Zip", "Kodiak Robotics",
                  "Gemini", "Geotab", "StackAdapt", "Kinaxis", "Domino Data Lab",
-                 "Formlabs", "PrizePicks", "KnowBe4", "Entrust", "SOTI"):
+                 "Formlabs", "PrizePicks", "KnowBe4", "Entrust", "SOTI", "Exa", "Metaphor"):
         check(f"{name} Winter is apply (group A)", TB.bar_of(name, W_), TB.APPLY)
         check(f"{name} Summer stays below (group A is Winter-only)", TB.bar_of(name, S_), TB.BELOW)
     # 2026-10-09 group B: the company alone never promotes; only a direct-fit row does.
