@@ -127,16 +127,26 @@ def _log_text():
                 parts.append(p.read_text("utf-8", "ignore"))
     return "\n".join(parts)
 
+# A REP in the log (2026-10-09): an Interview-Prep entry that names a problem AND rates it
+# ("78 Subsets 🔴", "200 Number of Islands 🟢"). On Oct 9 the nudge said "last rep 12 days
+# ago" the morning after TEN logged reps, because reps were only read from the hand-kept
+# Session log and the scorecard. Plans/research never carry a "<number> <name> <rating>".
+# Problem names are Title Case with small joiners ("Number of Islands", "Top K Frequent");
+# requiring that stops a planning sentence ("46 had dated slots… Protocol 🔴") from counting.
+REP_RE = re.compile(r"\b\d{1,4}\s+[A-Z][\w'’/+-]*(?:\s+(?:of|the|a|an|in|to|and|with|from|on|by|at|for|II|III|[A-Z0-9][\w'’/+-]*)){0,7}\s*(?:🔴|🟡|🟢)")
+
 def _log_prep_dates():
     raw = _log_text()
-    out, newest = [], None
+    out, newest, reps = [], None, {}
     for m in re.finditer(r"^## \[(20\d\d-\d{2}-\d{2})\]\s+(\w+)\s+\|([^\n]*)", raw, re.M):
         d, action, scope = m.group(1), m.group(2), m.group(3)
         if not scope.strip().lower().startswith("hermes:") and (newest is None or d > newest):
             newest = d
         if re.search(r"interview prep|prep\b", scope, re.I) and action in ("update", "ingest"):
             out.append(d)
-    return sorted(set(out)), newest
+            if REP_RE.search(scope) and not scope.strip().lower().startswith("hermes:"):
+                reps.setdefault(d, []).append(REP_RE.search(scope).group(0).strip())
+    return sorted(set(out)), newest, reps
 
 # ⚠️ Keep the two ideas SEPARATE. A Log.md entry scoped "Interview Prep" is often a plan
 # re-cut or a research triage, not a rep at the keyboard — counting those as reps would
@@ -150,7 +160,7 @@ def _log_prep_dates():
 # stopped arriving" — the exact confusion this whole fix exists to remove. So the
 # freshness of the source is part of the answer, never an assumption.
 LOG_STALE_DAYS = 2
-logmd_dates, logmd_newest_any = _log_prep_dates()
+logmd_dates, logmd_newest_any, log_reps = _log_prep_dates()
 logmd_age = ((today - datetime.date.fromisoformat(logmd_newest_any)).days
              if logmd_newest_any else None)
 logmd_stale = logmd_age is None or logmd_age > LOG_STALE_DAYS
@@ -164,7 +174,7 @@ days_since_activity = ((today - datetime.date.fromisoformat(logmd_last)).days
 
 # current streak = consecutive days (ending today or yesterday) present in the log
 streak = 0
-have = set(log_dates)          # reps only — see the note above
+have = set(log_dates) | set(log_reps)          # reps only (Session log + rated reps in the log)
 probe = today
 if today_s not in have:                 # not logged yet today -> count from yesterday
     probe = today - datetime.timedelta(days=1)
@@ -211,6 +221,10 @@ except Exception:
 # ratings through Sep 27, so "days since your last rep" was 3 days too long. A rating IS a
 # rep (he solved it and rated it). Take the later of the two and say which.
 snap_last = max(snap_rated) if snap_rated else None
+log_rep_last = max(log_reps) if log_reps else None
+if log_rep_last and (not last_rep or log_rep_last > last_rep) and (not snap_last or log_rep_last >= snap_last):
+    last_rep, last_rep_src = log_rep_last, "rated rep in the vault log"
+    days_since = (today - datetime.date.fromisoformat(last_rep)).days
 if snap_last and (not last_rep or snap_last > last_rep):
     last_rep, last_rep_src = snap_last, "scorecard rating"
     days_since = (today - datetime.date.fromisoformat(last_rep)).days
@@ -314,6 +328,10 @@ else:
     L.append("target: UNKNOWN — Interview Prep.md has no live_target field. Do not name a company.")
 L.append(f"todays_plan: {todays_plan[:700] if todays_plan else 'none — ' + plan_state}"
          + (f"  ({todays_hours} h planned)" if todays_plan and todays_hours else ""))
+L.append(f"reps_today: {len(log_reps.get(today_s, []))}"
+         + (f" ({', '.join(log_reps[today_s][:8])})" if log_reps.get(today_s) else ""))
+L.append(f"reps_yesterday: {len(log_reps.get((today - datetime.timedelta(days=1)).isoformat(), []))}"
+         + (f" ({', '.join(log_reps[(today - datetime.timedelta(days=1)).isoformat()][:8])})" if log_reps.get((today - datetime.timedelta(days=1)).isoformat()) else ""))
 L.append("prep_logged_today: " + (" || ".join(prep_today[:4]) if prep_today else
                                   "nothing prep-scoped in today's log yet (he may simply not have logged it)"))
 plan_link = f"[[{Path(live_plan).stem}]]" if live_plan else "[[Interview Prep]]"

@@ -656,6 +656,32 @@ def test_done_facts():
                                     "Machine Learning Intern")],
           [True, True, True, True, False, False, False, False])
 
+# ── A RATED REP IN THE VAULT LOG IS A REP ────────────────────────────────────
+# 2026-10-09: the nudge said "last rep 12 days ago, no rep logged" the morning after ten
+# logged reps ("78 Subsets 🔴", "200 Number of Islands 🟢") — reps were only read from the
+# hand-kept Session log and the scorecard. Planning sentences must NOT count.
+def test_prep_nudge_counts_logged_reps():
+    print("P2. prep-nudge: a rated problem in the log is a rep; planning text with a rating emoji is not")
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    t = _dt.now(ZoneInfo("America/Toronto")).date()
+    v = build(sess_days_ago=20, snap_days_ago=0)
+    y = (t - timedelta(days=1)).isoformat()
+    p = v / "Log" / y[:4] / y[:7] / f"{y}.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a") as f:
+        f.write(f"## [{y}] update | Acme / Interview Prep — rep 1 of the ladder: 78 Subsets 🔴 (22 min)\n")
+        f.write(f"## [{y}] update | Acme / Interview Prep — 200 Number of Islands 🟢, 8 min\n")
+    td = t.isoformat()
+    p2 = v / "Log" / td[:4] / td[:7] / f"{td}.md"
+    p2.parent.mkdir(parents=True, exist_ok=True)
+    with open(p2, "a") as f:
+        f.write(f"## [{td}] update | Acme / Interview Prep — queue made explicit: only 78/46 had dated slots. Protocol 🔴\n")
+    st = state(v)
+    check("yesterday's rated reps set the last rep", (st.get("last_rep_date", "")[:10], st.get("days_since_rep")), (y, "1"))
+    check("they are listed", st.get("reps_yesterday", "").startswith("2 (78 Subsets"), True)
+    check("a planning line with a rating emoji is NOT a rep", st.get("reps_today"), "0")
+
 def test_email_triage_reads_every_application():
     print("E1. email_triage reads the whole My Applications tab; only the PROMPT is capped, loudly")
     sys.path.insert(0, str(HERE.parent / "email"))
@@ -712,7 +738,8 @@ for fn in (test_prep_nudge_reads_the_files_that_are_actually_updated,
            test_sync_watchdog, test_hermes_recent_events_recipe,
            test_today_actions_reads_open_rows_only, test_email_triage_done_checks,
            test_brief_inbox_and_plan_are_current, test_prep_nudge_live_target_and_plan,
-           test_evening_summary_blank_is_unknown, test_done_facts):
+           test_evening_summary_blank_is_unknown, test_done_facts,
+           test_prep_nudge_counts_logged_reps):
     try:
         fn()
     except Exception as exc:  # noqa: BLE001

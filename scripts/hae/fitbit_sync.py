@@ -76,10 +76,13 @@ def _i(v):
 
 
 def _f(v):
+    """A finite float, else None. (2026-10-09: the API returned NaN for skin temperature
+    before its 30-night baseline existed; float('nan') passed and was stored as "nan".)"""
     try:
-        return float(v)
+        x = float(v)
     except (TypeError, ValueError):
         return None
+    return x if x == x and x not in (float("inf"), float("-inf")) else None
 
 
 def _fmt(v, nd=1):

@@ -151,6 +151,9 @@ def test_fitbit_apply_and_parse():
     check("a successful EMPTY response blanks (not 0)", rows["2026-10-07"].get("steps"), None)
     check("calories only on days the Air was worn", (rows["2026-10-07"].get("total_kcal"), rows["2026-10-08"].get("total_kcal")), (None, "1700"))
     check("numbers are stored compactly", (F._fmt(29.0, 0), F._fmt(4.356, 2), F._fmt(9300.0)), ("29", "4.36", "9300"))
+    tmp = {"dataSource": {"platform": "FITBIT"}, "dailySleepTemperatureDerivations": {
+        "date": {"year": 2026, "month": 10, "day": 9}, "nightlyTemperatureCelsius": "NaN", "baselineTemperatureCelsius": 33.1}}
+    check("NaN from the API is blank, never the text 'nan'", F.parse_daily("daily-sleep-temperature-derivations", [tmp]), {})
 
 
 def test_sleep_parse():
