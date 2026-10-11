@@ -102,6 +102,40 @@ BOARDS = [
     # Greenhouse board carried 9 Winter 2027 intern reqs on Oct 6 that reached the board
     # only through Simplify. Board polled directly from here on, so hot_watch fires.
     {"name": "Figure", "tier": "A", "ats_type": "greenhouse", "token": "figureai"},
+    # ── WINTER 2027 OUTREACH TARGETS (2026-10-11, his call) ─────────────────────────
+    # Prestigious, fast-growing AI startups in SF / NYC that he is cold-emailing for a
+    # Winter 2027 term ("Outreach" tab on the Sheet; vault: Winter 2027 - Startup
+    # Outreach). Wired so that the moment any of them posts an intern role it reaches the
+    # board AND hot_watch pings Telegram (tier A). Every org below was verified live
+    # against api.ashbyhq.com on 2026-10-11. Names are distinctive on purpose: whole-word
+    # brand matching ("factory", "basis", "fal", "parallel") would otherwise borrow
+    # unrelated employers (measured against the 976-name store corpus: 0 collisions).
+    {"name": "Exa", "tier": "A", "ats_type": "ashby", "org": "exa"},
+    {"name": "Parallel Web Systems", "tier": "A", "ats_type": "ashby", "org": "parallel"},
+    {"name": "Firecrawl", "tier": "A", "ats_type": "ashby", "org": "firecrawl"},
+    {"name": "LangChain", "tier": "A", "ats_type": "ashby", "org": "langchain"},
+    {"name": "Braintrust", "tier": "A", "ats_type": "ashby", "org": "braintrust"},
+    {"name": "Inferact", "tier": "A", "ats_type": "ashby", "org": "inferact"},
+    {"name": "Prime Intellect", "tier": "A", "ats_type": "ashby", "org": "primeintellect"},
+    {"name": "Factory AI", "tier": "A", "ats_type": "ashby", "org": "factory"},
+    # Its Ashby board name has a space (linked from appliedcompute.com/careers).
+    {"name": "Applied Compute", "tier": "A", "ats_type": "ashby", "org": "Applied%20Compute"},
+    {"name": "E2B", "tier": "A", "ats_type": "ashby", "org": "e2b"},
+    {"name": "Modal", "tier": "A", "ats_type": "ashby", "org": "modal"},
+    {"name": "General Intuition", "tier": "A", "ats_type": "ashby", "org": "generalintuition-medal"},
+    {"name": "Baseten", "tier": "A", "ats_type": "ashby", "org": "baseten"},
+    {"name": "Fireworks AI", "tier": "A", "ats_type": "ashby", "org": "fireworks"},
+    {"name": "fal.ai", "tier": "A", "ats_type": "ashby", "org": "fal-ai"},
+    {"name": "Browserbase", "tier": "A", "ats_type": "ashby", "org": "browserbase"},
+    {"name": "RadixArk", "tier": "A", "ats_type": "ashby", "org": "radixark"},
+    # LMArena's Ashby board is named "arena" (21 SF Bay Area roles on 2026-10-11).
+    {"name": "LMArena", "tier": "A", "ats_type": "ashby", "org": "arena"},
+    {"name": "Rogo", "tier": "A", "ats_type": "ashby", "org": "rogo"},
+    {"name": "Basis AI", "tier": "A", "ats_type": "ashby", "org": "basis-ai"},
+    {"name": "Clay", "tier": "A", "ats_type": "ashby", "org": "claylabs"},
+    {"name": "Warp", "tier": "A", "ats_type": "ashby", "org": "warp"},
+    {"name": "Physical Intelligence", "tier": "A", "ats_type": "ashby", "org": "physicalintelligence"},
+    {"name": "Dyna Robotics", "tier": "A", "ats_type": "ashby", "org": "dyna-robotics"},
     {"name": "Mercury", "tier": "A", "ats_type": "greenhouse", "token": "mercury"},
     {"name": "Coinbase", "tier": "A", "ats_type": "greenhouse", "token": "coinbase"},
     {"name": "SoFi", "tier": "B", "ats_type": "greenhouse", "token": "sofi"},

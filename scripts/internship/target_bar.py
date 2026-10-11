@@ -70,6 +70,17 @@ APPLY_NAMES = {
     # ("take a semester off"), so the row's cycle is blank and blank routes as Summer.
     # Winter-only left it on Below Bar after the first deploy (8ace000).
     "exa", "metaphor",
+    # 2026-10-11, his call: the Winter 2027 OUTREACH targets (prestigious, fast-growing
+    # AI startups in SF/NYC; company_boards.py has the same list, wired at tier A). BOTH
+    # seasons for the Exa reason above: most of their intern posts name no term, and a
+    # blank cycle routes as Summer, so Winter-only would bury them on Below Bar.
+    # Names match company_boards.py (normalized); "clay" and "warp" are single words that
+    # hit 0 of the 976 store names on 2026-10-11 (TB-OR pins the look-alikes).
+    "parallel web systems", "firecrawl", "langchain", "braintrust", "inferact",
+    "prime intellect", "factory ai", "applied compute", "e2b", "modal",
+    "general intuition", "baseten", "fireworks ai", "fal ai", "browserbase", "radixark",
+    "lmarena", "rogo", "basis ai", "clay", "warp", "physical intelligence",
+    "dyna robotics",
     # Round 2 (2026-10-04)
     "pinterest", "uber", "airbnb", "datadog", "plaid", "vercel", "duolingo",
     "anduril", "neuralink", "perplexity", "glean", "epic games", "rubrik",

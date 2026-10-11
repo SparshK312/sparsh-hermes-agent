@@ -1974,6 +1974,62 @@ def test_brand_floor():
     wired = {(b.get("name"), b.get("token") or b.get("org")) for b in CB.boards()}
     check("Figure's Greenhouse board (figureai) is wired", ("Figure", "figureai") in wired, True)
 
+# OR1. Winter 2027 OUTREACH targets (2026-10-11, his call): 24 prestigious AI startups in
+# SF/NYC he is cold-emailing. Each must be wired at tier A (so hot_watch pings the moment
+# one posts an intern role) and on the APPLY bar for BOTH seasons (their posts rarely name
+# a term; blank routes as Summer, so Winter-only buries them on Below Bar, the Exa lesson).
+# The look-alikes pin the reason the names are distinctive: whole-word matching on
+# "factory" / "basis" / "parallel" / "clay" / "warp" would borrow unrelated employers.
+OUTREACH_BOARDS = {
+    "Exa": "exa", "Parallel Web Systems": "parallel", "Firecrawl": "firecrawl",
+    "LangChain": "langchain", "Braintrust": "braintrust", "Inferact": "inferact",
+    "Prime Intellect": "primeintellect", "Factory AI": "factory",
+    "Applied Compute": "Applied%20Compute", "E2B": "e2b", "Modal": "modal",
+    "General Intuition": "generalintuition-medal", "Baseten": "baseten",
+    "Fireworks AI": "fireworks", "fal.ai": "fal-ai", "Browserbase": "browserbase",
+    "RadixArk": "radixark", "LMArena": "arena", "Rogo": "rogo", "Basis AI": "basis-ai",
+    "Clay": "claylabs", "Warp": "warp", "Physical Intelligence": "physicalintelligence",
+    "Dyna Robotics": "dyna-robotics",
+}
+def test_outreach_targets_wired_and_on_the_bar():
+    print("OR1. Winter outreach targets: wired at tier A, apply both seasons, look-alikes stay out")
+    import company_boards as CB, target_bar as TB, hotness as H
+    by_name = {b["name"]: b for b in CB.boards()}
+    for name, org in OUTREACH_BOARDS.items():
+        b = by_name.get(name) or {}
+        check(f"{name} wired as ashby/{org}", (b.get("ats_type"), b.get("org")), ("ashby", org))
+        check(f"{name} board tier is A", b.get("tier"), "A")
+        check(f"{name} brand_tier is A", H.brand_tier(name), "A")
+        for season in (TB.SUMMER, TB.WINTER):
+            check(f"{name} {season} bar is apply", TB.bar_of(name, season), TB.APPLY)
+    # Feed spellings of the same companies.
+    for alias in ("Modal Labs", "Clay Labs", "Parallel Web Systems, Inc.", "Fal.ai"):
+        check(f"alias {alias!r} is apply", TB.bar_of(alias, TB.WINTER), TB.APPLY)
+    # Unrelated employers that share a word: never promoted, never tier A.
+    for other in ("Factory Mutual Insurance", "Basis Global Technologies", "Parallel Systems",
+                  "Clayton Homes", "Barclays", "Arena Group", "WarpSpeed Taxi", "Multimodal Inc"):
+        check(f"look-alike {other!r} is not apply", TB.bar_of(other, TB.WINTER) == TB.APPLY, False)
+        check(f"look-alike {other!r} is not tier A", H.brand_tier(other) in ("S", "A"), False)
+    # A term-less intern post at an outreach target reaches a queue tab, not Below Bar.
+    import build_curated_xlsx as BX, board_tabs as BT
+    tab = BX.queue_placement({"machine": {"company": "Modal", "role": "ML Research Intern",
+                                          "cycle": "", "lane": "AI/ML"}, "human": {}})[0]
+    check("Modal blank-cycle intern lands on a queue tab, not Below Bar", tab != BT.TAB_BELOW, True)
+
+# OR2. His hand-kept "Outreach" tab (2026-10-11) lives on the same spreadsheet. The
+# refresh must never read it back as board rows (blank-row orphans) or delete it.
+def test_outreach_tab_is_never_touched_by_the_refresh():
+    print("OR2. the refresh ignores a hand-kept 'Outreach' tab: never read back, never deleted")
+    import re as _re, build_curated_gsheet as G, board_tabs as BT
+    present = {t: {} for t in (*BT.TABS, BT.TAB_META, "Outreach")}
+    check("read-back tabs exclude Outreach", "Outreach" in G._readback_tabs(present), False)
+    check("read-back tabs are exactly the managed tabs", tuple(G._readback_tabs(present)), tuple(BT.TABS))
+    src = "\n".join(ln.split("#", 1)[0] for ln in open(G.__file__).read().splitlines())
+    check("build_curated_gsheet never issues deleteSheet", bool(_re.search(r"deleteSheet", src)), False)
+    import board as BD
+    bsrc = "\n".join(ln.split("#", 1)[0] for ln in open(BD.__file__).read().splitlines())
+    check("board.py lookups filter to the managed TABS", bool(_re.search(r"for t in TABS if t in present", bsrc)), True)
+
 # ── THE TARGET BAR (2026-10-04) ───────────────────────────────────────────────
 # Microsoft Summer 2027 was accepted on 2026-10-02 and his bar split in two: an ACCEPT
 # list (worth reneging for) and an APPLY list; everything else renders on Below Bar.
@@ -2443,6 +2499,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_board_reads_whole_tabs,
            test_target_bar_names_and_collisions,
            test_brand_floor,
+           test_outreach_targets_wired_and_on_the_bar,
+           test_outreach_tab_is_never_touched_by_the_refresh,
            test_strikes_are_time_bounded,
            test_queue_placement_partitions_the_queue,
            test_write_board_migrates_the_queue_tab_losslessly,
