@@ -155,6 +155,9 @@ BOARDS = [
     {"name": "GimletLabs", "tier": "A", "ats_type": "ashby", "org": "gimlet"},
     {"name": "EliseAI", "tier": "A", "ats_type": "ashby", "org": "eliseai"},
     {"name": "Writer AI", "tier": "A", "ats_type": "ashby", "org": "writer"},
+    # Audit pass (2026-10-12): first-round names that had never been given a verdict.
+    {"name": "Lightning AI", "tier": "A", "ats_type": "greenhouse", "token": "lightningai"},
+    {"name": "Normal Computing", "tier": "A", "ats_type": "ashby", "org": "normalcomputing"},
     {"name": "Mercury", "tier": "A", "ats_type": "greenhouse", "token": "mercury"},
     {"name": "Coinbase", "tier": "A", "ats_type": "greenhouse", "token": "coinbase"},
     {"name": "SoFi", "tier": "B", "ats_type": "greenhouse", "token": "sofi"},

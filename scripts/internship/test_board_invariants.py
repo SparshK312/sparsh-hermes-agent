@@ -1996,14 +1996,17 @@ OUTREACH_BOARDS = {
     # Round 3 (2026-10-12)
     "Mecka AI": "mecka.ai", "XDOF": "xdof", "Flow Engineering": "flowengineering",
     "Stuut": "stuut-ai", "GimletLabs": "gimlet", "EliseAI": "eliseai", "Writer AI": "writer",
+    "Lightning AI": "lightningai", "Normal Computing": "normalcomputing",
 }
+OUTREACH_GREENHOUSE = {"Lightning AI"}
 def test_outreach_targets_wired_and_on_the_bar():
     print("OR1. Winter outreach targets: wired at tier A, apply both seasons, look-alikes stay out")
     import company_boards as CB, target_bar as TB, hotness as H
     by_name = {b["name"]: b for b in CB.boards()}
     for name, org in OUTREACH_BOARDS.items():
         b = by_name.get(name) or {}
-        check(f"{name} wired as ashby/{org}", (b.get("ats_type"), b.get("org")), ("ashby", org))
+        want = ("greenhouse", org) if name in OUTREACH_GREENHOUSE else ("ashby", org)
+        check(f"{name} wired as {want[0]}/{org}", (b.get("ats_type"), b.get("org") or b.get("token")), want)
         check(f"{name} board tier is A", b.get("tier"), "A")
         check(f"{name} brand_tier is A", H.brand_tier(name), "A")
         for season in (TB.SUMMER, TB.WINTER):
