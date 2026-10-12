@@ -81,6 +81,8 @@ APPLY_NAMES = {
     "general intuition", "baseten", "fireworks ai", "fal ai", "browserbase", "radixark",
     "lmarena", "rogo", "basis ai", "clay", "warp", "physical intelligence",
     "dyna robotics",
+    # Round 2 (2026-10-12), same rule; names match company_boards.py.
+    "reducto", "ampersand ai", "typesafe ai", "sapiom", "namespace", "worldlabs",
     # Round 2 (2026-10-04)
     "pinterest", "uber", "airbnb", "datadog", "plaid", "vercel", "duolingo",
     "anduril", "neuralink", "perplexity", "glean", "epic games", "rubrik",

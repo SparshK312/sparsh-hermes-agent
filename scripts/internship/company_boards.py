@@ -136,6 +136,15 @@ BOARDS = [
     {"name": "Warp", "tier": "A", "ats_type": "ashby", "org": "warp"},
     {"name": "Physical Intelligence", "tier": "A", "ats_type": "ashby", "org": "physicalintelligence"},
     {"name": "Dyna Robotics", "tier": "A", "ats_type": "ashby", "org": "dyna-robotics"},
+    # Round 2 (2026-10-12): Gemini's discovery pass, every claim re-verified at source
+    # (funding press + the live Ashby boards). Names avoid normalize collisions: "World
+    # Labs" normalizes to "world" and "Ampersand" alone matches Ampersand Capital/Health.
+    {"name": "Reducto", "tier": "A", "ats_type": "ashby", "org": "reducto"},
+    {"name": "Ampersand AI", "tier": "A", "ats_type": "ashby", "org": "ampersand"},
+    {"name": "TypeSafe AI", "tier": "A", "ats_type": "ashby", "org": "typesafe-ai"},
+    {"name": "Sapiom", "tier": "A", "ats_type": "ashby", "org": "sapiom"},
+    {"name": "Namespace Labs", "tier": "A", "ats_type": "ashby", "org": "namespace"},
+    {"name": "WorldLabs", "tier": "A", "ats_type": "ashby", "org": "worldlabs"},
     {"name": "Mercury", "tier": "A", "ats_type": "greenhouse", "token": "mercury"},
     {"name": "Coinbase", "tier": "A", "ats_type": "greenhouse", "token": "coinbase"},
     {"name": "SoFi", "tier": "B", "ats_type": "greenhouse", "token": "sofi"},
