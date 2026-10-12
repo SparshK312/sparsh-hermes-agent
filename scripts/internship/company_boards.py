@@ -145,6 +145,16 @@ BOARDS = [
     {"name": "Sapiom", "tier": "A", "ats_type": "ashby", "org": "sapiom"},
     {"name": "Namespace Labs", "tier": "A", "ats_type": "ashby", "org": "namespace"},
     {"name": "WorldLabs", "tier": "A", "ats_type": "ashby", "org": "worldlabs"},
+    # Round 3 (2026-10-12): from the GPT + Perplexity passes, every claim re-verified at
+    # source. "GimletLabs"/"Writer AI" because "Gimlet Labs" normalizes to "gimlet"
+    # (Gimlet Media) and bare "writer" is a common word. Mecka's Ashby board has a dot.
+    {"name": "Mecka AI", "tier": "A", "ats_type": "ashby", "org": "mecka.ai"},
+    {"name": "XDOF", "tier": "A", "ats_type": "ashby", "org": "xdof"},
+    {"name": "Flow Engineering", "tier": "A", "ats_type": "ashby", "org": "flowengineering"},
+    {"name": "Stuut", "tier": "A", "ats_type": "ashby", "org": "stuut-ai"},
+    {"name": "GimletLabs", "tier": "A", "ats_type": "ashby", "org": "gimlet"},
+    {"name": "EliseAI", "tier": "A", "ats_type": "ashby", "org": "eliseai"},
+    {"name": "Writer AI", "tier": "A", "ats_type": "ashby", "org": "writer"},
     {"name": "Mercury", "tier": "A", "ats_type": "greenhouse", "token": "mercury"},
     {"name": "Coinbase", "tier": "A", "ats_type": "greenhouse", "token": "coinbase"},
     {"name": "SoFi", "tier": "B", "ats_type": "greenhouse", "token": "sofi"},

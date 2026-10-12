@@ -1993,6 +1993,9 @@ OUTREACH_BOARDS = {
     # Round 2 (2026-10-12)
     "Reducto": "reducto", "Ampersand AI": "ampersand", "TypeSafe AI": "typesafe-ai",
     "Sapiom": "sapiom", "Namespace Labs": "namespace", "WorldLabs": "worldlabs",
+    # Round 3 (2026-10-12)
+    "Mecka AI": "mecka.ai", "XDOF": "xdof", "Flow Engineering": "flowengineering",
+    "Stuut": "stuut-ai", "GimletLabs": "gimlet", "EliseAI": "eliseai", "Writer AI": "writer",
 }
 def test_outreach_targets_wired_and_on_the_bar():
     print("OR1. Winter outreach targets: wired at tier A, apply both seasons, look-alikes stay out")
@@ -2011,7 +2014,9 @@ def test_outreach_targets_wired_and_on_the_bar():
     # Unrelated employers that share a word: never promoted, never tier A.
     for other in ("Factory Mutual Insurance", "Basis Global Technologies", "Parallel Systems",
                   "Clayton Homes", "Barclays", "Arena Group", "WarpSpeed Taxi", "Multimodal Inc",
-                  "Ampersand Capital Partners", "Ampersand Health", "World Wide Technology", "World Fuel Services"):
+                  "Ampersand Capital Partners", "Ampersand Health", "World Wide Technology", "World Fuel Services",
+                  "Gimlet Media", "Flow Traders", "The Writers Guild", "Elise Health",
+                  "Tech Writer Collective"):
         check(f"look-alike {other!r} is not apply", TB.bar_of(other, TB.WINTER) == TB.APPLY, False)
         check(f"look-alike {other!r} is not tier A", H.brand_tier(other) in ("S", "A"), False)
     # A term-less intern post at an outreach target reaches a queue tab, not Below Bar.
