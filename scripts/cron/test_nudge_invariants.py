@@ -672,6 +672,9 @@ def test_prep_nudge_counts_logged_reps():
     with open(p, "a") as f:
         f.write(f"## [{y}] update | Acme / Interview Prep — rep 1 of the ladder: 78 Subsets 🔴 (22 min)\n")
         f.write(f"## [{y}] update | Acme / Interview Prep — 200 Number of Islands 🟢, 8 min\n")
+        f.write(f"## [{y}] update | Acme / Interview Prep — 78 Subsets re-solve 🟡, 9 min\n")
+        f.write(f"## [{y}] update | Acme / Interview Prep — 23 Merge k Sorted Lists 🔴\n")
+        f.write(f"## [{y}] update | Acme / Interview Prep — 547 stays 🔴 after review\n")
     td = t.isoformat()
     p2 = v / "Log" / td[:4] / td[:7] / f"{td}.md"
     p2.parent.mkdir(parents=True, exist_ok=True)
@@ -679,7 +682,7 @@ def test_prep_nudge_counts_logged_reps():
         f.write(f"## [{td}] update | Acme / Interview Prep — queue made explicit: only 78/46 had dated slots. Protocol 🔴\n")
     st = state(v)
     check("yesterday's rated reps set the last rep", (st.get("last_rep_date", "")[:10], st.get("days_since_rep")), (y, "1"))
-    check("they are listed", st.get("reps_yesterday", "").startswith("2 (78 Subsets"), True)
+    check("re-solves and lowercase letters in names count; 'stays 🔴' does not", st.get("reps_yesterday", "").split(" ")[0], "4")
     check("a planning line with a rating emoji is NOT a rep", st.get("reps_today"), "0")
 
 def test_email_triage_reads_every_application():

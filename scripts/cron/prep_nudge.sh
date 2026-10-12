@@ -133,7 +133,9 @@ def _log_text():
 # Session log and the scorecard. Plans/research never carry a "<number> <name> <rating>".
 # Problem names are Title Case with small joiners ("Number of Islands", "Top K Frequent");
 # requiring that stops a planning sentence ("46 had dated slots… Protocol 🔴") from counting.
-REP_RE = re.compile(r"\b\d{1,4}\s+[A-Z][\w'’/+-]*(?:\s+(?:of|the|a|an|in|to|and|with|from|on|by|at|for|II|III|[A-Z0-9][\w'’/+-]*)){0,7}\s*(?:🔴|🟡|🟢)")
+REP_RE = re.compile(r"\b\d{1,4}\s+[A-Z][\w'’/+-]*(?:\s+(?:of|the|a|an|in|to|and|with|from|on|by|at|for|[a-z]\b|II|III|[A-Z0-9][\w'’/+-]*)){0,7}(?:\s+\(?(?i:re-?solve[sd]?)\)?)?\s*(?:🔴|🟡|🟢)")
+# 2026-10-12: re-solves are logged "78 Subsets re-solve 🟡" and the extra word broke the match
+# (Sun Oct 11 read "1 rep" for 6); "23 Merge k Sorted Lists" broke on the lone lowercase k.
 
 def _log_prep_dates():
     raw = _log_text()
