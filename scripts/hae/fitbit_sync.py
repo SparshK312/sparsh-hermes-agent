@@ -60,8 +60,31 @@ GROUP_COLS = {
     "sleep": ["sleep_total_h", "sleep_light_h", "sleep_deep_h", "sleep_rem_h", "sleep_awake_h",
               "sleep_in_bed_h", "sleep_start", "sleep_end", "sleep_stages_valid"],
     "exercise": ["exercise_count", "exercise_min"],
+    "wake-steps": ["wake_steps", "wake_gap_min"],
 }
 WORN_GATED = {"total_kcal", "vo2_max"}
+# Groups whose failure is not a sync failure (kept out of the exit code and the fail streak).
+# wake-steps is NOT optional: if it failed for good, every brief would wait for the cutoff, so
+# it must reach the usual 3-runs-failing alert (review 2026-10-13).
+OPTIONAL_GROUPS = {"pairedDevices"}
+
+# 2026-10-13: Fitbit creates the night's sleep session early and grows it in steps. A session
+# processed mid-night (e.g. at 3:20 AM) sits there until he wakes, so at 7 AM the brief read
+# 3.5 h / 4.7 h for nights that finished at 7.5 h / 8.1 h. The API has no "night finished"
+# flag (createTime/updateTime and metadata look the same). Band steps AFTER the session's end
+# are the signal: measured Oct 9-13, at most 14 steps in a whole night asleep, vs 16-436 in
+# the first hour up. Stored capped (it is only a yes/no signal, and a cap keeps the cell
+# from changing every run).
+# Steps alone are not enough (review 2026-10-13): once he is up, his morning steps also land
+# after the STALE stub's 3:45 AM end. So the sync also stores wake_gap_min = minutes from the
+# night's end until band steps first reach WAKE_STEPS_MIN. A real night's end is his wake-up
+# (measured gap 30-125 min, he lies in bed); a stub's end is hours before he moves (~4 h).
+# The brief decides with that gap.
+WAKE_STEPS_CAP = 200
+WAKE_STEPS_MIN = 25
+# the civil-time filter is only a lower bound (exact UTC filtering happens in wake_signal),
+# widened so a device clock behind Toronto (travel west) still includes his first steps
+FILTER_MARGIN_H = 6
 
 
 def today_local() -> datetime.date:
@@ -226,6 +249,40 @@ def parse_sleep(points: list) -> dict:
     return out
 
 
+def wake_signal(points: list, sleep_end: str) -> dict:
+    """Pure: {"wake_steps": band steps at/after `sleep_end` (capped), "wake_gap_min": minutes
+    from `sleep_end` until those steps first reach WAKE_STEPS_MIN (absent if not yet)}."""
+    try:
+        end = datetime.datetime.fromisoformat(sleep_end.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return {"wake_steps": "0"}
+    seen = []
+    for p in points:
+        if not is_air(p):
+            continue
+        st = (p.get("steps") or {})
+        try:
+            t = datetime.datetime.fromisoformat(((st.get("interval") or {}).get("startTime") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if t >= end:
+            seen.append((t, _i(st.get("count")) or 0))
+    out, n = {}, 0
+    for t, c in sorted(seen):
+        n += c
+        if n >= WAKE_STEPS_MIN and "wake_gap_min" not in out:
+            out["wake_gap_min"] = str(int((t - end).total_seconds() // 60))
+    out["wake_steps"] = str(min(n, WAKE_STEPS_CAP))
+    return out
+
+
+def _civil_filter_time(ts: str) -> str:
+    """UTC ISO -> a Toronto civil time FILTER_MARGIN_H earlier: a safe lower bound for the
+    API's civil_* filter, which compares in the device's own local time."""
+    t = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")) - datetime.timedelta(hours=FILTER_MARGIN_H)
+    return (t.astimezone(TZ) if TZ else t).strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def parse_exercise(points: list) -> dict:
     out = {}
     for p in points:
@@ -273,6 +330,21 @@ def fetch(client, start: datetime.date, end: datetime.date) -> tuple[dict, dict,
         raise
     except Exception as e:  # noqa: BLE001
         errs["sleep"] = f"{type(e).__name__}: {str(e)[:120]}"
+    # Only for the newest night (end = today): has he been up and walking since it ended?
+    end_iso = end.isoformat()
+    sleep_end = ((res.get("sleep") or {}).get(end_iso) or {}).get("sleep_end")
+    if "sleep" in res:
+        try:
+            if sleep_end:
+                pts = client.list_points("steps", f'steps.interval.civil_start_time >= "{_civil_filter_time(sleep_end)}"',
+                                         page_size=1000)
+                res["wake-steps"] = {end_iso: wake_signal(pts, sleep_end)}
+            else:
+                res["wake-steps"] = {}
+        except (GH.AuthExpired, GH.AccountNotLinked, GH.Missing, GH.NetworkDown):
+            raise
+        except Exception as e:  # noqa: BLE001
+            errs["wake-steps"] = f"{type(e).__name__}: {str(e)[:120]}"
     try:
         res["exercise"] = parse_exercise(client.list_points("exercise", f'exercise.interval.civil_start_time >= "{s_iso}"'))
     except (GH.AuthExpired, GH.AccountNotLinked, GH.Missing, GH.NetworkDown):
@@ -389,7 +461,7 @@ def _main(argv: list) -> int:
     except GH.GHError as e:
         problems[e.kind] = str(e)
         results, errs, last_sync, code = {}, {}, None, 3
-    hard = {g: m for g, m in errs.items() if g != "pairedDevices"}     # pairedDevices is optional
+    hard = {g: m for g, m in errs.items() if g not in OPTIONAL_GROUPS}
     if hard:
         code = code or 2
         note = "; ".join(f"{g}: {m}" for g, m in sorted(hard.items()))

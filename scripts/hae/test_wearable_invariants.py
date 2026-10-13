@@ -432,10 +432,152 @@ def test_wrapper_and_run_lock():
         check("--days without a value is a usage error, not a crash", F._main(["--days"]), 1)
 
 
+def test_wake_steps_signal():
+    print("S1. a mid-night Fitbit sleep stub is not a finished night: band steps after its end decide (Oct 12-13: 3.5h/4.7h sent for 7.5h/8.1h)")
+    _, WM = fresh_env()
+    import fitbit_sync as F, datetime as _d
+    def stp(platform, start, n, method="PASSIVELY_MEASURED"):
+        return {"dataSource": {"platform": platform, "recordingMethod": method}, "steps": {"interval": {"startTime": start}, "count": str(n)}}
+    end = "2026-10-13T11:26:00Z"
+    pts = [stp("FITBIT", "2026-10-13T09:00:00Z", 9),           # asleep: before the end, ignored
+           stp("FITBIT", "2026-10-13T11:26:00Z", 12),          # at the end counts
+           stp("FITBIT", "2026-10-13T11:40:00Z", 20),
+           stp("HEALTH_KIT", "2026-10-13T11:41:00Z", 500),     # the phone is not the band
+           stp("FITBIT", "2026-10-13T11:42:00Z", 300, "MANUAL")]
+    check("only band steps at/after the sleep end count; gap = minutes until they reach 25",
+          F.wake_signal(pts, end), {"wake_steps": "32", "wake_gap_min": "14"})
+    check("capped (a yes/no signal; no cell churn every run)", F.wake_signal([stp("FITBIT", end, 5000)], end)["wake_steps"], str(F.WAKE_STEPS_CAP))
+    check("gap = when steps FIRST reach 25, not later walking",
+          F.wake_signal([stp("FITBIT", "2026-10-13T11:40:00Z", 30), stp("FITBIT", "2026-10-13T13:40:00Z", 100)], end)["wake_gap_min"], "14")
+    check("under 25 steps since the end -> no gap yet", F.wake_signal([stp("FITBIT", "2026-10-13T12:00:00Z", 16)], end), {"wake_steps": "16"})
+    check("no/garbled sleep end -> 0 steps, never a crash", (F.wake_signal(pts, ""), F.wake_signal(pts, None)),
+          ({"wake_steps": "0"}, {"wake_steps": "0"}))
+    # THE review case: a stub ending 3:45 AM, then his morning walk at 7:40 -> gap ~235 min
+    stub_end = "2026-10-13T07:45:00Z"
+    check("morning steps after a STALE stub end give a long gap (the brief keeps waiting)",
+          F.wake_signal([stp("FITBIT", "2026-10-13T08:30:00Z", 3), stp("FITBIT", "2026-10-13T11:40:00Z", 60)], stub_end),
+          {"wake_steps": "63", "wake_gap_min": "235"})
+    check("civil filter = Toronto local, 6 h early (lower bound; travel west safe)", F._civil_filter_time(end), "2026-10-13T01:26:00")
+
+    class Stub:
+        def __init__(self, sleep_pts, steps_pts=None, steps_err=None):
+            self.sleep_pts, self.steps_pts, self.steps_err, self.calls = sleep_pts, steps_pts or [], steps_err, []
+        def daily_rollup(self, *a, **k):
+            return []
+        def paired_devices(self):
+            return []
+        def list_points(self, t, filt, page_size=None):
+            self.calls.append((t, filt))
+            if t == "sleep":
+                return self.sleep_pts
+            if t == "steps":
+                if self.steps_err:
+                    raise self.steps_err
+                return self.steps_pts
+            return []
+    night = {"dataSource": {"platform": "FITBIT"}, "sleep": {
+        "interval": {"startTime": "2026-10-13T02:55:00Z", "startUtcOffset": "-14400s", "endTime": end, "endUtcOffset": "-14400s"},
+        "metadata": {"processed": True}, "summary": {"minutesAsleep": "484", "minutesAwake": "27", "stagesSummary": []}}}
+    day = _d.date(2026, 10, 13)
+    st = Stub([night], pts)
+    res, errs, _ = F.fetch(st, day - _d.timedelta(days=6), day)
+    check("fetch stores today's wake signal", res.get("wake-steps"), {"2026-10-13": {"wake_steps": "32", "wake_gap_min": "14"}})
+    check("the steps query is bounded below by the sleep end (minus the margin)",
+          [c for c in st.calls if c[0] == "steps"], [("steps", 'steps.interval.civil_start_time >= "2026-10-13T01:26:00"')])
+    res2, _, _ = F.fetch(Stub([]), day - _d.timedelta(days=6), day)
+    check("no night today -> the cell is blanked (empty success)", res2.get("wake-steps"), {})
+    res3, errs3, _ = F.fetch(Stub([night], steps_err=RuntimeError("HTTP 500")), day - _d.timedelta(days=6), day)
+    check("a failed steps query keeps the old cell and COUNTS as failing (3 in a row alerts)",
+          ("wake-steps" in res3, "wake-steps" in errs3, "wake-steps" in F.OPTIONAL_GROUPS), (False, True, False))
+    rows = F.apply({"2026-10-13": {"date": "2026-10-13", "wake_steps": "40"}}, {}, ["2026-10-13"])
+    check("failed group keeps its cell", rows["2026-10-13"].get("wake_steps"), "40")
+    m = WM.merge_day({}, {"sleep_total_h": "8.07", "wake_steps": "32", "wake_gap_min": "14"})
+    check("wake signal reaches metrics.csv", (m.get("wake_steps"), m.get("wake_gap_min"),
+          all(c in WM.AIR_COLUMNS and c in WM.FITBIT_COLUMNS for c in ("wake_steps", "wake_gap_min"))), ("32", "14", True))
+
+
+def _brief(rows, state, cutoff_passed, facts_extra=None):
+    """Run the brief gate's main() once, offline. Returns (sent messages, saved state)."""
+    import datetime as _d
+    sys.modules.pop("health_morning_brief_gate", None)
+    import health_morning_brief_gate as G
+    root = Path(tempfile.mkdtemp(prefix="brief-"))
+    _TMP.append(root)
+    G.STATE = root / "brief_state.json"
+    G.STATE.write_text(json.dumps(state))
+    G.DRY_RUN = G.FORCE = False
+    G.NO_LLM = True
+    G._refresh = lambda: None
+    sent = []
+    G.send_message = lambda t: sent.append(t) or True
+    G.WEEKDAY_CUTOFF = G.WEEKEND_CUTOFF = _d.time(0, 0) if cutoff_passed else _d.time(23, 59)
+    G.gather_schedule = G.gather_tasks = lambda d: []
+    G.gather_health_yesterday = G.gather_training = lambda d: {}
+    G.gather_inbox_checked = lambda d="": ([], "ok")
+    G.vault_sync = lambda: {"state": "ok"}
+    G.gather_board = lambda: {}
+    G.gather_action_items = lambda d="": {"hard_deadlines": "", "this_week": ""}
+    now = _d.datetime.now(G.TZ)
+    today, yday = now.strftime("%Y-%m-%d"), (now - _d.timedelta(days=1)).strftime("%Y-%m-%d")
+    G._row_for = lambda d: dict(rows.get("T" if d == today else ("Y" if d == yday else ""), {}))
+    with contextlib.redirect_stdout(io.StringIO()):
+        G.main()
+    return sent, json.loads(G.STATE.read_text()), today, G
+
+
+def test_brief_waits_for_finished_night():
+    print("S2. brief: waits for a finished Air night; at the cutoff says 'so far'; one correction when the full night lands")
+    fresh_env()
+    stub = {"sleep_total_h": "4.65", "sleep_source": "air", "sleep_start": "2026-10-13T02:55:00Z", "sleep_end": "2026-10-13T07:35:00Z"}
+    full = {"sleep_total_h": "8.07", "sleep_source": "air", "sleep_start": "2026-10-13T02:55:00Z", "sleep_end": "2026-10-13T11:26:00Z",
+            "sleep_deep_h": "0.47", "sleep_rem_h": "1.05", "sleep_core_h": "6.55", "resting_hr": "58", "hrv_rmssd_ms": "104.4",
+            "spo2_avg": "97.2", "respiratory_rate": "16.5", "wake_steps": "40", "wake_gap_min": "20"}
+    yday = {"steps": "8997", "steps_air": "8805", "steps_apple": "8997", "azm": "86", "distance_air_km": "6.05",
+            "total_kcal_air": "2431", "exercise_air_count": "1", "exercise_air_min": "45"}
+    sent, st, today, G = _brief({"T": dict(stub, wake_steps="0"), "Y": yday}, {}, cutoff_passed=False)
+    check("stub night (no steps since it ended), before the cutoff -> no brief yet", (sent, st.get("last_brief_date")), ([], None))
+    sent, st, _, _ = _brief({"T": dict(stub, wake_steps="63", wake_gap_min="235"), "Y": yday}, {}, cutoff_passed=False)
+    check("he is up and walking but the stub has not grown yet (gap 235 min) -> still waits", sent, [])
+    sent, st, today, G = _brief({"T": dict(stub, wake_steps="0"), "Y": yday}, {}, cutoff_passed=True)
+    msg = sent[0] if sent else ""
+    check("at the cutoff the brief goes, calling the stub 'so far' and not low sleep",
+          ("4.7h so far" in msg, "Under your 7h floor" in msg, "Slept" in msg), (True, False, False))
+    check("state remembers it lacked the finished night and what it showed",
+          (st.get("brief_had_sleep"), st.get("brief_sleep_h")), (False, 4.65))
+    sent, st, _, G = _brief({"T": full, "Y": yday}, {}, cutoff_passed=False)
+    msg = sent[0] if sent else ""
+    check("finished night -> brief fires before the cutoff with the real total + times",
+          ("Slept *8.1h* · 10:55 PM → 7:26 AM" in msg, st.get("brief_had_sleep")), (True, True))
+    check("yesterday's numbers always in the brief (his ask, Oct 13)",
+          all(x in msg for x in ("*8,997* steps", "86 zone min", "6.0 km", "2,431 kcal burned", "1 workout (45 min)")), True)
+    check("last night's extras shown", all(x in msg for x in ("deep 0.5h", "REM 1.1h", "light 6.5h", "RHR 58", "HRV 104ms (RMSSD)", "SpO2 97%", "breathing 16.5/min")), True)
+    sent, st, _, _ = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 4.65}, False)
+    check("the full night later -> ONE correction naming what the brief had",
+          (len(sent), "8.1h" in (sent or [""])[0], "had 4.7h" in (sent or [""])[0], st.get("sleep_followup_date")), (1, True, True, today))
+    sent, _, _, _ = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 7.9}, False)
+    check("a 'so far' total within 0.5h of the final -> no extra message", sent, [])
+    sent, _, _, _ = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": True, "brief_sleep_h": 7.8}, False)
+    check("a finished total that refines by < 0.5h -> no extra message", sent, [])
+    sent, _, _, _ = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": True, "brief_sleep_h": 7.4}, False)
+    check("a finished total that moves by >= 0.5h -> one correction", len(sent), 1)
+    sent, _, _, _ = _brief({"T": {k: v for k, v in full.items() if k != "wake_gap_min"}, "Y": yday},
+                           {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 4.65}, False)
+    check("no correction while the night still looks unfinished", sent, [])
+    sent, _, _, _ = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 4.65,
+                                                    "sleep_followup_date": today}, False)
+    check("never a second correction the same day", sent, [])
+    sent, _, _, _ = _brief({"T": {"sleep_total_h": "7.9", "sleep_source": "apple"}, "Y": {}},
+                           {"last_brief_date": today, "brief_had_sleep": True, "brief_sleep_h": 6.0}, False)
+    check("Apple night the brief already showed -> no new correction (old behaviour kept)", sent, [])
+    sent, _, _, _ = _brief({"T": {"sleep_total_h": "7.2"}, "Y": {}}, {}, False)
+    check("Apple / hand-logged nights are whole: brief fires as before", len(sent), 1)
+
+
 TESTS = [test_merge_rules, test_reseed_strips_air, test_flat_layout_end_to_end, test_fitbit_apply_and_parse,
          test_sleep_parse, test_client, test_alerts, test_ingest_sleep_priority, test_vault_log_marks_sleep,
          test_first_run_keeps_apple_history, test_coach_baseline_per_source,
-         test_brief_air_wording, test_wrapper_and_run_lock]
+         test_brief_air_wording, test_wrapper_and_run_lock, test_wake_steps_signal,
+         test_brief_waits_for_finished_night]
 
 if __name__ == "__main__":
     for t in TESTS:

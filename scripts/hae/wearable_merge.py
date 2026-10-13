@@ -58,13 +58,14 @@ SLEEP_BLOCK = ["sleep_total_h", "sleep_core_h", "sleep_deep_h", "sleep_rem_h", "
 AIR_COLUMNS = ["steps_apple", "steps_air", "steps_source", "sleep_source", "rhr_source",
                "hrv_rmssd_ms", "azm", "active_min_air", "total_kcal_air", "distance_air_km",
                "vo2_max_air", "spo2_avg", "skin_temp_delta", "resp_source",
-               "exercise_air_count", "exercise_air_min", "fb_last_sync"]
+               "exercise_air_count", "exercise_air_min", "fb_last_sync", "wake_steps", "wake_gap_min"]
 
 FITBIT_COLUMNS = ["date", "steps", "distance_km", "total_kcal", "active_min", "azm",
                   "resting_hr", "hrv_rmssd_ms", "spo2_avg", "resp_rate", "skin_temp_delta",
                   "vo2_max", "sleep_total_h", "sleep_light_h", "sleep_deep_h", "sleep_rem_h",
                   "sleep_awake_h", "sleep_in_bed_h", "sleep_start", "sleep_end",
-                  "sleep_stages_valid", "exercise_count", "exercise_min", "fb_last_sync"]
+                  "sleep_stages_valid", "exercise_count", "exercise_min", "fb_last_sync", "wake_steps",
+                  "wake_gap_min"]
 
 
 @contextlib.contextmanager
@@ -160,7 +161,8 @@ def merge_day(apple: dict, air: dict) -> dict:
                              ("distance_air_km", "distance_km"), ("vo2_max_air", "vo2_max"),
                              ("spo2_avg", "spo2_avg"), ("skin_temp_delta", "skin_temp_delta"),
                              ("exercise_air_count", "exercise_count"),
-                             ("exercise_air_min", "exercise_min"), ("fb_last_sync", "fb_last_sync")):
+                             ("exercise_air_min", "exercise_min"), ("fb_last_sync", "fb_last_sync"),
+                             ("wake_steps", "wake_steps"), ("wake_gap_min", "wake_gap_min")):
         if air.get(air_col) is not None:
             row[out_col] = air[air_col]
     return row

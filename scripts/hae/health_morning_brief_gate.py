@@ -81,6 +81,16 @@ CHAT_ID = "696500863"  # Sparsh
 WEEKDAY_CUTOFF = datetime.time(9, 0)
 WEEKEND_CUTOFF = datetime.time(11, 0)
 
+# 2026-10-13: the Fitbit night arrives in pieces — a session processed mid-night sits at
+# 3.5-4.7 h until he wakes, and the 7 AM brief sent that stub as last night's sleep. An Air
+# night counts as FINISHED only when the band saw him start walking (25 steps; at most 14
+# were seen in a whole night asleep) soon after the night's end: wake_gap_min, written by
+# fitbit_sync. A real end is his wake-up (gap 30-125 min measured); a stub's end is hours
+# before he moves (~240 min), so his morning steps cannot pass a stub off as finished.
+WAKE_GAP_MAX_MIN = 150
+# A later sleep total this far from what the brief said earns one correction message.
+SLEEP_CORRECTION_H = 0.5
+
 # Migrated off OpenRouter 2026-08-26 — one vendor (Anthropic).
 ANTHROPIC_MODEL = "claude-haiku-4-5"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -373,25 +383,65 @@ def vault_sync() -> dict:
         return {"state": "unknown", "why": f"{type(e).__name__}"}
 
 
+def sleep_state(row: dict) -> str:
+    """"none" | "partial" | "final" for the night in this metrics row. Only an Air night can
+    be partial; Apple and /sleep nights arrive whole."""
+    if not row.get("sleep_total_h"):
+        return "none"
+    if row.get("sleep_source") != "air":
+        return "final"
+    gap = _fnum(row, "wake_gap_min")
+    return "final" if gap is not None and gap <= WAKE_GAP_MAX_MIN else "partial"
+
+
+def _clock(ts: str) -> str | None:
+    """'2026-10-13T11:26:00Z' -> '7:26 AM' (Toronto); None when unparseable."""
+    try:
+        t = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            return None
+        return t.astimezone(TZ).strftime("%-I:%M %p")
+    except (TypeError, ValueError):
+        return None
+
+
+def _avg7(column: str, before: str):
+    """Mean of the last 7 dated values of a metrics column strictly before `before`."""
+    try:
+        with CSVP.open(newline="") as fh:
+            vals = [v for r in csv.DictReader(fh)
+                    if r.get("date", "") < before and (v := _fnum(r, column)) is not None]
+    except OSError:
+        return None
+    return sum(vals[-7:]) / len(vals[-7:]) if vals[-7:] else None
+
+
 def gather_facts(today: str, yesterday: str) -> dict:
     trow = _row_for(today)
     yrow = _row_for(yesterday)
-    sleep_present = bool(trow.get("sleep_total_h"))
+    state = sleep_state(trow)
+    sleep_present = state != "none"
 
     sleep = {}
     if sleep_present:
         for k in ("sleep_total_h", "sleep_core_h", "sleep_deep_h", "sleep_rem_h",
-                  "sleep_awake_h", "resting_hr", "hrv_ms", "hrv_rmssd_ms", "spo2_avg"):
+                  "sleep_awake_h", "resting_hr", "hrv_ms", "hrv_rmssd_ms", "spo2_avg",
+                  "respiratory_rate"):
             v = _fnum(trow, k)
             if v is not None:
                 sleep[k] = v
         if trow.get("sleep_source"):
             sleep["source"] = trow["sleep_source"]
-        with CSVP.open(newline="") as fh:
-            recent = [v for r in csv.DictReader(fh)
-                      if r.get("date", "") < today and (v := _fnum(r, "sleep_total_h")) is not None]
-        if recent[-7:]:
-            sleep["avg7_h"] = round(sum(recent[-7:]) / len(recent[-7:]), 1)
+        for k, col in (("bedtime", "sleep_start"), ("woke", "sleep_end")):
+            c = _clock(trow.get(col, ""))
+            if c:
+                sleep[k] = c
+        if state == "partial":
+            # still syncing: the brief must call it "so far", never low sleep (2026-10-13)
+            sleep["partial"] = True
+        avg = _avg7("sleep_total_h", today)
+        if avg is not None:
+            sleep["avg7_h"] = round(avg, 1)
 
     # Activity (his call, 2026-10-08): steps + Active Zone Minutes once the Fitbit Air is in
     # use; Apple's active kcal / exercise minutes only on days without Air data.
@@ -401,6 +451,17 @@ def gather_facts(today: str, yesterday: str) -> dict:
         v = _fnum(yrow, k)
         if v is not None:
             activity[k] = int(v)
+    # The rest of yesterday from the band (his ask, 2026-10-13: "steps and other data from
+    # the previous day").
+    if air_day:
+        for k, col, nd in (("distance_km", "distance_air_km", 1), ("kcal_burned", "total_kcal_air", 0),
+                           ("workouts", "exercise_air_count", 0), ("workout_min", "exercise_air_min", 0)):
+            v = _fnum(yrow, col)
+            if v is not None and v > 0:
+                activity[k] = round(v, nd) if nd else int(v)
+    st7 = _avg7("steps", today)
+    if st7 is not None and "steps" in activity:
+        activity["steps_avg7"] = int(round(st7))
     # The band misses steps when it is off the wrist (charging): when it saw far fewer than
     # the phone, ask him rather than silently trusting either (his call).
     sa, sx = _fnum(yrow, "steps_apple"), _fnum(yrow, "steps_air")
@@ -423,6 +484,7 @@ def gather_facts(today: str, yesterday: str) -> dict:
     return {
         "date": today,
         "sleep_synced": sleep_present,
+        "sleep_state": state,
         "air_in_use": air_in_use,
         "sleep": sleep,
         "yesterday_activity": activity,
@@ -450,25 +512,75 @@ def _sleep_lines(s: dict, synced: bool, air: bool = False) -> list[str]:
         return ["_(Apple Watch sleep hasn't synced yet — `/sleep <hrs>` to log manually.)_"]
     out = []
     tot = s.get("sleep_total_h")
-    flag = "✅" if (tot or 0) >= 7 else "⚠️"
-    line = f"{flag} Slept *{tot:.1f}h*" if tot is not None else "Sleep:"
+    partial = bool(s.get("partial"))
+    if partial and tot is not None:
+        # a night still syncing is never "low sleep" (2026-10-13)
+        line = f"⏳ *{tot:.1f}h so far*"
+    else:
+        flag = "✅" if (tot or 0) >= 7 else "⚠️"
+        line = f"{flag} Slept *{tot:.1f}h*" if tot is not None else "Sleep:"
+    if s.get("bedtime") and s.get("woke") and not partial:
+        line += f" · {s['bedtime']} → {s['woke']}"
     if "avg7_h" in s:
         line += f"  _(7-day avg {s['avg7_h']:.1f}h)_"
     out.append(line)
     extras = []
     for k, lab, fmt in (("sleep_deep_h", "deep", "{:.1f}h"), ("sleep_rem_h", "REM", "{:.1f}h"),
-                        ("resting_hr", "RHR", "{:.0f}"),
+                        ("sleep_core_h", "light", "{:.1f}h")):
+        if k in s and not partial:
+            extras.append(f"{lab} " + fmt.format(s[k]))
+    for k, lab, fmt in (("resting_hr", "RHR", "{:.0f}"),
                         # different measures, never shown as the same number (2026-10-08)
                         ("hrv_rmssd_ms", "HRV", "{:.0f}ms (RMSSD)"),
-                        ("hrv_ms", "HRV", "{:.0f}ms (SDNN)")):
+                        ("hrv_ms", "HRV", "{:.0f}ms (SDNN)"),
+                        ("spo2_avg", "SpO2", "{:.0f}%"),
+                        ("respiratory_rate", "breathing", "{:.1f}/min")):
         if k == "hrv_ms" and "hrv_rmssd_ms" in s:
             continue
         if k in s:
             extras.append(f"{lab} " + fmt.format(s[k]))
     if extras:
         out.append("   " + " · ".join(extras))
-    if tot is not None and tot < 7:
+    if partial:
+        out.append("   _Fitbit may still be syncing last night — I'll send an update if the total changes._")
+    elif tot is not None and tot < 7:
         out.append("   _Under your 7h floor — guard sleep tonight._")
+    return out
+
+
+def _activity_lines(a: dict) -> list[str]:
+    """Yesterday's numbers as one fixed line (empty when there are none)."""
+    bits = []
+    if "steps" in a:
+        st = f"*{a['steps']:,}* steps"
+        if a.get("steps_avg7"):
+            st += f" _(7-day avg {a['steps_avg7']:,})_"
+        bits.append(st)
+    if "azm" in a:
+        bits.append(f"{a['azm']} zone min")
+    if "distance_km" in a:
+        bits.append(f"{a['distance_km']:.1f} km")
+    if "kcal_burned" in a:
+        bits.append(f"{a['kcal_burned']:,} kcal burned")
+    if "active_kcal" in a:
+        bits.append(f"{a['active_kcal']} active kcal")
+    if "exercise_min" in a:
+        bits.append(f"{a['exercise_min']} exercise min")
+    if a.get("workouts"):
+        w = f"{a['workouts']} workout" + ("s" if a["workouts"] > 1 else "")
+        if a.get("workout_min"):
+            w += f" ({a['workout_min']} min)"
+        bits.append(w)
+    return ["🚶 Yesterday: " + " · ".join(bits)] if bits else []
+
+
+def health_block(facts: dict) -> list[str]:
+    """The fixed numbers block — written by code, so the numbers are always there and never
+    reworded (his ask, 2026-10-13). Rendered under the composed brief and in the follow-up."""
+    out = _sleep_lines(facts.get("sleep") or {}, facts.get("sleep_synced"), facts.get("air_in_use", False))
+    act = _activity_lines(facts.get("yesterday_activity") or {})
+    if act:
+        out += [""] + act
     return out
 
 
@@ -476,22 +588,7 @@ def _sleep_lines(s: dict, synced: bool, air: bool = False) -> list[str]:
 def compose_templated(facts: dict) -> str:
     now = datetime.datetime.now(TZ)
     parts = [f"🌅 *Morning, Sparsh.* {now.strftime('%a %b %-d')}.", ""]
-    parts += _sleep_lines(facts["sleep"], facts["sleep_synced"], facts.get("air_in_use", False))
-
-    a = facts["yesterday_activity"]
-    if a:
-        bits = []
-        if "steps" in a:
-            bits.append(f"{a['steps']:,} steps")
-        if "azm" in a:
-            bits.append(f"{a['azm']} zone min")
-        if "active_kcal" in a:
-            bits.append(f"{a['active_kcal']} active kcal")
-        if "exercise_min" in a:
-            bits.append(f"{a['exercise_min']} exercise min")
-        if bits:
-            parts.append("")
-            parts.append("Yesterday: " + " · ".join(bits))
+    parts += health_block(facts)
 
     if facts["schedule"]:
         parts += ["", "*Today*"] + [f"• {r}" for r in facts["schedule"]]
@@ -724,8 +821,12 @@ _STYLE = (
     "and `sleep.hrv_ms` are DIFFERENT measures (RMSSD vs SDNN): never compare one with the "
     "other. If sleep has not synced and `air_in_use` is true, tell him to open the Fitbit app "
     "— do not ask him to log sleep by hand.\n"
-    "• `sleep` / `yesterday_activity` — flag genuinely low sleep (floor 7h) or a clear "
-    "trend, once. Otherwise leave it.\n"
+    "• `sleep` / `yesterday_activity` — the exact numbers (sleep, stages, RHR, HRV, steps, "
+    "zone minutes, distance, calories) are printed in a fixed block UNDER your message "
+    "automatically. Do not list them again. Mention one only when it matters: genuinely low "
+    "sleep (floor 7h), a clear trend, or a link to today's plan. If `sleep.partial` is true the "
+    "night is still syncing from the band — the total is only what has arrived so far, so never "
+    "call it short or low sleep.\n"
     "• `tasks`, `hard_deadlines`, `this_week` — the plan. `hard_deadlines` is the OPEN "
     "rows of his THIS WEEK list (finished rows already removed; ⬜ = a step still to do). "
     "Rows tagged [TODAY] are today's work; [WEEK] rows are later this week — mention one only "
@@ -813,7 +914,8 @@ def compose_rich(facts: dict) -> str | None:
             out = data["content"][0]["text"].strip()
             if out:
                 _log(f"compose_rich: ok (attempt {attempt}, {len(out)} chars)")
-                return out
+                block = health_block(facts)
+                return out + ("\n\n" + "\n".join(block) if block else "")
             last_err = "empty content"
         except Exception as e:  # noqa: BLE001
             last_err = str(e)
@@ -823,12 +925,15 @@ def compose_rich(facts: dict) -> str | None:
 
 
 # ----------------------------------------------------------------------------- compose: sleep follow-up
-def compose_followup(facts: dict, brief_steps) -> str:
+def compose_followup(facts: dict, brief_steps, brief_sleep_h=None) -> str:
     """The short 'sleep just landed' follow-up — sent later in the morning when the
-    brief had to go out before the watch's sleep session synced (it ends when you
-    wake ~9am, so HAE often pushes it AFTER the 9am brief). Also corrects yesterday's
+    brief had to go out before the night synced in full (it ends when you wake), or with a
+    total that has since moved by SLEEP_CORRECTION_H or more. Also corrects yesterday's
     step total if the morning re-sync filled it in materially higher than the brief had."""
-    parts = ["😴 *Sleep synced.*", ""]
+    head = "😴 *Sleep synced.*"
+    if brief_sleep_h is not None:
+        head = f"😴 *Sleep updated* — the full night is in _(the brief had {brief_sleep_h:.1f}h)_."
+    parts = [head, ""]
     parts += _sleep_lines(facts["sleep"], facts["sleep_synced"], facts.get("air_in_use", False))
     cur = facts["yesterday_activity"].get("steps")
     if cur is not None and brief_steps is not None and cur > brief_steps + 500:
@@ -856,7 +961,8 @@ def main() -> int:
             return 0
         if send_message(brief):
             st = _load_state()
-            st.update({"last_brief_date": today, "brief_had_sleep": facts["sleep_synced"],
+            st.update({"last_brief_date": today, "brief_had_sleep": facts.get("sleep_state") == "final",
+                       "brief_sleep_h": (facts.get("sleep") or {}).get("sleep_total_h"),
                        "brief_steps": facts["yesterday_activity"].get("steps")})
             _save_state(st)
             print(WAKE_GATE_SKIP)
@@ -866,11 +972,12 @@ def main() -> int:
 
     state = _load_state()
     trow = _row_for(today)
-    sleep_present = bool(trow.get("sleep_total_h"))
+    night = sleep_state(trow)
 
     # ---- Case A: the brief hasn't gone out today yet ----
     if state.get("last_brief_date") != today:
-        if not (sleep_present or now.time() >= cutoff):
+        # Wait for a FINISHED night (2026-10-13: a mid-night Fitbit stub is not one), or the cutoff.
+        if not (night == "final" or now.time() >= cutoff):
             print(WAKE_GATE_SKIP)   # still waiting for sleep to land / the cutoff
             return 0
         facts = gather_facts(today, yesterday)
@@ -878,7 +985,9 @@ def main() -> int:
         # Deliver DIRECTLY via Bot API (no agent layer can hijack/drop it). Only mark
         # the day done on a confirmed send, so a failure re-fires on the next tick.
         if send_message(brief):
-            state.update({"last_brief_date": today, "brief_had_sleep": sleep_present,
+            # brief_had_sleep = it had the FINISHED night; brief_sleep_h = the total it showed
+            state.update({"last_brief_date": today, "brief_had_sleep": night == "final",
+                          "brief_sleep_h": (facts.get("sleep") or {}).get("sleep_total_h"),
                           "brief_steps": facts["yesterday_activity"].get("steps")})
             _save_state(state)
             print(WAKE_GATE_SKIP)
@@ -886,19 +995,24 @@ def main() -> int:
             print(brief)
         return 0
 
-    # ---- Case B: brief already went out WITHOUT sleep, and sleep has since landed ----
-    # Fire ONE short follow-up so last night's sleep (+ any corrected step total) still
-    # reaches him — fixes the race where the brief fires at the 9am cutoff but the watch
-    # only pushes its sleep session ~9:40 (it ends when he wakes).
-    if (not state.get("brief_had_sleep")
-            and sleep_present
-            and state.get("sleep_followup_date") != today):
-        facts = gather_facts(today, yesterday)
-        if send_message(compose_followup(facts, state.get("brief_steps"))):
-            state["sleep_followup_date"] = today
-            _save_state(state)
-        print(WAKE_GATE_SKIP)
-        return 0
+    # ---- Case B: one follow-up once the finished night is in ----
+    # Sent when the brief went out without the finished night and the total moved by
+    # SLEEP_CORRECTION_H or more (or it had none), or when even the "finished" total it had
+    # has since moved that far. Fixes the race where the brief fires at the cutoff before the
+    # night lands, and the mid-night stub (3.5 h shown for a 7.5 h night, Oct 12).
+    if night == "final" and state.get("sleep_followup_date") != today:
+        cur = _fnum(trow, "sleep_total_h")
+        had = state.get("brief_sleep_h")
+        # only an Air night grows after the brief; Apple / /sleep keep their old behaviour
+        moved = (trow.get("sleep_source") == "air" and had is not None and cur is not None
+                 and abs(cur - float(had)) >= SLEEP_CORRECTION_H)
+        if (not state.get("brief_had_sleep") and (had is None or moved)) or (state.get("brief_had_sleep") and moved):
+            facts = gather_facts(today, yesterday)
+            if send_message(compose_followup(facts, state.get("brief_steps"), had)):
+                state["sleep_followup_date"] = today
+                _save_state(state)
+            print(WAKE_GATE_SKIP)
+            return 0
 
     print(WAKE_GATE_SKIP)   # nothing to do this tick
     return 0
