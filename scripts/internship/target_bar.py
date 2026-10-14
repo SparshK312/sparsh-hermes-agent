@@ -122,7 +122,18 @@ WINTER_ONLY_APPLY = {
     "cloudflare", "amd", "abridge", "zip", "kodiak robotics", "gemini",
     "geotab", "stackadapt", "kinaxis", "domino data lab", "formlabs", "prizepicks",
     "knowbe4", "entrust", "soti",
+    # 2026-10-14, his call on a Winter-postings triage: Brain Co. (applied-AI
+    # startup, ML co-op Jan 11 - Apr 30 2027, SF; NOT the BCI company BrainCo) and
+    # Heliux (SF manufacturing-AI startup, Spring 2027 SWE intern). Winter only.
+    # (Brain Co. is in WINTER_ONLY_APPLY_EXACT below: its name normalizes to "brain".)
+    "heliux",
 }
+
+# Companies whose names collapse to something generic once normalized, so they are
+# matched on the RAW name (lowercased, trailing "." stripped) instead. "Brain Co."
+# normalizes to "brain", the same as "Brain Corp"; a word match would also hit
+# "Second Brain Labs". (2026-10-14)
+WINTER_ONLY_APPLY_EXACT = {"brain co"}
 
 # 2026-10-09, same call, group B: big-name enterprises, but "promote only roles that
 # are a direct fit for my resume". So the COMPANY alone never promotes these; a Winter
@@ -197,7 +208,9 @@ def bar_of(company: str, season: str) -> str:
         return ACCEPT
     if _matches_any(APPLY_NAMES, nn, w):
         return APPLY
-    if season == WINTER and _matches_any(WINTER_ONLY_APPLY, nn, w):
+    if season == WINTER and (_matches_any(WINTER_ONLY_APPLY, nn, w)
+                             or (company or "").strip().lower().rstrip(".")
+                             in WINTER_ONLY_APPLY_EXACT):
         return APPLY
     return BELOW
 

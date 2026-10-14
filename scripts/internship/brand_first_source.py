@@ -68,6 +68,16 @@ def _listing_prefilter(title: str, location: str = "") -> bool:
 _SEASONS = "fall|winter|spring|summer"
 _CYCLE_RE = re.compile(rf"\b({_SEASONS})\s+(20\d\d)\b", re.IGNORECASE)
 _CYCLE_REV_RE = re.compile(rf"\b(20\d\d)\s+({_SEASONS})\b", re.IGNORECASE)
+# 2026-10-14: a season with its MONTH RANGE in brackets, the year only at the end:
+#   Cloudflare 8199958  "Available Terms  Winter/Spring (January - May 2027)
+#                        Summer (May - September 2027)"
+# Neither pattern above reads it (the year is not next to the season), so the req was
+# labelled blank, routed as Summer, and a Jan-May 2027 role he wanted never reached
+# Apply - Winter. Each named season yields "<Season> <year>".
+_MONTH = r"[A-Za-z]{3,9}\.?(?:\s+\d{1,2})?,?"
+_CYCLE_RANGE_RE = re.compile(
+    rf"\b({_SEASONS})(?:\s*/\s*({_SEASONS}))?\s*\(\s*{_MONTH}\s*[-–—]+\s*{_MONTH}\s+(20\d\d)\s*\)",
+    re.IGNORECASE)
 # 🔴 A GRADUATION TERM IS NOT THE WORK TERM (2026-09-12). JDs state the candidate's
 # expected graduation as a season+year ("Graduating in Spring 2028 or later", "Must be
 # graduating in December 2027 or Spring 2028"), and this labeler read those as the
@@ -140,6 +150,12 @@ def _cycle_label(title: str, jd: str) -> str:
             if is_jd and _in_grad_context(src, m.start()):
                 continue
             found.append(f"{m.group(2).title()} {m.group(1)}")
+        for m in _CYCLE_RANGE_RE.finditer(src):
+            if is_jd and _in_grad_context(src, m.start()):
+                continue
+            for season in (m.group(1), m.group(2)):
+                if season:
+                    found.append(f"{season.title()} {m.group(3)}")
     if not found:
         return ""
     for f in found:                       # a target term wins wherever it appears

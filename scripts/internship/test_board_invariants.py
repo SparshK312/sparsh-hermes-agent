@@ -1270,6 +1270,30 @@ def test_swelist_links_resolve_before_dedup():
     check("the cache is persisted at the end of the gather", "simplify_resolve.save_cache()" in g, True)
 
 
+def test_season_month_range_and_oct14_winter_names():
+    print("W14. cycle: 'Winter/Spring (January - May 2027)' reads as Winter; Oct 14 Winter-bar names")
+    from brand_first_source import _cycle_label
+    import target_bar as TB
+    cf = ("Available Locations Austin, US Available Terms Winter/Spring (January - May 2027) "
+          "Summer (May - September 2027) About the Role")
+    check("Cloudflare 8199958: a season with a bracketed month range is labelled",
+          _cycle_label("Software Engineer Intern (2027) - Austin, TX", cf), "Winter 2027")
+    check("...and therefore routes to the Winter tab",
+          TB.season_of(_cycle_label("Software Engineer Intern (2027) - Austin, TX", cf)), TB.WINTER)
+    check("a single season with a range reads", _cycle_label("SWE Intern", "Summer (May - September 2027) only"),
+          "Summer 2027")
+    check("day-of-month ranges read", _cycle_label("SWE Intern", "Term: Fall (Sep. 8 - Dec. 18, 2026)"), "Fall 2026")
+    check("a graduation window in range form is still NOT the work term",
+          _cycle_label("SWE Intern", "Must be graduating Winter/Spring (January - May 2028)."), "")
+    W_, S_ = TB.WINTER, TB.SUMMER
+    check("Brain Co. is Winter apply (his call Oct 14)", TB.bar_of("Brain Co.", W_), TB.APPLY)
+    check("Brain Co. stays below for Summer", TB.bar_of("Brain Co.", S_), TB.BELOW)
+    for look in ("Brain Corp", "Brain Corporation", "Second Brain Labs", "BrainCo"):
+        check(f"{look} is NOT promoted by the Brain Co. call", TB.bar_of(look, W_), TB.BELOW)
+    check("Heliux is Winter apply (his call Oct 14)", TB.bar_of("Heliux", W_), TB.APPLY)
+    check("Heliux stays below for Summer", TB.bar_of("Heliux", S_), TB.BELOW)
+
+
 def test_cycle_label_ignores_graduation_dates():
     print("C4. cycle label: a graduation term is not the work term")
     from brand_first_source import _cycle_label, _accept
@@ -2510,6 +2534,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_board_facts_reads_everything_and_derives_the_vocabulary,
            test_board_reads_whole_tabs,
            test_target_bar_names_and_collisions,
+           test_season_month_range_and_oct14_winter_names,
            test_brand_floor,
            test_outreach_targets_wired_and_on_the_bar,
            test_outreach_tab_is_never_touched_by_the_refresh,
