@@ -55,12 +55,15 @@ BOARDS = [
     # Verified three ways: paypal.wd1.myworkdayjobs.com/jobs -> 0 postings on two
     # isolated fetches; the shared-host form (wd1.myworkdaysite.com, tenant paypal,
     # the shape that fixed Wells Fargo the same morning) -> 0; and the store's own
-    # PayPal rows carry a THIRD url, paypal.eightfold.ai. PayPal moved to Eightfold,
-    # which is not a supported ats_type here. Demoted to manual so it stops reporting
-    # as a broken token and is at least click-through visible.
-    # ⬜ The real fix is an "eightfold" ats_type -- Eightfold has a public jobs API and
-    # Microsoft uses it too (currently manual). That is a new integration, not a token
-    # edit, so it is recorded rather than smuggled into an unrelated change.
+    # PayPal rows carry a THIRD url, paypal.eightfold.ai. PayPal moved to Eightfold.
+    # Demoted to manual so it stops reporting as a broken token and is at least
+    # click-through visible.
+    # 2026-10-14: the "eightfold" ats_type this comment asked for now exists (Netflix,
+    # 2026-09-22), but it calls /api/apply/v2/jobs, which PayPal still refuses (403
+    # "Not authorized for PCSX"). Eightfold's newer /api/pcsx/search?domain=paypal.com
+    # answers 200 with public positions, and so does Microsoft's
+    # (apply.careers.microsoft.com, domain=microsoft.com, 101 intern hits). ⬜ Wiring
+    # either one = a pcsx variant of _board_eightfold; not done here.
     {"name": "PayPal", "tier": "B", "ats_type": "manual",
      "url": "https://paypal.eightfold.ai/careers?query=intern"},
     {"name": "Databricks", "tier": "A", "ats_type": "greenhouse", "token": "databricks"},
@@ -293,6 +296,8 @@ BOARDS = [
     # 2026-09-22: promoted from "manual" after the audit of all nine manual boards.
     # Eightfold board, public, no key. Apple/Bloomberg/Meta/Microsoft/PayPal/Tesla/Uber
     # were probed the same day and stay manual (401/403/404 or HTML only).
+    # (2026-10-14: Microsoft + PayPal DO answer on Eightfold's /api/pcsx/search; see the
+    # PayPal entry above. Still manual until a pcsx fetcher exists.)
     {"name": "Netflix", "tier": "S", "ats_type": "eightfold",
      "api_base": "https://explore.jobs.netflix.net/api/apply/v2/jobs",
      "domain": "netflix.com",

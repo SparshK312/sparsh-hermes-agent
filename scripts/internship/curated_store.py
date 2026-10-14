@@ -2,11 +2,13 @@
 """
 curated_store.py — the canonical store behind the living board.
 
-curated_postings.json is the source of truth for MACHINE fields; the xlsx is the
-source of truth for HUMAN fields between refreshes. They're merged by canonical_id
-on every refresh (see build_curated_xlsx.py round-trip). This module owns the JSON:
-load, upsert-machine (never touches human), set-human (from the xlsx read-back),
-and atomic save.
+curated_postings.json is the source of truth for MACHINE fields; the Google Sheet is
+the source of truth for HUMAN fields (status, applied_date, notes, priority_override).
+They're merged by canonical_id on every refresh via build_curated_gsheet.read_back_human
+(before harvest, and again late in write_board). The xlsx is a write-only render and
+owns nothing (since 2026-09-05; this docstring said "xlsx" until 2026-10-14). This
+module owns the JSON: load, upsert-machine (never touches human), set-human (from the
+Sheet read-back), and atomic save.
 
 Schema:
 {
@@ -117,15 +119,15 @@ class CuratedStore:
             m[k] = v
 
     def set_human(self, cid: str, fields: dict) -> None:
-        """Set human fields (from xlsx read-back). Only known keys; blanks ignored
-        so a cleared cell doesn't wipe a value unless explicitly empty-string."""
+        """Set human fields (from the Sheet read-back). Only known keys; None is ignored,
+        an explicit empty string clears the field (a cell cleared on the Sheet)."""
         h = self.entry(cid)["human"]
         for k in HUMAN_FIELDS:
             if k in fields and fields[k] is not None:
                 h[k] = str(fields[k]).strip()
 
     def add_orphan(self, cid: str, human: dict, label: str = "manual-add") -> None:
-        """A row the user hand-added to the xlsx (unknown id) — preserve it."""
+        """A row the user hand-added to the board (unknown id) — preserve it."""
         e = self.entry(cid)
         e["machine"].setdefault("source", label)
         e["machine"].setdefault("orphan", True)
