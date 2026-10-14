@@ -1294,6 +1294,26 @@ def test_season_month_range_and_oct14_winter_names():
     check("Heliux stays below for Summer", TB.bar_of("Heliux", S_), TB.BELOW)
 
 
+def test_named_winter_term_overrides():
+    print("W15. a named req that offers Winter where its text can't show it routes to Apply - Winter")
+    import build_curated_xlsx as B
+    import target_bar as TB
+    def rec(c, r, cy=""):
+        return {"machine": {"company": c, "role": r, "cycle": cy}, "human": {"status": "To Apply"}}
+    check("Clay SWE Intern (term only in the form) -> Winter",
+          B.queue_placement(rec("Clay", "Software Engineering Intern "))[0], "Apply - Winter")
+    check("Exa SWE Intern ('take off a semester') -> Winter",
+          B.queue_placement(rec("Exa", "Software Engineer, Intern"))[0], "Apply - Winter")
+    check("a different Clay posting is NOT swept in",
+          B.queue_placement(rec("Clay", "Software Engineering Intern - Summer 2027", "Summer 2027"))[0], "Apply - Summer")
+    check("a different Exa posting is NOT swept in",
+          B.queue_placement(rec("Exa", "Research Engineer Intern"))[0], "Apply - Summer")
+    check("a look-alike company is NOT swept in", TB.winter_term_offered("Claymation Inc", "Software Engineering Intern"), False)
+    check("an On Hold Clay row stays on its (Winter) season tab",
+          B.queue_placement({"machine": {"company": "Clay", "role": "Software Engineering Intern", "cycle": ""},
+                             "human": {"status": "On Hold"}})[0], "Apply - Winter")
+
+
 def test_cycle_label_ignores_graduation_dates():
     print("C4. cycle label: a graduation term is not the work term")
     from brand_first_source import _cycle_label, _accept
@@ -2535,6 +2555,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_board_reads_whole_tabs,
            test_target_bar_names_and_collisions,
            test_season_month_range_and_oct14_winter_names,
+           test_named_winter_term_overrides,
            test_brand_floor,
            test_outreach_targets_wired_and_on_the_bar,
            test_outreach_tab_is_never_touched_by_the_refresh,

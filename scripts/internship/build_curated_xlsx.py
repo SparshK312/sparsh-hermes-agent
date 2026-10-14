@@ -185,6 +185,10 @@ def queue_placement(rec: dict) -> tuple[str, str]:
     import target_bar as TB
     m, h = rec.get("machine", {}) or {}, rec.get("human", {}) or {}
     season = TB.season_of(m.get("cycle", ""), m.get("role", ""))
+    # 2026-10-14: a named req that offers Winter where the text can't show it (Clay's
+    # term is only in its form; Exa says "take off a semester") -> TB.WINTER_TERM_OFFERED.
+    if season != TB.WINTER and TB.winter_term_offered(m.get("company", ""), m.get("role", "")):
+        season = TB.WINTER
     bar = TB.bar_of(m.get("company", ""), season)
     # 2026-10-09 group B: a big-name enterprise's Winter row is promoted only on a
     # direct résumé fit (lane + scored JD), never on the company alone.

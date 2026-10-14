@@ -196,6 +196,26 @@ def season_of(cycle: str, title: str = "") -> str:
     return SUMMER
 
 
+# 2026-10-14, his call: postings that DO offer a Jan-Apr 2027 term but never say so in
+# a form the cycle reader can parse, so their Cycle is blank and season_of() routes
+# them to Summer. Keyed on (normalized company, exact role title, lowercased) so a new
+# posting at the same company is NOT swept in -- each entry is a verified, named req.
+#   Clay  "Software Engineering Intern" (ashby claylabs 5b7eced2): the term lives only
+#         in the application form -- "Winter (January~April)" / "Summer (May~August)".
+#   Exa   "Software Engineer, Intern"   (ashby exa a9e01521): "willing to take off a
+#         semester to work full time in SF"; staged for Winter Oct 9.
+WINTER_TERM_OFFERED = {
+    ("clay", "software engineering intern"),
+    ("exa", "software engineer, intern"),
+}
+
+
+def winter_term_offered(company: str, role: str) -> bool:
+    """True for a named req verified to offer a Winter 2027 term its text can't show."""
+    return (normalize_company_name(company or ""),
+            (role or "").strip().lower()) in WINTER_TERM_OFFERED
+
+
 def bar_of(company: str, season: str) -> str:
     """accept | apply | below for this company in this season."""
     nn = normalize_company_name(company or "")
