@@ -197,7 +197,7 @@ def test_compare_needs_coverage():
     print("HC4. 'vs last week' only when both weeks have 4+ days of the metric")
     HC, _ = make_env()
     t, _c = HC._cmp(676, 106, (False, "not enough data"), "vs last week", pct=True)
-    check("not comparable -> no percentage (the +538% case)", ("%" in (t or ""), "not enough data" in (t or "")), (False, True))
+    check("not comparable -> no percentage (the +538% case)", ("%" in (t or ""), "too little data" in (t or "")), (False, True))
     t, _c = HC._cmp(9941, 9467, (True, ""), "vs last week", pct=True)
     check("comparable -> a real delta", t, "+5% vs last week")
     t, _c = HC._cmp(7.9, 7.88, (True, ""), "vs last week", unit="h")
@@ -238,6 +238,18 @@ def test_morning_card_both_cases():
     check("a partial night says 'still syncing' and makes no target judgement",
           ("still syncing" in t2, "short" in t2), (True, False))
     check("durations read as h/m, so 6.98 h is never shown as '7.0h'", HC.fmt_dur(6.98), "6h 59m")
+    rows = HC.load_metrics()
+    past = dict(rows)
+    past[(END - datetime.timedelta(days=3)).isoformat()] = dict(rows[(END - datetime.timedelta(days=3)).isoformat()],
+                                                               wake_gap_min="")
+    past = {d: {k: v for k, v in r.items() if v not in ("", None)} for d, r in past.items()}
+    check("a past night (no wake gap kept) is finished, not 'still syncing'",
+          HC.morning_facts(past, END - datetime.timedelta(days=3))["night"]["state"], "final")
+    glitch = dict(rows)
+    gd = (END - datetime.timedelta(days=1)).isoformat()
+    glitch[gd] = dict(rows[gd], steps="161")
+    check("a 161-step export glitch is missing data, not a 161-step day",
+          (HC._day_activity(glitch, gd)["steps"], HC.period_summary(glitch, END, 7)["steps_days"]), (None, 6))
 
 
 # ------------------------------------------------------------------ HC6
@@ -247,7 +259,7 @@ def test_week_and_month_cards():
     rows = HC.load_metrics()
     s1, s2 = HC.build_week_svgs(HC.week_facts(rows, END))
     check("both weekly cards are valid SVG", (svg_ok(s1), svg_ok(s2)), (True, True))
-    check("a sparse previous week is not compared", "not enough data last week" in texts(s1), True)
+    check("a sparse previous week is not compared", "too little data to compare" in texts(s1), True)
     mf = HC.month_facts(rows, 2026, 10, today=END)
     svg = HC.build_month_svg(mf)
     check("month card valid", svg_ok(svg), True)

@@ -263,9 +263,20 @@ def latest_weight(end: datetime.date, lookback: int = 14):
     return None
 
 
+MIN_REAL_STEPS = 500   # (inferred) below this a day is a failed export, not a day lived
+
+
+def _steps(r: dict):
+    """Steps, or None for an export glitch. Sep 25 shows 161 steps with the phone's last export
+    at 6 PM, Oct 3 shows 261: the sync stopped, he didn't. Counting them as days made September
+    read 5,039/day and October "+81%". A blank is not a zero, and neither is a broken export."""
+    v = fnum(r, "steps")
+    return v if v is not None and v >= MIN_REAL_STEPS else None
+
+
 def _day_activity(rows: dict, date: str) -> dict:
     r = rows.get(date, {})
-    return {"date": date, "steps": fnum(r, "steps"), "azm": fnum(r, "azm"),
+    return {"date": date, "steps": _steps(r), "azm": fnum(r, "azm"),
             "km": fnum(r, "distance_air_km"), "kcal_out": fnum(r, "total_kcal_air"),
             "ex_n": fnum(r, "exercise_air_count"), "ex_min": fnum(r, "exercise_air_min"),
             "lift": lift_logged(date)}
@@ -280,7 +291,10 @@ def morning_facts(rows: dict, today: datetime.date, state: str | None = None) ->
     t, y = today.isoformat(), (today - datetime.timedelta(days=1)).isoformat()
     row = rows.get(t, {})
     night = _night(rows, t)
-    night["state"] = state or sleep_state(row)
+    # wake_gap_min is only kept for today's row, so an older night would read "partial";
+    # any night before today is finished by definition.
+    night["state"] = state or (sleep_state(row) if today >= now().date() else
+                               ("final" if night["total"] is not None else "none"))
     nights = [_night(rows, d) for d in _days(today, 7)]
     # the 7 nights BEFORE last night (the label says 7-night avg; nights[:-1] was 6)
     prev7 = [_night(rows, d)["total"] for d in _days(today - datetime.timedelta(days=1), 7)]
@@ -290,7 +304,7 @@ def morning_facts(rows: dict, today: datetime.date, state: str | None = None) ->
                      floor=1.5)
     spark_days = _days(today, 14)
     act = [_day_activity(rows, d) for d in _days(today - datetime.timedelta(days=1), 7)]
-    prev_steps = [fnum(rows.get(d), "steps") for d in _days(today - datetime.timedelta(days=2), 7)]
+    prev_steps = [_steps(rows.get(d, {})) for d in _days(today - datetime.timedelta(days=2), 7)]
     prev_azm = [fnum(rows.get(d), "azm") for d in _days(today - datetime.timedelta(days=2), 7)]
     food7 = [_food(d) for d in _days(today - datetime.timedelta(days=1), 7)]
     return {
@@ -553,8 +567,8 @@ def _cmp(cur, prev, ok_why, suffix, **kw):
     ok, why = ok_why
     if not ok:
         when = suffix.replace("vs ", "")
-        return (f"{why} {when}, no comparison" if why == "different device"
-                else f"not enough data {when} to compare"), WK_FAINT
+        return ("no comparison (new device)" if why == "different device"
+                else "too little data to compare"), WK_FAINT
     t, c = _delta_text(cur, prev, **kw)
     if t and t != "about the same":
         t = f"{t} {suffix}"
@@ -751,11 +765,11 @@ def build_morning_svg(f: dict) -> str:
         col = WK_MUTED if partial else _sleep_color(night["total"])
         P.append(_txt(M + 34, y0 + 150, fmt_dur(night["total"]), 96, col, bold=True))
         if partial:
-            P += _pill(M + 400, y0 + 94, "still syncing", AMBER, 22)
+            P += _pill(M + 34, y0 + 214, "still syncing — Fitbit adds the rest after you wake", AMBER, 20)
         bed, wake = night["bed_h"], night["wake_h"]
         P.append(_txt(M + 36, y0 + 196, f"{fmt_clock(bed)}  →  {fmt_clock(wake)}", 28, WK_TXT))
         avg = f["sleep_avg7"]
-        if avg is not None and not partial:
+        if avg is not None and not partial:   # (the pill takes this line on a partial night)
             dt, dcol = _delta_text(night["total"], avg, "h", higher_is_better=True)
             sub = f"7-night avg {fmt_dur(avg)}" + (f"   ·   {dt}" if dt and dt != "about the same" else "")
             P.append(_txt(M + 36, y0 + 236, sub, 24, WK_MUTED))
