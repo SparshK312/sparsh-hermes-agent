@@ -1323,6 +1323,17 @@ def test_oct17_manual_postings_and_winter_names():
         rec_ = {"machine": {"company": r["company"], "role": r["role"], "cycle": r["cycle"]},
                 "human": {"status": ""}}
         check(f"{tag}: lands on Apply - Winter", B.queue_placement(rec_)[0], "Apply - Winter")
+    # Oct 18: the fit pass flagged Mechanize ("Prefers 2026/2027 grads") and sent it to
+    # Reviewed. A hand-added row stays queued with its ❌ shown; any other ❌ still routes off.
+    mech = {"machine": {"company": "Mechanize", "role": "Software Engineering Intern",
+                        "cycle": "Winter 2027", "source": "manual-add", "fit_disqualifier": "other"},
+            "human": {"status": ""}}
+    check("a disqualified MANUAL row stays in the queue", B.classify_row(mech), "queue")
+    check("...on Apply - Winter", B.queue_placement(mech)[0], "Apply - Winter")
+    wide = {"machine": dict(mech["machine"], source="simplify"), "human": {"status": ""}}
+    check("a disqualified aggregator row still routes to Reviewed", B.classify_row(wide), "reviewed")
+    skip = {"machine": mech["machine"], "human": {"status": "Not a Fit"}}
+    check("his own Not a Fit on a manual row still routes to Reviewed", B.classify_row(skip), "reviewed")
     code = _code_only((Path(__file__).parent / "curate.py").read_text()).replace(" ", "")
     check("curate.refresh harvests the manual lane", "lane0=manual_postings.collect()" in code, True)
     check("...and merges it in BOTH the name-clean and the dedup loop",

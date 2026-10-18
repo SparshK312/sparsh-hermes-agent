@@ -160,7 +160,11 @@ def classify_row(rec: dict) -> str:
     # just live on Reviewed now.
     # "On Hold" is excluded on purpose: that is a deliberate park (e.g. waiting on the
     # Amazon referral) and must stay in the queue where he will see it.
-    if _is_disq(m) and status != "on hold":
+    # 🔁 2026-10-18: a hand-added row (manual_postings, source "manual-add") is exempt
+    # too. Someone already read that JD and put it on the board on purpose, so the AI's
+    # gate cannot outrank him; its ❌ and reason still show in Fit / Why. First case:
+    # Mechanize, flagged "Prefers 2026/2027 grads" -- a preference, not a requirement.
+    if _is_disq(m) and status != "on hold" and m.get("source") != "manual-add":
         return "reviewed"
     if m.get("dead"):
         return "reviewed" if note else "drop"
