@@ -496,7 +496,7 @@ def test_wake_steps_signal():
           all(c in WM.AIR_COLUMNS and c in WM.FITBIT_COLUMNS for c in ("wake_steps", "wake_gap_min"))), ("32", "14", True))
 
 
-def _brief(rows, state, cutoff_passed, facts_extra=None):
+def _brief(rows, state, cutoff_passed, facts_extra=None, last_call=False):
     """Run the brief gate's main() once, offline. Returns (sent messages, saved state)."""
     import datetime as _d
     sys.modules.pop("health_morning_brief_gate", None)
@@ -511,7 +511,8 @@ def _brief(rows, state, cutoff_passed, facts_extra=None):
     sent = []
     G.send_message = lambda t: sent.append(t) or True
     G.cards = []
-    G.send_morning_card = lambda night: G.cards.append(night)
+    G.send_morning_card = lambda night, caption=None: G.cards.append(night)
+    G.LAST_CALL = _d.time(0, 0) if last_call else _d.time(23, 59, 59)
     G.WEEKDAY_CUTOFF = G.WEEKEND_CUTOFF = _d.time(0, 0) if cutoff_passed else _d.time(23, 59)
     G.gather_schedule = G.gather_tasks = lambda d: []
     G.gather_health_yesterday = G.gather_training = lambda d: {}
@@ -556,7 +557,7 @@ def test_brief_waits_for_finished_night():
     check("last night's extras shown", all(x in msg for x in ("deep 0.5h", "REM 1.1h", "light 6.5h", "RHR 58", "HRV 104ms (RMSSD)", "SpO2 97%", "breathing 16.5/min")), True)
     check("finished night -> the card is sent once, as final", G.cards, ["final"])
     sent, st, _, G = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 4.65}, False)
-    check("a correction does not send a second card", G.cards, [])
+    check("a correction re-sends the card with the finished night", G.cards, ["final"])
     check("the full night later -> ONE correction naming what the brief had",
           (len(sent), "8.1h" in (sent or [""])[0], "had 4.7h" in (sent or [""])[0], st.get("sleep_followup_date")), (1, True, True, today))
     sent, _, _, _ = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 7.9}, False)
@@ -571,6 +572,21 @@ def test_brief_waits_for_finished_night():
     sent, _, _, _ = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 4.65,
                                                     "sleep_followup_date": today}, False)
     check("never a second correction the same day", sent, [])
+    # 2026-10-18: 11:00 brief had 8.3h "so far"; the band settled at 8.8h by ~12:00, then
+    # 8.9h ~13:30 — never 0.5h while the job ran, so no correction and a stale card.
+    settle = dict(full, sleep_total_h="8.78")
+    so_far = {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 8.33}
+    sent, _, _, G = _brief({"T": settle, "Y": yday}, so_far, False)
+    check("'so far' brief, finished night moved 0.45h, before last call -> wait", (sent, G.cards), ([], []))
+    sent, st, _, G = _brief({"T": settle, "Y": yday}, so_far, False, last_call=True)
+    check("... at the last call -> one correction + the card again, finished",
+          (len(sent), "had 8.3h" in (sent or [""])[0], G.cards, st.get("sleep_followup_date")), (1, True, ["final"], today))
+    sent, _, _, G = _brief({"T": dict(full, sleep_total_h="8.43"), "Y": yday}, so_far, False, last_call=True)
+    check("... a 6-minute difference at the last call -> nothing", (sent, G.cards), ([], []))
+    sent, _, _, _ = _brief({"T": settle, "Y": yday}, dict(so_far, brief_had_sleep=True), False, last_call=True)
+    check("... a FINISHED brief is never re-sent for < 0.5h, last call or not", sent, [])
+    sent, _, _, _ = _brief({"T": {k: v for k, v in settle.items() if k != "wake_gap_min"}, "Y": yday}, so_far, False, last_call=True)
+    check("... and never while the night still looks unfinished", sent, [])
     sent, _, _, _ = _brief({"T": {"sleep_total_h": "7.9", "sleep_source": "apple"}, "Y": {}},
                            {"last_brief_date": today, "brief_had_sleep": True, "brief_sleep_h": 6.0}, False)
     check("Apple night the brief already showed -> no new correction (old behaviour kept)", sent, [])
@@ -605,6 +621,14 @@ def test_morning_card_is_detached():
     check("argv + vault passed to the renderer",
           got.startswith(f"{root / 'health_cards.py'} morning --send --sleep-state final | "), True)
     check("the start is logged", "morning card started (final)" in (root / "sync.log").read_text(), True)
+    rec.write_text("")
+    G.send_morning_card("final", "Updated card")
+    for _ in range(50):
+        if rec.read_text().strip():
+            break
+        threading.Event().wait(0.1)
+    check("a re-sent card carries its own caption",
+          rec.read_text().startswith(f"{root / 'health_cards.py'} morning --send --sleep-state final --caption Updated card | "), True)
     G.FIT_PY = root / "missing-python"
     G.send_morning_card("final")
     check("a missing renderer is logged, not raised", "renderer missing" in (root / "sync.log").read_text(), True)

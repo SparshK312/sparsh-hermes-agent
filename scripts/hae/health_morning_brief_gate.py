@@ -90,6 +90,13 @@ WEEKEND_CUTOFF = datetime.time(11, 0)
 WAKE_GAP_MAX_MIN = 150
 # A later sleep total this far from what the brief said earns one correction message.
 SLEEP_CORRECTION_H = 0.5
+# 2026-10-18: he slept in to 10:26 on a Sunday; the 11:00 brief had 8.3h "so far" and the band
+# kept revising the night for hours (8.3 -> 8.8 at ~12:00 -> 8.9 at ~13:30), never crossing
+# 0.5h while the morning job was still running, so no correction went out. On the window's
+# last call (job runs */15 7-13, last tick 13:45) a brief that went out WITHOUT the finished
+# night is corrected once if the finished total moved by SLEEP_SETTLE_H or more.
+LAST_CALL = datetime.time(13, 40)
+SLEEP_SETTLE_H = 0.25
 
 # Migrated off OpenRouter 2026-08-26 — one vendor (Anthropic).
 ANTHROPIC_MODEL = "claude-haiku-4-5"
@@ -122,7 +129,7 @@ FIT_PY = HOME / ".hermes" / "venvs" / "fitness" / "bin" / "python3"
 CARDS = SCRIPTS / "fitness" / "health_cards.py"
 
 
-def send_morning_card(night: str) -> None:
+def send_morning_card(night: str, caption: str | None = None) -> None:
     """The visual half of the brief (his ask, 2026-10-17: "morning card in addition to the
     text"). Rendered in the fitness venv (cairosvg) and sent right after the text.
     DETACHED (review, 2026-10-17): the scheduler gives this whole script 120 s, and a slow
@@ -137,7 +144,10 @@ def send_morning_card(night: str) -> None:
         lf = open(LOG, "a")
         lf.write(f"{datetime.datetime.now(TZ).isoformat()} brief: morning card started ({night})\n")
         lf.flush()
-        subprocess.Popen([str(FIT_PY), str(CARDS), "morning", "--send", "--sleep-state", night],
+        cmd = [str(FIT_PY), str(CARDS), "morning", "--send", "--sleep-state", night]
+        if caption:
+            cmd += ["--caption", caption]
+        subprocess.Popen(cmd,
                          stdout=lf, stderr=lf, stdin=subprocess.DEVNULL, start_new_session=True,
                          env={**os.environ, "HERMES_VAULT": str(VAULT)})
         lf.close()
@@ -1033,13 +1043,19 @@ def main() -> int:
         cur = _fnum(trow, "sleep_total_h")
         had = state.get("brief_sleep_h")
         # only an Air night grows after the brief; Apple / /sleep keep their old behaviour
-        moved = (trow.get("sleep_source") == "air" and had is not None and cur is not None
-                 and abs(cur - float(had)) >= SLEEP_CORRECTION_H)
-        if (not state.get("brief_had_sleep") and (had is None or moved)) or (state.get("brief_had_sleep") and moved):
+        delta = (abs(cur - float(had)) if trow.get("sleep_source") == "air" and had is not None
+                 and cur is not None else None)
+        moved = delta is not None and delta >= SLEEP_CORRECTION_H
+        # last call: a "so far" brief whose finished night settled a little differently
+        settled = (not state.get("brief_had_sleep") and delta is not None
+                   and delta >= SLEEP_SETTLE_H and now.time() >= LAST_CALL)
+        if (not state.get("brief_had_sleep") and (had is None or moved)) or (state.get("brief_had_sleep") and moved) or settled:
             facts = gather_facts(today, yesterday)
             if send_message(compose_followup(facts, state.get("brief_steps"), had)):
                 state["sleep_followup_date"] = today
                 _save_state(state)
+                # the card sent with the brief shows the old night: send it again, finished
+                send_morning_card("final", "🔄 *Updated morning card* · the full night")
             print(WAKE_GATE_SKIP)
             return 0
 
