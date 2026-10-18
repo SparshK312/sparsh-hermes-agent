@@ -114,6 +114,63 @@ What You'll Bring
 - CI/CD, infrastructure-as-code, or config management (e.g. Terraform, Ansible, GitHub Actions)
 - Containers (Docker), cloud basics (AWS/GCP/Azure), or networking fundamentals""",
     },
+    # ── Mechanize, added 2026-10-18 (his call: "sure u can put it on the board").
+    #    SF, ~20 people, builds RL environments frontier labs train coding models on.
+    #    The posting states NO term (open since 2025-11-19, evergreen); cycle "Winter
+    #    2027" is his call, not the posting's -- he confirms Jan-Apr with them. Its
+    #    "graduating in 2026 or 2027" line sits under "Good fit if you", a preference,
+    #    not a requirement (he graduates Apr 2028). JD verbatim from the Ashby API.
+    {
+        "company": "Mechanize", "added": "2026-10-18",
+        "role": "Software Engineering Intern",
+        "url": "https://jobs.ashbyhq.com/mechanize/d148d54f-6db7-4c28-9699-0304596f554e",
+        "location": "San Francisco, CA", "cycle": "Winter 2027", "req_id": "",
+        "jd": """About Mechanize
+
+Mechanize builds reinforcement learning environments that frontier AI labs use to train and evaluate their coding models. Learn more at mechanize.work http://mechanize.work.
+
+Why the work matters
+
+AI models have gotten good at narrow coding tasks but still fail at the complex, judgment-heavy parts of software engineering. We build the environments that expose those failures and help models improve.
+
+What you'll do
+
+You'll design, build, and refine RL tasks. Each task is a self-contained software engineering challenge with a prompt, an environment, and an automated grader. You own the full lifecycle: coming up with the idea, implementing the grading infrastructure, running frontier models against the task, analyzing where and why they fail, and iterating until the task is rigorous and fair.
+
+Coming up with good task ideas requires being clever: finding situations where a frontier model will fail in interesting ways, which means seeing gaps that the model itself doesn't see. You will use coding agents heavily, and a large part of the job is directing them well, evaluating their output, and knowing when they are failing in subtle ways.
+
+What makes someone good at this
+
+Strong technical fundamentals combined with an intuition for AI model behavior. You need to anticipate where a model will take shortcuts, distinguish genuine capability gaps from grader issues, and understand how a model will interpret a prompt. Most engineers significantly underestimate what frontier coding agents can already do; candidates who have spent significant time working with them will have a real head start.
+
+Good fit if you:
+
+ - Are graduating in 2026 or 2027
+
+ - Can code in Python
+
+ - Are confident working independently
+
+ - Are motivated by problems that require both technical skill and creative cleverness
+
+ - No prior ML or AI experience required
+
+Probably not a good fit if you:
+
+ - Want a product engineering role building features for end users
+
+ - Prefer a highly collaborative team environment with shared ownership
+
+ - Want extensive structured mentorship
+
+This is independent, high-ownership work. You own your tasks from start to finish, with regular check-ins and feedback. Strong performers are recognized and promoted quickly. Benefits include 401k, health, dental, vision, and life insurance. Applying takes less than one minute.
+
+Interview process: https://www.mechanize.work/how-our-interview-process-works
+
+Learn more about the work: https://www.mechanize.work/what-working-here-is-like
+
+About Mechanize. ~20 person team in San Francisco. Backed by Patrick Collison, Nat Friedman, Daniel Gross, Jeff Dean, Dwarkesh Patel, and Sholto Douglas. Featured in the New York Times https://www.nytimes.com/2025/06/11/technology/ai-mechanize-jobs.html, the Dwarkesh Podcast https://www.dwarkesh.com/p/ege-tamay and Hard Fork https://www.youtube.com/watch?v=M5Lycj5IRwQ.""",
+    },
 ]
 
 

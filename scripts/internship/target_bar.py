@@ -135,6 +135,10 @@ WINTER_ONLY_APPLY = {
     #     "Software Engineering Intern - 2027 Winter Term", early Jan - late Apr
     #     (greenhouse atoms 8356071002). States a 3.7 GPA minimum; he applies anyway.
     "assort health", "atoms",
+    # 2026-10-18, his call: Mechanize (SF RL-environments startup for frontier labs;
+    #   backed by Collison, Friedman, Gross, Jeff Dean). Intern post states no term, so
+    #   it rides in via manual_postings with cycle "Winter 2027". Winter only.
+    "mechanize",
 }
 
 # Companies whose names collapse to something generic once normalized, so they are
