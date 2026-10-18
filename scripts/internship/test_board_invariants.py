@@ -1294,6 +1294,41 @@ def test_season_month_range_and_oct14_winter_names():
     check("Heliux stays below for Summer", TB.bar_of("Heliux", S_), TB.BELOW)
 
 
+def test_oct17_manual_postings_and_winter_names():
+    print("W16. manual_postings: hand-added Tesla reqs reach Apply - Winter; Oct 17 Winter-bar names")
+    import build_curated_xlsx as B
+    import target_bar as TB
+    import manual_postings as MP
+    from internship_scraper import canonical_id
+    W_, S_ = TB.WINTER, TB.SUMMER
+    for co in ("Assort Health", "Atoms"):
+        check(f"{co} is Winter apply (his call Oct 17)", TB.bar_of(co, W_), TB.APPLY)
+        check(f"{co} stays below for Summer", TB.bar_of(co, S_), TB.BELOW)
+    for look in ("Atom Computing", "Assort", "Atomic Industries"):
+        check(f"{look} is NOT promoted by the Oct 17 call", TB.bar_of(look, W_), TB.BELOW)
+    rows = MP.collect()
+    check("manual_postings has the four Oct 17 Tesla reqs",
+          sorted(r["req_id"] for r in rows if r["company"] == "Tesla"),
+          ["281482", "282292", "285076", "285085"])
+    for r in rows:
+        tag = r["req_id"] or r["role"][:30]
+        check(f"{tag}: id is the canonical id of its own url", r["canonical_id"], canonical_id(r["url"]))
+        check(f"{tag}: source is manual-add (never stale-struck)", r["source"], "manual-add")
+        check(f"{tag}: carries a real JD (>= 400 chars)", len(r["full_jd"]) >= 400, True)
+        rec_ = {"machine": {"company": r["company"], "role": r["role"], "cycle": r["cycle"]},
+                "human": {"status": ""}}
+        check(f"{tag}: lands on Apply - Winter", B.queue_placement(rec_)[0], "Apply - Winter")
+    code = _code_only((Path(__file__).parent / "curate.py").read_text()).replace(" ", "")
+    check("curate.refresh harvests the manual lane", "lane0=manual_postings.collect()" in code, True)
+    check("...and merges it in BOTH the name-clean and the dedup loop",
+          code.count("inlane1+lane2+lane0:"), 2)
+    check("the strike rule still only fires for brand/wide rows (manual rows are safe)",
+          "if(is_brandoris_wide)andcidnotinharvestedandnotexempt:" in code, True)
+    from company_boards import BOARDS as _CB
+    check("Brain Co.'s Ashby board is wired (the two new co-ops reach the board)",
+          any(b.get("org") == "brainco" and b.get("ats_type") == "ashby" for b in _CB), True)
+
+
 def test_named_winter_term_overrides():
     print("W15. a named req that offers Winter where its text can't show it routes to Apply - Winter")
     import build_curated_xlsx as B
@@ -2556,6 +2591,7 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_target_bar_names_and_collisions,
            test_season_month_range_and_oct14_winter_names,
            test_named_winter_term_overrides,
+           test_oct17_manual_postings_and_winter_names,
            test_brand_floor,
            test_outreach_targets_wired_and_on_the_bar,
            test_outreach_tab_is_never_touched_by_the_refresh,

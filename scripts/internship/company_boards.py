@@ -75,6 +75,9 @@ BOARDS = [
     {"name": "Brex", "tier": "A", "ats_type": "greenhouse", "token": "brex"},
     {"name": "Ramp", "tier": "A", "ats_type": "ashby", "org": "ramp"},
     {"name": "Notion", "tier": "A", "ats_type": "ashby", "org": "notion"},
+    # 2026-10-17: Brain Co. (applied-AI startup, SF) posts its Winter 2027 co-ops here; two
+    # of the four (AI Security, AI Platform) never reached the board via the aggregators.
+    {"name": "Brain Co.", "tier": "B", "ats_type": "ashby", "org": "brainco"},
     {"name": "Linear", "tier": "A", "ats_type": "ashby", "org": "Linear"},
     {"name": "Perplexity", "tier": "A", "ats_type": "ashby", "org": "Perplexity"},
     {"name": "Cursor (Anysphere)", "tier": "A", "ats_type": "ashby", "org": "cursor"},

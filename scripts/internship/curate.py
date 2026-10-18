@@ -169,6 +169,7 @@ sys.path.append(str(VAULT / "Scripts"))
 
 import brand_first_source  # noqa: E402
 import wide_net_source  # noqa: E402
+import manual_postings  # noqa: E402
 from company_boards import boards as _boards  # noqa: E402
 from build_curated_xlsx import (PIPELINE_STATUSES, REVIEWED_STATUSES, classify_row, is_locked,  # noqa: E402
                                 write_board)
@@ -681,11 +682,16 @@ async def refresh(notify: bool = False) -> int:
     lane2 = await wide_net_source.collect()
     for r in lane2:
         r["_src"] = r["source"]
+    # lane 0: postings added by hand because no source can see them (Tesla is
+    # Akamai-blocked; see manual_postings.py). Never stale-struck: not brand, not wide.
+    lane0 = manual_postings.collect()
+    for r in lane0:
+        r["_src"] = "manual-add"
 
     # clean display company names (strip aggregator emoji/symbols) + cross-lane dedup
     # by (company, role): same role from two sources -> keep the better one
     # (brand-board > more JD > fresher).
-    for r in lane1 + lane2:
+    for r in lane1 + lane2 + lane0:
         r["company"] = _clean_company(r["company"])
 
     def _better(a, b):
@@ -712,7 +718,7 @@ async def refresh(notify: bool = False) -> int:
     # _better() ranks brand > JD length > age and never considers location, so
     # which city survived was effectively arbitrary.
     best: dict[tuple, dict] = {}
-    for r in lane1 + lane2:
+    for r in lane1 + lane2 + lane0:
         key = (normalize_company_name(r["company"]), r["role"].strip().lower(),
                (r.get("location") or "").strip().lower())
         if key not in best or _better(r, best[key]):
@@ -728,7 +734,7 @@ async def refresh(notify: bool = False) -> int:
             "posted_date": r["posted_date"], "age_days": r["age_days"],
             "full_jd": r["full_jd"], "req_id": r.get("req_id", ""),
         }, first_seen=today, source=r["_src"])
-    print(f"[refresh] {len(lane1)} lane-1 + {len(lane2)} lane-2 -> "
+    print(f"[refresh] {len(lane1)} lane-1 + {len(lane2)} lane-2 + {len(lane0)} manual -> "
           f"{len(harvested)} after cross-lane dedup", file=sys.stderr)
     if wide_net_source.CAPPED_OUT_IDS or wide_net_source.CAPPED_OUT_TRIPLES:
         print(f"[refresh] stale-check will EXEMPT the "

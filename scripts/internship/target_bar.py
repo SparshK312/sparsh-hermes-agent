@@ -127,6 +127,14 @@ WINTER_ONLY_APPLY = {
     # Heliux (SF manufacturing-AI startup, Spring 2027 SWE intern). Winter only.
     # (Brain Co. is in WINTER_ONLY_APPLY_EXACT below: its name normalizes to "brain".)
     "heliux",
+    # 2026-10-17, his call ("make sure we put all the ones worth applying to the winter
+    # apply list"), from the SWElist Oct 9-17 triage. Winter only:
+    #   Assort Health -- SF, $120M Series C, "Software Engineering Internship (Jan - Apr
+    #     2027)", Jan 11 - Apr 30 (ashby assorthealth 3d8a2c74). Voice-first healthcare AI.
+    #   Atoms -- Kalanick's City Storage Systems rebrand, $1.7B a16z round Jul 2026;
+    #     "Software Engineering Intern - 2027 Winter Term", early Jan - late Apr
+    #     (greenhouse atoms 8356071002). States a 3.7 GPA minimum; he applies anyway.
+    "assort health", "atoms",
 }
 
 # Companies whose names collapse to something generic once normalized, so they are
