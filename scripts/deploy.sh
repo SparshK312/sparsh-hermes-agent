@@ -164,6 +164,23 @@ if [ -f "$WEAR" ]; then
   echo
 fi
 
+# ===== Step 0f: Health cards + coach check-in invariants =====
+# 2026-10-17. The morning / weekly / monthly cards and the coach's evidence: a missing day
+# drawn as zero, a device change read as progress, or the coach losing its own history
+# would all look fine in a message and be wrong.
+CARDS_T="$REPO_ROOT/scripts/fitness/test_health_cards.py"
+if [ -f "$CARDS_T" ]; then
+  echo "[0f/3] Health card + coach invariants..."
+  CARDS_OUT="$(python3 "$CARDS_T" 2>&1)"; CARDS_RC=$?
+  echo "$CARDS_OUT" | tail -2
+  if [ "$CARDS_RC" -ne 0 ]; then
+    echo "  ❌ HEALTH CARD INVARIANTS FAILED (exit $CARDS_RC) — deploy aborted."
+    exit 1
+  fi
+  echo "  ✓ invariants hold"
+  echo
+fi
+
 # ===== Step 1: Push (Mac → GitHub) =====
 if [ "$DO_PUSH" = "true" ]; then
   echo "[1/3] Pushing local changes to GitHub..."
@@ -327,7 +344,9 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # Nutrition visuals (daily fuel card + weekly Week-in-Food report) — nutrition_card.py wrappers.
   cp scripts/cron/fuel_card.sh             ~/.hermes/scripts/fuel_card.sh
   cp scripts/cron/week_food.sh             ~/.hermes/scripts/week_food.sh
-  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/trends_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh ~/.hermes/scripts/coach_water.sh ~/.hermes/scripts/coach_dinner.sh ~/.hermes/scripts/coach_internship.sh ~/.hermes/scripts/coach_refresh.sh ~/.hermes/scripts/fuel_card.sh ~/.hermes/scripts/week_food.sh
+  cp scripts/cron/health_monthly.sh        ~/.hermes/scripts/health_monthly.sh
+  cp scripts/cron/health_cards.sh          ~/.hermes/scripts/health_cards.sh
+  chmod +x ~/.hermes/scripts/fitness_report.sh ~/.hermes/scripts/trends_report.sh ~/.hermes/scripts/coach.sh ~/.hermes/scripts/coach_meal.sh ~/.hermes/scripts/coach_workout.sh ~/.hermes/scripts/coach_water.sh ~/.hermes/scripts/coach_dinner.sh ~/.hermes/scripts/coach_internship.sh ~/.hermes/scripts/coach_refresh.sh ~/.hermes/scripts/fuel_card.sh ~/.hermes/scripts/week_food.sh ~/.hermes/scripts/health_monthly.sh ~/.hermes/scripts/health_cards.sh
   # User plugins (auto-loaded via plugins.enabled in config.yaml).
   mkdir -p ~/.hermes/plugins
   rm -rf ~/.hermes/plugins/intent-router    && cp -r plugins/intent-router    ~/.hermes/plugins/intent-router       # coaching→Sonnet routing

@@ -6,8 +6,8 @@
 #
 # Emits the day's logged state + the remaining gaps (dinner / water / vitamins / macros);
 # the agent composes an adaptive check-in per the job `prompt` in cron_additions.json,
-# nagging ONLY about what's actually missing. Not hard-suppressed — the bed reminder
-# always applies — but if nothing's missing the agent keeps it to one line.
+# nagging ONLY about what's actually missing. If nothing's missing the agent keeps it to one
+# line. A day with NOTHING logged is silent (wake gate) since 2026-10-17.
 set -uo pipefail
 
 /usr/bin/python3 - <<'PY'
@@ -73,6 +73,13 @@ vitamins = fm.get("vitamins_taken", "").lower() == "true"
 # night because vault_log writes vitamins_taken only when he says yes. His calls: on a day
 # with nothing logged, ONE line asking whether he wants to log; vitamins as a question.
 tracked = bool(ml) or any(v is not None for v in (water, kcal, protein))
+if not tracked:
+    # 2026-10-17 (his call): the nightly "Nothing logged today — want to log…?" line is cut
+    # with the rest of the nagging (it went out 16 of 50 nights, never answered). A day with
+    # nothing logged is now silent: the wake gate as the LAST line skips the agent.
+    print(f"[evening-nudge state · {today}] tracked_today: no — silent")
+    print('{"wakeAgent": false}')
+    raise SystemExit(0)
 
 def _num(v, unit=""):
     return f"{int(v) if float(v).is_integer() else v}{unit}" if v is not None else "not logged"

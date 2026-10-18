@@ -510,6 +510,8 @@ def _brief(rows, state, cutoff_passed, facts_extra=None):
     G._refresh = lambda: None
     sent = []
     G.send_message = lambda t: sent.append(t) or True
+    G.cards = []
+    G.send_morning_card = lambda night: G.cards.append(night)
     G.WEEKDAY_CUTOFF = G.WEEKEND_CUTOFF = _d.time(0, 0) if cutoff_passed else _d.time(23, 59)
     G.gather_schedule = G.gather_tasks = lambda d: []
     G.gather_health_yesterday = G.gather_training = lambda d: {}
@@ -544,6 +546,7 @@ def test_brief_waits_for_finished_night():
           ("4.7h so far" in msg, "Under your 7h floor" in msg, "Slept" in msg), (True, False, False))
     check("state remembers it lacked the finished night and what it showed",
           (st.get("brief_had_sleep"), st.get("brief_sleep_h")), (False, 4.65))
+    check("the morning card follows the brief, told the night is partial", G.cards, ["partial"])
     sent, st, _, G = _brief({"T": full, "Y": yday}, {}, cutoff_passed=False)
     msg = sent[0] if sent else ""
     check("finished night -> brief fires before the cutoff with the real total + times",
@@ -551,7 +554,9 @@ def test_brief_waits_for_finished_night():
     check("yesterday's numbers always in the brief (his ask, Oct 13)",
           all(x in msg for x in ("*8,997* steps", "86 zone min", "6.0 km", "2,431 kcal burned", "1 workout (45 min)")), True)
     check("last night's extras shown", all(x in msg for x in ("deep 0.5h", "REM 1.1h", "light 6.5h", "RHR 58", "HRV 104ms (RMSSD)", "SpO2 97%", "breathing 16.5/min")), True)
-    sent, st, _, _ = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 4.65}, False)
+    check("finished night -> the card is sent once, as final", G.cards, ["final"])
+    sent, st, _, G = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 4.65}, False)
+    check("a correction does not send a second card", G.cards, [])
     check("the full night later -> ONE correction naming what the brief had",
           (len(sent), "8.1h" in (sent or [""])[0], "had 4.7h" in (sent or [""])[0], st.get("sleep_followup_date")), (1, True, True, today))
     sent, _, _, _ = _brief({"T": full, "Y": yday}, {"last_brief_date": today, "brief_had_sleep": False, "brief_sleep_h": 7.9}, False)
@@ -573,11 +578,43 @@ def test_brief_waits_for_finished_night():
     check("Apple / hand-logged nights are whole: brief fires as before", len(sent), 1)
 
 
+def test_morning_card_is_detached():
+    print("S3. brief: the morning card is launched DETACHED with the right argv; the gate never waits on it")
+    import threading
+    import time as _t
+    fresh_env()
+    sys.modules.pop("health_morning_brief_gate", None)
+    import health_morning_brief_gate as G
+    root = Path(tempfile.mkdtemp(prefix="card-"))
+    _TMP.append(root)
+    rec = root / "argv.txt"
+    fake = root / "python3"
+    fake.write_text(f"#!/bin/bash\necho \"$@ | $HERMES_VAULT\" > {rec}\nsleep 3\necho '[SENT]'\n")
+    fake.chmod(0o755)
+    (root / "health_cards.py").write_text("# placeholder\n")
+    G.FIT_PY, G.CARDS, G.LOG, G.DRY_RUN = fake, root / "health_cards.py", root / "sync.log", False
+    t0 = _t.monotonic()
+    G.send_morning_card("final")
+    took = _t.monotonic() - t0
+    for _ in range(50):
+        if rec.exists() and rec.read_text().strip():     # created empty by '>' first
+            break
+        threading.Event().wait(0.1)      # NOT time.sleep: test_client patches it to a no-op
+    got = rec.read_text().strip() if rec.exists() else ""
+    check("the gate returns at once (the card sleeps 3 s; the scheduler allows the script 120 s)", took < 1.5, True)
+    check("argv + vault passed to the renderer",
+          got.startswith(f"{root / 'health_cards.py'} morning --send --sleep-state final | "), True)
+    check("the start is logged", "morning card started (final)" in (root / "sync.log").read_text(), True)
+    G.FIT_PY = root / "missing-python"
+    G.send_morning_card("final")
+    check("a missing renderer is logged, not raised", "renderer missing" in (root / "sync.log").read_text(), True)
+
+
 TESTS = [test_merge_rules, test_reseed_strips_air, test_flat_layout_end_to_end, test_fitbit_apply_and_parse,
          test_sleep_parse, test_client, test_alerts, test_ingest_sleep_priority, test_vault_log_marks_sleep,
          test_first_run_keeps_apple_history, test_coach_baseline_per_source,
          test_brief_air_wording, test_wrapper_and_run_lock, test_wake_steps_signal,
-         test_brief_waits_for_finished_night]
+         test_brief_waits_for_finished_night, test_morning_card_is_detached]
 
 if __name__ == "__main__":
     for t in TESTS:

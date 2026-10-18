@@ -118,6 +118,33 @@ def _refresh() -> None:
         pass
 
 
+FIT_PY = HOME / ".hermes" / "venvs" / "fitness" / "bin" / "python3"
+CARDS = SCRIPTS / "fitness" / "health_cards.py"
+
+
+def send_morning_card(night: str) -> None:
+    """The visual half of the brief (his ask, 2026-10-17: "morning card in addition to the
+    text"). Rendered in the fitness venv (cairosvg) and sent right after the text.
+    DETACHED (review, 2026-10-17): the scheduler gives this whole script 120 s, and a slow
+    render or upload must never turn into a "Script Error" message after a good brief. The
+    child logs its own outcome ([SENT] / send-failed) to sync.log. Never touches brief state."""
+    if DRY_RUN:
+        return
+    if not (FIT_PY.exists() and CARDS.exists()):
+        _log(f"morning card: renderer missing ({FIT_PY} / {CARDS})")
+        return
+    try:
+        lf = open(LOG, "a")
+        lf.write(f"{datetime.datetime.now(TZ).isoformat()} brief: morning card started ({night})\n")
+        lf.flush()
+        subprocess.Popen([str(FIT_PY), str(CARDS), "morning", "--send", "--sleep-state", night],
+                         stdout=lf, stderr=lf, stdin=subprocess.DEVNULL, start_new_session=True,
+                         env={**os.environ, "HERMES_VAULT": str(VAULT)})
+        lf.close()
+    except Exception as e:  # noqa: BLE001
+        _log(f"morning card failed to start: {type(e).__name__}: {e}")
+
+
 def _log(msg: str) -> None:
     try:
         with open(LOG, "a") as lf:
@@ -965,6 +992,7 @@ def main() -> int:
                        "brief_sleep_h": (facts.get("sleep") or {}).get("sleep_total_h"),
                        "brief_steps": facts["yesterday_activity"].get("steps")})
             _save_state(st)
+            send_morning_card(facts.get("sleep_state") or "none")
             print(WAKE_GATE_SKIP)
         else:
             print(brief)
@@ -990,6 +1018,7 @@ def main() -> int:
                           "brief_sleep_h": (facts.get("sleep") or {}).get("sleep_total_h"),
                           "brief_steps": facts["yesterday_activity"].get("steps")})
             _save_state(state)
+            send_morning_card(night)
             print(WAKE_GATE_SKIP)
         else:
             print(brief)

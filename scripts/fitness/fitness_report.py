@@ -167,6 +167,65 @@ def send_photo(png: Path, caption: str) -> bool:
     return False
 
 
+def _post_album(token: str, pngs: list, caption: str, parse_mode: str | None) -> bool:
+    """sendMediaGroup: 2–10 photos as one album, the caption on the first one."""
+    boundary = "----fitnessalbum41c9"
+    media = []
+    for i, _p in enumerate(pngs):
+        item = {"type": "photo", "media": f"attach://p{i}"}
+        if i == 0 and caption:
+            item["caption"] = caption
+            if parse_mode:
+                item["parse_mode"] = parse_mode
+        media.append(item)
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{CHAT_ID}\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"media\"\r\n\r\n"
+            f"{json.dumps(media)}\r\n").encode()
+    for i, p in enumerate(pngs):
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"p{i}\"; filename=\"card{i}.png\"\r\n"
+                 f"Content-Type: image/png\r\n\r\n").encode() + Path(p).read_bytes() + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMediaGroup", data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read()).get("ok", False)
+
+
+def send_album(pngs: list, caption: str) -> bool:
+    """Several cards as one Telegram album (max 10). One card falls back to send_photo."""
+    pngs = [Path(p) for p in pngs][:10]
+    if not pngs:
+        return False
+    if len(pngs) == 1:
+        return send_photo(pngs[0], caption)
+    token = _env("TELEGRAM_BOT_TOKEN")
+    if not token:
+        print("no TELEGRAM_BOT_TOKEN", file=sys.stderr)
+        return False
+    for pm in ("Markdown", None):
+        try:
+            if _post_album(token, pngs, caption, pm):
+                return True
+        except Exception as e:  # noqa: BLE001
+            print(f"album send failed (parse_mode={pm}): {e}", file=sys.stderr)
+    return False
+
+
+def render_coverage_png(days: int = 7) -> Path | None:
+    """The weekly muscle-coverage card as a PNG, or None when no workout was logged."""
+    vol, n, unmapped, window, used = parse_workouts(days)
+    if n == 0:
+        return None
+    import cairosvg
+    CHARTS.mkdir(parents=True, exist_ok=True)
+    today = datetime.datetime.now(TZ).strftime("%Y-%m-%d")
+    png = CHARTS / f"coverage-{today}.png"
+    cairosvg.svg2png(bytestring=build_card(vol, window, n).encode(),
+                     write_to=str(png), output_width=1180, output_height=1703)
+    return png
+
+
 def session_card_png(date: str) -> Path | None:
     """Render TODAY's single-session muscle card in HEAT mode (which muscles were worked,
     by intensity — NOT the weekly vs-target view, which would misread one session as
@@ -231,12 +290,7 @@ def main() -> int:
         print(f"[NO-DATA] no workouts in the last {args.days} days")
         return 0
 
-    import cairosvg
-    CHARTS.mkdir(parents=True, exist_ok=True)
-    today = datetime.datetime.now(TZ).strftime("%Y-%m-%d")
-    png = CHARTS / f"coverage-{today}.png"
-    cairosvg.svg2png(bytestring=build_card(vol, window, n).encode(),
-                     write_to=str(png), output_width=1180, output_height=1703)
+    png = render_coverage_png(args.days)
 
     note = compose_note(_analysis_facts(vol, window, n))
     caption = f"💪 *Weekly Muscle Coverage*\n{note}"

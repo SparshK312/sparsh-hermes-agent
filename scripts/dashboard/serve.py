@@ -365,7 +365,9 @@ def tile_body() -> str:
     sleep = _fm_field(note, "sleep_hours") or m.get("sleep_total_h")
     steps = _fm_field(note, "steps") or m.get("steps")
     rhr = m.get("resting_hr")
-    hrv = m.get("hrv_ms")
+    # Fitbit Air (2026-10-08) reports nightly RMSSD; Apple's SDNN went blank. Different
+    # measures, so the label says which one is shown.
+    hrv, hrv_lbl = (m.get("hrv_rmssd_ms"), "HRV (RMSSD)") if m.get("hrv_rmssd_ms") else (m.get("hrv_ms"), "HRV (SDNN)")
 
     def cell(v, unit, lbl):
         val = f"{v}{unit}" if v not in (None, "", "None") else "—"
@@ -376,7 +378,7 @@ def tile_body() -> str:
                  + cell(steps, "", "steps")
                  + "</div><div class='stat-row'>"
                  + cell(rhr, "", "RHR")
-                 + cell(hrv, "ms", "HRV")
+                 + cell(hrv, "ms", hrv_lbl)
                  + "</div>")
 
 
@@ -398,8 +400,10 @@ def _latest_chart(pattern: str):
 
 
 def tile_charts() -> str:
-    families = [("coverage-*.png", "Muscle coverage"), ("trends*.png", "Trends"),
-                ("fuel-*.png", "Fuel"), ("week-food-*.png", "Week in food")]
+    families = [("morning-*.png", "Morning"), ("week-2*.png", "Week in review"),
+                ("week-recovery-*.png", "Recovery & rhythm"), ("month-*.png", "Month"),
+                ("coverage-*.png", "Muscle coverage"), ("fuel-*.png", "Fuel"),
+                ("week-food-*.png", "Week in food")]
     blocks = []
     for pat, label in families:
         name = _latest_chart(pat)

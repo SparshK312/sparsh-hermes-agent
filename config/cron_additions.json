@@ -79,7 +79,7 @@
     {
       "id": "c8d4a2b1e5f9",
       "name": "health-evening-summary-nudge",
-      "prompt": "Compose Sparsh's terse evening check-in from the [evening-nudge state] block above. Use ONLY the facts in the state block. If `tracked_today` is no: send ONE short line asking whether he wants to log today, e.g. 'Nothing logged today — want to log dinner and water? Vitamins today? Bed by midnight.' Never state a calorie, protein or water gap on such a day, and never say he skipped anything: 'not logged' is not 'didn't eat'. If `tracked_today` is yes: nudge ONLY about items listed in `missing` (dinner / water) — never mention things already done. If kcal_so_far or protein_so_far_g is a number short of target, note the gap in one line; if it says 'not logged', do not invent a gap. Vitamins: unless `vitamins` says taken, ask 'Vitamins today?' as a question — never say he didn't take them. Always close with the non-negotiable: bed by midnight. Markdown, no fluff. If `missing` is nothing, vitamins are taken and macros are at/near target, send just one line: 'You're set for the day — bed by midnight.'",
+      "prompt": "Compose Sparsh's terse evening check-in from the [evening-nudge state] block above. Use ONLY the facts in the state block. (A day with nothing logged never reaches you: the script stays silent.) Nudge ONLY about items listed in `missing` (dinner / water) — never mention things already done. If kcal_so_far or protein_so_far_g is a number short of target, note the gap in one line; if it says 'not logged', do not invent a gap. Vitamins: unless `vitamins` says taken, ask 'Vitamins today?' as a question — never say he didn't take them. Always close with the non-negotiable: bed by midnight. Markdown, no fluff. If `missing` is nothing, vitamins are taken and macros are at/near target, send just one line: 'You're set for the day — bed by midnight.'",
       "skills": [],
       "skill": null,
       "model": null,
@@ -205,7 +205,7 @@
         "times": null,
         "completed": 0
       },
-      "enabled": true,
+      "enabled": false,
       "state": "scheduled",
       "paused_at": null,
       "paused_reason": null,
@@ -218,7 +218,8 @@
       "deliver": "telegram",
       "origin": null,
       "enabled_toolsets": null,
-      "workdir": "/home/hermes/vault"
+      "workdir": "/home/hermes/vault",
+      "_paused": "2026-10-17: paused at his call (nagging cut). The band now shows activity in the morning card + weekly review."
     },
     {
       "id": "9c2e7a4b1f30",
@@ -255,6 +256,19 @@
       "origin": null,
       "enabled_toolsets": null,
       "workdir": "/home/hermes/vault"
+    },
+    {
+      "name": "health-monthly",
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 10 1 * *",
+        "display": "0 10 1 * *"
+      },
+      "script": "/home/hermes/.hermes/scripts/health_monthly.sh",
+      "deliver": "telegram",
+      "prompt": "",
+      "enabled": true,
+      "_note": "2026-10-17: last month's calendar card + the coach's monthly check-in. The script sends both and prints the wake gate."
     }
   ]
 }

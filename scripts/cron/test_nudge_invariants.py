@@ -580,7 +580,7 @@ def test_prep_nudge_live_target_and_plan():
 
 # ── THE EVENING CHECK-IN: BLANK IS "NOT LOGGED", NEVER ZERO ──────────────────
 def test_evening_summary_blank_is_unknown():
-    print("V1. evening summary: nothing logged -> one-line ask; blanks are 'not logged'; vitamins are a question")
+    print("V1. evening summary: nothing logged -> silent; blanks are 'not logged'; vitamins are a question")
     from zoneinfo import ZoneInfo
     from datetime import datetime as _dt
     td = _dt.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d")
@@ -594,10 +594,16 @@ def test_evening_summary_blank_is_unknown():
         out = subprocess.run(["bash", str(HERE / "evening_summary.sh")], capture_output=True, text=True,
                              env={"PATH": "/usr/bin:/bin", "HERMES_VAULT": str(v)}).stdout
         return dict(l.split(": ", 1) for l in out.splitlines() if ": " in l)
-    a = run()
-    check("nothing logged -> tracked_today no", a.get("tracked_today", "").startswith("no"), True)
-    check("blank kcal is 'not logged', never 0", a.get("kcal_so_far", "").startswith("not logged"), True)
-    check("no 'missing' claims on an untracked day", a.get("missing", "").startswith("unknown"), True)
+    v0 = Path(tempfile.mkdtemp())
+    (v0 / "04 - Daily Notes").mkdir(parents=True)
+    (v0 / "04 - Daily Notes" / f"{td}.md").write_text("---\ntype: daily\nkcal: \nprotein_g: \nwater_l: \n---\n# day\n")
+    raw = subprocess.run(["bash", str(HERE / "evening_summary.sh")], capture_output=True, text=True,
+                         env={"PATH": "/usr/bin:/bin", "HERMES_VAULT": str(v0)}).stdout
+    last = [l for l in raw.splitlines() if l.strip()][-1]
+    check("nothing logged -> SILENT (wake gate is the last line; nagging cut 2026-10-17)",
+          (last, "kcal_so_far" in raw), ('{"wakeAgent": false}', False))
+    c = run("water_l: 1.0\n")
+    check("blank kcal on a tracked day is 'not logged', never 0", c.get("kcal_so_far", "").startswith("not logged"), True)
     b = run("kcal: 1500\n", meal=True)
     check("logged day: real numbers, dinner seen, water missing",
           (b.get("tracked_today"), b.get("kcal_so_far", "")[:4], b.get("dinner_logged"), b.get("missing")),
@@ -605,7 +611,7 @@ def test_evening_summary_blank_is_unknown():
     check("vitamins are a question, not 'not taken'", b.get("vitamins", "").startswith("unknown — ask"), True)
     cfg = json.loads((HERE.parent.parent / "config" / "cron_additions.json").read_text())
     p = next(j["prompt"] for j in cfg["jobs_to_append"] if j["name"] == "health-evening-summary-nudge")
-    check("prompt: one-line ask when nothing is logged; vitamins asked", ("tracked_today` is no" in p, "Vitamins today?" in p), (True, True))
+    check("prompt: vitamins asked; no untracked-day nag left in it", ("Vitamins today?" in p, "Nothing logged today" in p), (True, False))
 
 # ── done_facts: the shared "what is already done / is the vault current" helper ──
 def test_done_facts():

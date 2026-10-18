@@ -64,9 +64,10 @@ def now() -> datetime.datetime:
     return datetime.datetime.now(TZ)
 
 
-def read(path: Path, limit: int = 4000) -> str:
+def read(path: Path, limit: int | None = 4000) -> str:
     try:
-        return path.read_text(encoding="utf-8")[:limit]
+        txt = path.read_text(encoding="utf-8")
+        return txt if limit is None else txt[:limit]
     except Exception:  # noqa: BLE001
         return ""
 
@@ -310,8 +311,15 @@ def intake_pace(n: datetime.datetime | None = None) -> dict:
 
 
 # ---------------------------------------------------------------- full evidence packet (weekly/analysis)
-def build_evidence(days: int = 7) -> dict:
-    dates = _dates(days)
+def _workout_dates(dates: list[str]) -> list[str]:
+    """Workout files whose date falls in `dates` (this module's clock, not muscle_volume's)."""
+    return [d for d in dates if (WORKOUTS / f"{d}.md").exists()]
+
+
+def build_evidence(days: int = 7, end: datetime.date | None = None) -> dict:
+    """`end` (default today) aligns the window, e.g. to a calendar month for the monthly
+    check-in. Food / weight / lift counts all use this window."""
+    dates = _dates(days, end)
     today = now().date().isoformat()
     kcals, proteins, waters, sleeps, weights = [], [], [], [], []
     undereat, logged_food_days, no_food_days = 0, 0, 0
@@ -333,7 +341,12 @@ def build_evidence(days: int = 7) -> dict:
         if bw is not None:
             weights.append((d, bw))
 
-    vol, n_workouts, unmapped, window, used_dates = parse_workouts(days)
+    vol, _n_mv, unmapped, window, used_dates = parse_workouts(days)
+    # Count sessions on THIS module's clock and window (muscle_volume reads the wall clock and
+    # always ends today, which mis-windowed the monthly check-in and made the tests date-bound).
+    n_workouts = len(_workout_dates(dates))
+    if end is not None and end != now().date():
+        vol = {}                                   # per-muscle volume is today-anchored only
     under = [m for m in ORDER if 0 < vol.get(m, 0) < LANDMARKS[m][0]]
     gaps = [m for m in ORDER if vol.get(m, 0) == 0]
 
@@ -347,31 +360,57 @@ def build_evidence(days: int = 7) -> dict:
     # after 2026-07-16 and never fired. Scan the Workouts dir instead: unbounded lookback.
     days_since_lift = last_lift_days_ago()
 
+    # band window: ends at `end`, or yesterday (the last complete day of steps) by default
+    wear = wearable_evidence(days, end=end or (now().date() - datetime.timedelta(days=1)))
+    band_sleep = ((wear or {}).get("this_period") or {}).get("sleep_avg_h")
+    sleep_avg = band_sleep if band_sleep is not None else _avg(sleeps)
+
     flags = []
     if undereat or (kcals and _avg(kcals) and _avg(kcals) < TARGETS["kcal"] - 250):
         flags.append("under_eating_risk")
-    if n_workouts < TARGETS["training_days_per_week"] or (days_since_lift or 0) >= 3:
+    # 2026-10-17: "fewer than 4 workout FILES" fired every week once lift logging stopped,
+    # so ~20 of 32 weekly priorities were "walk into the gym today" — a logging gap read as
+    # a training fact. Missing lift logs are now their own state, not consistency_risk.
+    if n_workouts == 0:
+        flags.append("lifts_not_logged")
+    elif n_workouts < TARGETS["training_days_per_week"] or (days_since_lift or 0) >= 3:
         flags.append("consistency_risk")
-    if _avg(sleeps) and _avg(sleeps) < TARGETS["sleep_h"] - 0.5:
+    if sleep_avg and sleep_avg < TARGETS["sleep_h"] - 0.5:
         flags.append("sleep_debt")
 
-    return {
-        "window_days": days,
-        "targets": TARGETS,
-        "training": {
+    if n_workouts:
+        training = {
             "sessions_done": n_workouts, "planned_per_week": TARGETS["training_days_per_week"],
             "days_since_last_lift": days_since_lift,
             "sets_by_muscle": {m: round(vol[m], 1) for m in ORDER if vol.get(m, 0) > 0},
             "below_MEV": under, "untrained": gaps,
             "lift_progression": lift_progression(days),
-        },
+        }
+    else:
+        # No workout files in the window = NOT LOGGED. Per-muscle "untrained / below MEV"
+        # lists computed from zero logs read as facts ("every muscle group is untrained"),
+        # so they are left out; the coach gets the unknown, stated as one.
+        training = {
+            "sessions_done": 0, "planned_per_week": TARGETS["training_days_per_week"],
+            "days_since_last_logged_lift": days_since_lift,
+            "status": "UNKNOWN: no lifts logged in this window; he may or may not have trained",
+        }
+    return {
+        "window_days": days,
+        "targets": TARGETS,
+        "training": training,
         "nutrition": {
             "avg_kcal": _avg(kcals), "avg_protein_g": _avg(proteins),
             "avg_water_l": _avg(waters),
             "days_logged": logged_food_days, "days_no_food_logged": no_food_days,
             "undereating_days": undereat, "undereating_threshold_kcal": UNDEREAT_KCAL,
         },
-        "recovery": {"avg_sleep_h": _avg(sleeps), **recovery_baseline()},
+        "recovery": {"avg_sleep_h": _avg(sleeps) if band_sleep is None else round(band_sleep, 2),
+                     **recovery_baseline()},
+        "band": wear,
+        "logging": {"food_days": logged_food_days, "weigh_ins": len(weights),
+                    "lift_sessions": n_workouts, "window_days": days,
+                    "note": "blank = not logged, never zero; coach on the band data when these are 0"},
         "bodyweight": {
             "trend_lb_over_window": wt_trend,
             "latest_lb": weights[-1][1] if weights else None,
@@ -422,12 +461,38 @@ def session_evidence(date: str) -> dict | None:
     }
 
 
+def wearable_evidence(days: int = 7, end: datetime.date | None = None) -> dict | None:
+    """The band's half of the packet (health_cards.wearable_evidence): sleep, rhythm,
+    steps, zone minutes, auto-detected sessions, the week's recovery vs his band, each
+    against the period before. None (never a crash) if the module or data is missing."""
+    try:
+        import health_cards as HC
+        end = end or (now().date() - datetime.timedelta(days=1))   # last complete day
+        return HC.wearable_evidence(end=end, days=days)
+    except Exception as e:  # noqa: BLE001
+        print(f"[coach] wearable evidence unavailable: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+
 def context_docs() -> dict:
+    """The whole of each doc. Until 2026-10-17 each was cut at 4,000 characters: Coach
+    Memory is ~12,600, and its record of past priorities starts at ~7,300, so the coach
+    never saw what it had already told him and repeated "walk into the gym today" in ~20
+    of 32 weekly check-ins. The cut also dropped Profile's Targets and Sleep sections."""
     return {
-        "profile": read(HEALTH / "Profile.md"),
-        "training_plan": read(HEALTH / "Training Plan.md"),
-        "coach_memory": read(HEALTH / "Coach Memory.md"),
+        "profile": read(HEALTH / "Profile.md", limit=None),
+        "training_plan": read(HEALTH / "Training Plan.md", limit=None),
+        "coach_memory": read(HEALTH / "Coach Memory.md", limit=None),
     }
+
+
+def recent_priorities(n: int = 6) -> list[str]:
+    """The last n focus/priority lines the coach wrote to Coach Memory, newest first."""
+    txt = read(HEALTH / "Coach Memory.md", limit=None)
+    m = re.search(r"^## Coach-logged \(auto\)\s*$(.*?)(?=^## |\Z)", txt, re.M | re.S)
+    if not m:
+        return []
+    return [ln[2:].strip() for ln in m.group(1).splitlines() if ln.startswith("- (")][:n]
 
 
 # ---------------------------------------------------------------- frontier compose (+ structured/validate)
@@ -567,6 +632,61 @@ def validate(parsed: dict, grounding) -> tuple[bool, str]:
     if ungrounded:
         return False, f"ungrounded numbers: {[round(x, 1) for x in ungrounded[:5]]}"
     return True, "ok"
+
+
+FOOD_RE = re.compile(r"\b(food|nutrition|eat|eating|ate|kcal|calorie|calories|protein|meal|meals|fuel|surplus|diet)\b", re.I)
+TRAIN_RE = re.compile(r"\b(gym|lift|lifts|lifting|session|sessions|workout|workouts|train|training|upper [ab]|lower [ab])\b", re.I)
+
+
+def validate_checkin(parsed: dict, grounding, ev: dict | None = None) -> tuple[bool, str]:
+    """Validator for the win / focus / action check-in (weekly, mid-week, monthly).
+    With `ev`, the win and focus must come from an area that HAS data this period: no food
+    logged -> no food focus, no lifts logged -> no training focus (however it is worded —
+    "log your food", "nutrition is unmanaged" and "food is a black box" are the same nag)."""
+    if not isinstance(parsed, dict):
+        return False, "not a dict"
+    win, focus = parsed.get("win") or {}, parsed.get("focus") or {}
+    if not isinstance(win, dict) or not isinstance(focus, dict):
+        return False, "win/focus not objects"
+    if not (win.get("title") and focus.get("title") and parsed.get("action")):
+        return False, "missing win/focus/action"
+    if isinstance(parsed.get("action"), list):
+        return False, "action must be ONE action"
+    gtext = grounding if isinstance(grounding, str) else json.dumps(grounding, default=str)
+    ev_nums = _floats(gtext)
+    claimed = _floats(" ".join(str(x) for x in (parsed.get("headline"), win.get("title"), win.get("evidence"),
+                                                focus.get("title"), focus.get("evidence"))))
+
+    def grounded(c: float) -> bool:
+        return any(abs(c - e) <= max(1.0, 0.02 * abs(c)) for e in ev_nums)
+    ungrounded = [c for c in claimed if c >= 10 and not grounded(c)]
+    if ungrounded:
+        return False, f"ungrounded numbers: {[round(x, 1) for x in ungrounded[:5]]}"
+    banned = [w for w in ("MacroFactor", "Hevy", "MyFitnessPal") if w.lower() in json.dumps(parsed).lower()]
+    if banned:
+        return False, f"mentions an app he does not use: {banned}"
+    # His call (2026-10-17): the check-in works whether or not he logs, and logging nags are
+    # cut. The model was TOLD this and still chose "food is invisible — log it" as the focus,
+    # so it is enforced here.
+    for part, d in (("win", win), ("focus", focus)):
+        if LOGGING_FOCUS_RE.search(f"{d.get('title', '')}"):
+            return False, f"the {part} is about logging; pick it from what the data shows"
+    if ev:
+        food_days = (ev.get("logging") or {}).get("food_days", (ev.get("nutrition") or {}).get("days_logged"))
+        lifts = (ev.get("training") or {}).get("sessions_done")
+        for part, d in (("win", win), ("focus", focus)):
+            title = d.get("title", "")
+            if food_days == 0 and FOOD_RE.search(title):
+                return False, (f"the {part} is about food, but no food was logged this period — choose it "
+                               "from the band data (sleep, bedtime, steps, zone minutes, recovery)")
+            if lifts == 0 and TRAIN_RE.search(title):
+                return False, (f"the {part} is about training, but no lifts were logged this period — "
+                               "choose it from the band data; ask about training in question_for_user")
+    return True, "ok"
+
+
+LOGGING_FOCUS_RE = re.compile(r"\b(log|logs|logged|logging|tracking|untracked|invisible|black box)\b", re.I)
+# ("track" / "dark" are left out on purpose: "sleep on track" is a fine win.)
 
 
 # ---------------------------------------------------------------- send + budget + memory

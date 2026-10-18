@@ -3,8 +3,9 @@
 coach.py — the Phase 4b AI coach (multi-mode entry point on coach_engine).
 
 Modes (--mode):
-  weekly         full review: structured analysis (JSON -> validated -> rendered),
-                 sent to Telegram + a one-line priority written back to Coach Memory.
+  weekly         check-in (Sunday = weekly, other days = mid-week): one win, one focus, one
+                 action, validated, sent to Telegram + the focus written back to Coach Memory.
+  monthly        the month's check-in (sent after the calendar card by health_monthly.sh).
   meal-rescue    midday under-eating rescue — fires ONLY if behind pace + budget allows.
   workout-rescue missed-workout rescue — fires ONLY if idle 2+ days & behind this week.
   preview        pre-workout preview ("beat last time") — on demand.
@@ -60,86 +61,179 @@ def _silent() -> int:
     return 0
 
 
-# ----------------------------------------------------------------- weekly review
-WEEKLY_SYS = (
-    "You are Sparsh's strength & nutrition coach. He's a high-execution operator and "
-    "near-beginner lifter on a LEAN BULK (underweight, +15-25 lb muscle goal). The whole "
-    "system exists to defeat two lifelong failure modes: (1) training consistency collapsing "
-    "under work/school load, (2) under-eating in busy seasons (~1 meal/day). COACH ADHERENCE, "
-    "NOT THE PROGRAM. Blunt, numbers-first, plain English, NO lecturing, no fake hype, no "
-    "therapy voice. Praise only specific actions/real progress; never flatter missed targets. "
-    "Use ONLY the numbers in the evidence packet — never invent metrics.\n\n"
+# ----------------------------------------------------------------- weekly / mid-week / monthly check-in
+# 2026-10-17 rewrite (his ask: "tell me things that are going well and what to work on").
+# The old JSON was bottleneck + up to 4 evidence bullets + 2 "today" actions, built on a
+# packet that only knew hand-logged food/lifts/weight — which he had logged on 2, 1 and 0
+# of the last 30 days. So nearly every check-in was "walk into the gym today" (~20 of 32).
+# Now: one WIN, one FOCUS, one ACTION, from the band data first, against his own numbers.
+CHECKIN_SYS = (
+    "You are Sparsh's health & fitness coach writing his {period} check-in for Telegram. "
+    "He's a busy university student / intern, a near-beginner lifter on a LEAN BULK; the two "
+    "lifelong failure modes are training consistency collapsing under load and under-eating. "
+    "Voice: plain English, blunt but warm, numbers-first, no hype, no lecturing, no therapy voice.\n\n"
+    "DATA RULES (hard):\n"
+    "- Use ONLY numbers in the evidence packet. `band` is what the Fitbit recorded automatically; "
+    "compare `this_period` with `previous_period` and his own normal range — never population norms. "
+    "Profile targets (7h sleep, 2400 kcal, 140 g protein, 4 sessions/week) are fine to cite.\n"
+    "- A comparison is only valid when BOTH periods have at least 4 days of that metric. A null in "
+    "`previous_period` (see `not_comparable`) means there is NOTHING to compare against: describe "
+    "this period on its own, never as a jump, drop or 'fixed itself'.\n"
+    "- Recovery: never react to one night. Only mention HRV / resting HR if `recovery_trend` says the "
+    "week's average is outside his normal range; 'baseline building' means say nothing about it.\n"
+    "- `band_auto_detected_sessions` are things the Fitbit detected (mostly walks), NOT lifting.\n"
+    "- Food, weight and lifts are hand-logged. 0 / blank means NOT LOGGED — never 'you didn't eat' or "
+    "'you didn't train'. When they're not logged, coach on what the band shows. You may mention "
+    "logging in at most one short clause. Logging is NEVER the win or the focus (his call: the "
+    "check-in must work whether or not he logs). The win and the focus must each come from an area "
+    "with data THIS period: no food logged -> neither is about food or nutrition; no lifts logged -> "
+    "neither is about training. Then pick from sleep length, bedtime regularity, nights past 1 AM, "
+    "steps, zone minutes or recovery.\n"
+    "- If `flags` has lifts_not_logged, you do NOT know whether he trained. Don't make training the "
+    "focus, and never say 'zero sessions', 'untrained', 'haven't lifted' or 'gym at zero'. You may ask "
+    "about training in question_for_user.\n"
+    "- Logging happens by messaging Hermes on Telegram. Never mention MacroFactor, Hevy or any app.\n"
+    "- RECENT PRIORITIES lists what you told him before. Do not repeat a focus with the same wording. "
+    "If the same problem is still there, change the approach (a smaller step, a different time or "
+    "trigger) and say that it's a new angle.\n\n"
     "Return a JSON object EXACTLY in this shape:\n"
-    "{\n"
-    '  "analysis": {"primary_bottleneck": str, "secondary_bottleneck": str,\n'
-    '               "evidence": [str, ...],  // each cites a real number from the packet\n'
-    '               "risk_level": "green"|"yellow"|"red", "confidence": "high"|"medium"|"low"},\n'
-    '  "actions": {"today": [str] (1-2 max), "fallback_if_busy": str, "do_not_change_yet": [str]},\n'
-    '  "conversation": {"question_for_user": str, "tone": "firm"|"normal"|"encouraging"}\n'
-    "}\n"
-    "The question must be behaviorally useful (earns a reply that changes next week)."
+    "{{\n"
+    '  "headline": str,            // the {period} in <= 10 words\n'
+    '  "risk_level": "green"|"yellow"|"red",\n'
+    '  "win":   {{"title": str, "evidence": str}},   // title <= 8 words; evidence <= 25 words: the number vs before\n'
+    '  "focus": {{"title": str, "evidence": str}},   // the ONE thing to work on; same limits\n'
+    '  "action": str,              // ONE specific action for the next {horizon} (what, when, how much), <= 30 words\n'
+    '  "fallback_if_busy": str,    // the minimum version of that action, <= 15 words\n'
+    '  "question_for_user": str    // optional, <= 20 words; "" if none. Ask only if the answer changes next {period}\n'
+    "}}\n"
+    "Gain-framed: say what doing the action gets him. The win must be real; if nothing improved, name "
+    "the most stable good thing honestly. Short sentences; it is read on a phone."
 )
 
 
-def _render_weekly(p: dict) -> str:
-    a, ac, c = p.get("analysis", {}), p.get("actions", {}), p.get("conversation", {})
-    risk = {"red": "🔴", "yellow": "🟡", "green": "🟢"}.get(a.get("risk_level", ""), "")
-    L = [f"💪 *Weekly coach check-in* {risk}".strip(), ""]
-    if a.get("primary_bottleneck"):
-        L.append(f"*Bottleneck:* {a['primary_bottleneck']}")
-    for e in (a.get("evidence") or [])[:4]:
-        L.append(f"• {e}")
-    today = ac.get("today") or []
-    if today:
-        L += ["", "*Do this week:*"] + [f"→ {t}" for t in today[:2]]
-    if ac.get("fallback_if_busy"):
-        L.append(f"_Busy-day fallback:_ {ac['fallback_if_busy']}")
-    if c.get("question_for_user"):
-        L += ["", c["question_for_user"]]
+def _period_label(n: datetime.date, monthly: bool = False) -> tuple[str, str, str]:
+    """(period word, horizon, header) — Sunday is the weekly review, other days mid-week."""
+    if monthly:
+        return "month", "month", "🗓 *Monthly check-in*"
+    if n.weekday() == 6:
+        return "week", "7 days", "💪 *Weekly check-in*"
+    return "week so far", "few days", "💪 *Mid-week check-in*"
+
+
+def _render_checkin(p: dict, header: str, rng: str = "") -> str:
+    risk = {"red": "🔴", "yellow": "🟡", "green": "🟢"}.get(p.get("risk_level", ""), "")
+    win, focus = p.get("win") or {}, p.get("focus") or {}
+    L = [f"{header}{' · ' + rng if rng else ''} {risk}".strip()]
+    if p.get("headline"):
+        L.append(f"_{p['headline']}_")
+    L.append("")
+    L.append(f"✅ *Going well:* {win.get('title', '')}")
+    if win.get("evidence"):
+        L.append(f"     {win['evidence']}")
+    L.append(f"🎯 *Work on:* {focus.get('title', '')}")
+    if focus.get("evidence"):
+        L.append(f"     {focus['evidence']}")
+    L += ["", f"→ *Next:* {p.get('action', '')}"]
+    if p.get("fallback_if_busy"):
+        L.append(f"_If it gets busy:_ {p['fallback_if_busy']}")
+    q = (p.get("question_for_user") or "").strip()
+    if q:
+        L += ["", q]
     return "\n".join(L)
 
 
-def _templated_weekly(ev: dict) -> str:
-    t, n, r, bw = ev["training"], ev["nutrition"], ev["recovery"], ev["bodyweight"]
-    L = ["💪 *Weekly coach check-in*", ""]
-    flag = "⚠️" if t["sessions_done"] < t["planned_per_week"] else "✅"
-    L.append(f"{flag} Trained *{t['sessions_done']}/{t['planned_per_week']}*.")
+def _templated_checkin(ev: dict, header: str) -> str:
+    """Deterministic fallback — band first, logging second, never asserts a zero."""
+    b = (ev.get("band") or {}).get("this_period") or {}
+    t, n = ev["training"], ev["nutrition"]
+    L = [header, ""]
+    if b.get("sleep_avg_h") is not None:
+        L.append(f"{'✅' if b['sleep_avg_h'] >= E.TARGETS['sleep_h'] else '⚠️'} Sleep avg *{b['sleep_avg_h']:.1f}h* "
+                 f"({b.get('nights_at_least_7h', 0)}/{b.get('nights_with_sleep_data', 0)} nights at 7h+).")
+    if b.get("steps_avg") is not None:
+        azm = b.get("active_zone_min_total")
+        L.append(f"🚶 *{int(b['steps_avg']):,}* steps/day" + (f" · {int(azm)} zone min." if azm is not None else "."))
+    if t["sessions_done"]:
+        L.append(f"🏋️ {t['sessions_done']} lift session(s) logged.")
     if n["avg_kcal"] is not None:
-        flag = "⚠️" if n["avg_kcal"] < E.TARGETS["kcal"] - 200 else "✅"
-        L.append(f"{flag} Avg *{int(n['avg_kcal'])} kcal* / {E.TARGETS['kcal']} · *{int(n['avg_protein_g'] or 0)}g* / {E.TARGETS['protein_g']} protein.")
-    if n["undereating_days"]:
-        L.append(f"🚨 *{n['undereating_days']} under-eating day(s)* — the failure mode. Fix dinner.")
-    if r["avg_sleep_h"] is not None:
-        L.append(f"{'⚠️' if r['avg_sleep_h'] < E.TARGETS['sleep_h'] else '✅'} Sleep avg *{r['avg_sleep_h']}h*.")
-    if bw["trend_lb_over_window"] is not None:
-        L.append(f"⚖️ Weight {'+' if bw['trend_lb_over_window'] >= 0 else ''}{bw['trend_lb_over_window']} lb / {ev['window_days']}d.")
-    L += ["", "_(plain summary — rich compose unavailable)_"]
+        L.append(f"🍽 Avg *{int(n['avg_kcal'])} kcal* / {int(n['avg_protein_g'] or 0)}g protein on logged days.")
+    L += ["", "_(plain summary — the coach model was unavailable)_"]
     return "\n".join(L)
+
+
+def _checkin_user(ev: dict, docs: dict, days: int, extra: str = "") -> str:
+    pri = E.recent_priorities(6)
+    return (
+        f"## Profile\n{docs['profile']}\n\n## Training Plan\n{docs['training_plan']}\n\n"
+        f"## Coach Memory\n{docs['coach_memory']}\n\n"
+        "## RECENT PRIORITIES (newest first — do not repeat these)\n"
+        + ("\n".join(f"- {x}" for x in pri) if pri else "- none yet") + "\n\n"
+        f"## Evidence packet (last {days} days)\n{json.dumps(ev, indent=2, default=str)}\n\n"
+        f"{extra}Write the check-in JSON."
+    )
+
+
+def compose_checkin(ev: dict, days: int, monthly: bool = False, rng: str = "",
+                    extra: str = "") -> tuple[str, dict | None]:
+    """(message, parsed-or-None). Validated, with the templated fallback.
+    Numbers are grounded against the evidence + targets + recent priorities only — NOT the
+    ~23K characters of docs, where ~43% of the integers 10-200 already appear (review)."""
+    period, horizon, header = _period_label(E.now().date(), monthly)
+    if not NO_LLM:
+        user = _checkin_user(ev, E.context_docs(), days, extra)
+        grounding = (json.dumps(ev, default=str) + json.dumps(E.TARGETS)
+                     + "\n".join(E.recent_priorities(6)))
+        reason = ""
+        for _attempt in range(2):   # one retry, told why the first answer was rejected
+            ask = user if not reason else (user + f"\n\nYour previous answer was REJECTED: {reason}. "
+                                                   "Write it again and fix that.")
+            parsed = E.compose_json(CHECKIN_SYS.format(period=period, horizon=horizon), ask)
+            ok, reason = E.validate_checkin(parsed, grounding, ev) if parsed else (False, "no response")
+            if ok:
+                return _render_checkin(parsed, header, rng), parsed
+            print(f"check-in: structured compose rejected ({reason})", file=sys.stderr)
+        print("check-in: falling back to the template", file=sys.stderr)
+    return _templated_checkin(ev, header), None
+
+
+def _range_label(days: int) -> str:
+    end = E.now().date() - datetime.timedelta(days=1)
+    start = end - datetime.timedelta(days=days - 1)
+    return f"{start:%b %-d}–{end:%-d}" if start.month == end.month else f"{start:%b %-d}–{end:%b %-d}"
 
 
 def run_weekly() -> int:
     ev = E.build_evidence(DAYS)
-    docs = E.context_docs()
-    msg, priority = None, None
-    if not NO_LLM:
-        user = (
-            f"## Profile\n{docs['profile']}\n\n## Training Plan\n{docs['training_plan']}\n\n"
-            f"## Coach Memory\n{docs['coach_memory']}\n\n"
-            f"## This week's evidence packet (last {DAYS} days)\n{json.dumps(ev, indent=2, default=str)}\n\n"
-            "Write this week's coaching JSON."
-        )
-        parsed = E.compose_json(WEEKLY_SYS, user)
-        # ground against the full corpus the model saw (evidence packet + context docs)
-        ok, reason = E.validate(parsed, user) if parsed else (False, "no response")
-        if ok:
-            msg = _render_weekly(parsed)
-            priority = (parsed.get("actions", {}).get("today") or [None])[0]
-        else:
-            print(f"weekly: structured compose rejected ({reason}); templated", file=sys.stderr)
-    msg = msg or _templated_weekly(ev)
+    msg, parsed = compose_checkin(ev, DAYS, rng=_range_label(DAYS))
     rc = _emit(msg, "weekly")
-    if rc == 0 and not DRY and priority:
-        E.memory_append(f"Weekly priority set: {priority}")
+    if rc == 0 and not DRY and parsed:
+        E.memory_append(f"Weekly focus: {parsed['focus']['title']} → {parsed['action']}")
+    return rc
+
+
+def run_monthly() -> int:
+    """The month's check-in, sent right after the calendar card (health_monthly.sh).
+    --month YYYY-MM (default: last month)."""
+    ym = None
+    if "--month" in sys.argv:
+        try:
+            ym = sys.argv[sys.argv.index("--month") + 1]
+        except IndexError:
+            ym = None
+    today = E.now().date()
+    if ym:
+        y, m = (int(x) for x in ym.split("-"))
+    else:
+        last = today.replace(day=1) - datetime.timedelta(days=1)
+        y, m = last.year, last.month
+    import calendar as _cal
+    end = min(datetime.date(y, m, _cal.monthrange(y, m)[1]), today)
+    days = (end - datetime.date(y, m, 1)).days + 1
+    ev = E.build_evidence(days, end=end)      # food / lifts / weight AND band, month-aligned
+    msg, parsed = compose_checkin(ev, days, monthly=True, rng=datetime.date(y, m, 1).strftime("%B"))
+    rc = _emit(msg, "monthly")
+    if rc == 0 and parsed and not DRY:
+        E.memory_append(f"Monthly focus ({y}-{m:02d}): {parsed['focus']['title']} → {parsed['action']}")
     return rc
 
 
@@ -200,7 +294,9 @@ def run_meal_rescue() -> int:
     # short" off an empty log is how this fired 18/18 days into a dead channel. Hand the
     # case to the re-engagement nudge; this one only speaks when it has real data.
     if not E.intake_is_tracked():
-        return run_tracking_dark()
+        # 2026-10-17 (his call): the "food tracking has been dark" checkpoint nudges are cut
+        # with the rest of the nagging; the cards and the weekly check-in work without logs.
+        return _silent()
     pace = E.intake_pace()
     if not (pace["behind_kcal"] or pace["behind_protein"]):
         return _silent()
@@ -240,7 +336,7 @@ def run_workout_rescue() -> int:
     # once he passed the evidence window without lifting. days_since_last_lift is now
     # unbounded (coach_engine.last_lift_days_ago); None means "never logged a workout",
     # which still warrants the nudge rather than suppressing it.
-    raw_idle = t.get("days_since_last_lift")
+    raw_idle = t.get("days_since_last_lift", t.get("days_since_last_logged_lift"))
     idle = DAYS if raw_idle is None else raw_idle
     warranted = (not trained_today) and idle >= 2 and t["sessions_done"] < t["planned_per_week"]
     if not warranted:
@@ -249,7 +345,7 @@ def run_workout_rescue() -> int:
     if not ok and not DRY:
         return _silent()
     facts = {"days_since_last_lift": idle, "sessions_this_week": t["sessions_done"],
-             "planned_per_week": t["planned_per_week"], "untrained": t["untrained"]}
+             "planned_per_week": t["planned_per_week"], "untrained": t.get("untrained", [])}
     msg = None
     if not NO_LLM:
         msg = E.compose_text(WORKOUT_SYS, f"Training state:\n{json.dumps(facts, indent=2)}", max_tokens=300)
@@ -264,7 +360,7 @@ def run_workout_rescue() -> int:
 # ----------------------------------------------------------------- pre-workout preview
 def run_preview() -> int:
     ev = E.build_evidence(DAYS)
-    prog = ev["training"]["lift_progression"]
+    prog = ev["training"].get("lift_progression") or []
     if not prog:
         return _silent()
     lines = []
@@ -604,18 +700,22 @@ REFRESH_SYS = (
     "\"working\": [2-4 short bullets — patterns/behaviors that ARE driving adherence], "
     "\"leaking\": [2-4 short bullets — where adherence breaks]}. Ground EVERY bullet in the "
     "data and cite real numbers (sessions/week, avg kcal & protein, days logged, weight "
-    "trend). His #1 failure mode is under-eating + inconsistency; protein is the chronic "
-    "miss. Be specific and blunt — no hype, no generic advice, NEVER invent numbers. If a "
-    "field has no data, say so plainly rather than fabricating."
+    "trend, and the band's sleep / steps / zone minutes). His #1 failure mode is under-eating + "
+    "inconsistency; protein is the chronic miss. Be specific and blunt — no hype, no generic "
+    "advice, NEVER invent numbers. A blank or 0 for food / lifts / weight means NOT LOGGED: "
+    "say 'not logged', never 'didn't eat', 'didn't train', 'abandoned' or 'almost certainly "
+    "under target'. If a field has no data, say so plainly rather than fabricating."
 )
 
 
 def run_refresh_memory() -> int:
     """Refresh the coach-owned 'Adherence snapshot (auto)' section of Coach Memory from the
-    last 4 weeks of logged data + bump last_updated. Silent (file write only, no Telegram);
-    meant to run weekly so the coaching memory never goes stale. Reuses the weekly evidence."""
+    last 4 weeks of data + bump last_updated. Silent (file write only, no Telegram); meant to
+    run weekly so the coaching memory never goes stale. Reuses the weekly evidence.
+    ONE write point, behind ONE dry-run guard (2026-10-17: --dry-run used to write)."""
     ev = E.build_evidence(28)
     n, t, bw = ev["nutrition"], ev["training"], ev["bodyweight"]
+    snap, working, leaking, how = None, [], [], "templated"
     if not NO_LLM:
         docs = E.context_docs()
         user = (f"## Profile\n{docs['profile']}\n\n## Coach Memory\n{docs['coach_memory']}\n\n"
@@ -623,34 +723,41 @@ def run_refresh_memory() -> int:
                 f"{json.dumps(ev, indent=2, default=str)}\n\nOutput the adherence-snapshot JSON.")
         parsed = E.compose_json(REFRESH_SYS, user)
         if parsed and parsed.get("snapshot"):
-            ok = E.memory_refresh(parsed.get("snapshot", ""), parsed.get("working", []),
-                                  parsed.get("leaking", []), ev["window_days"])
-            print("refreshed coach memory" if ok else "refresh write failed")
-            return 0 if ok else 1
-        print("refresh: structured compose failed; templated", file=sys.stderr)
-    # deterministic fallback straight from the evidence numbers
-    snap = (f"{t['sessions_done']} lifts in {ev['window_days']}d · avg "
-            f"{n['avg_kcal']} kcal / {n['avg_protein_g']}g protein · weight trend "
-            f"{bw['trend_lb_over_window']} lb")
-    working, leaking = [], []
-    if n["days_logged"]:
-        working.append(f"Food logged {n['days_logged']}/{ev['window_days']} days — the tracking habit is holding")
-    if t["sessions_done"]:
-        working.append(f"{t['sessions_done']} sessions logged in the window")
-    if (n["avg_protein_g"] or 0) < 140:
-        leaking.append(f"Protein chronically under target — averaging {n['avg_protein_g']}g vs 140g")
-    if n["undereating_days"]:
-        leaking.append(f"{n['undereating_days']} under-eating day(s) below {n['undereating_threshold_kcal']} kcal")
-    if t["untrained"]:
-        leaking.append("Untrained muscle groups this window: " + ", ".join(t["untrained"]))
+            snap, working, leaking, how = (parsed.get("snapshot", ""), parsed.get("working", []),
+                                           parsed.get("leaking", []), "model")
+        else:
+            print("refresh: structured compose failed; templated", file=sys.stderr)
+    if snap is None:
+        # deterministic fallback straight from the evidence numbers (blank = not logged)
+        b = (ev.get("band") or {}).get("this_period") or {}
+        snap = (f"{t['sessions_done']} lifts logged in {ev['window_days']}d · food logged "
+                f"{n['days_logged']}/{ev['window_days']} days"
+                + (f" · band sleep avg {b['sleep_avg_h']}h, {int(b['steps_avg']):,} steps/day"
+                   if b.get("sleep_avg_h") and b.get("steps_avg") else ""))
+        if b.get("nights_with_sleep_data"):
+            working.append(f"Sleep {b.get('nights_at_least_7h', 0)}/{b['nights_with_sleep_data']} nights at 7h+ (band)")
+        if t["sessions_done"]:
+            working.append(f"{t['sessions_done']} sessions logged in the window")
+        if n["avg_protein_g"] is not None and n["avg_protein_g"] < 140:
+            leaking.append(f"Protein under target on logged days — averaging {n['avg_protein_g']}g vs 140g")
+        if n["undereating_days"]:
+            leaking.append(f"{n['undereating_days']} under-eating day(s) below {n['undereating_threshold_kcal']} kcal")
+        if t.get("untrained"):
+            leaking.append("Untrained muscle groups this window: " + ", ".join(t["untrained"]))
+        if not t["sessions_done"] and not n["days_logged"]:
+            leaking.append("Lifts and food not logged this window — unknown, not zero")
+    if DRY:
+        print(json.dumps({"snapshot": snap, "working": working, "leaking": leaking, "via": how}, indent=2))
+        return 0
     ok = E.memory_refresh(snap, working, leaking, ev["window_days"])
-    print("refreshed coach memory (templated)" if ok else "refresh write failed")
+    print(f"refreshed coach memory ({how})" if ok else "refresh write failed")
     return 0 if ok else 1
 
 
 def main() -> int:
     return {
         "weekly": run_weekly,
+        "monthly": run_monthly,
         "session-review": run_session_review,
         "refresh-memory": run_refresh_memory,
         "meal-rescue": run_meal_rescue,
