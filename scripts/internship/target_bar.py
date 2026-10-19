@@ -139,6 +139,12 @@ WINTER_ONLY_APPLY = {
     #   backed by Collison, Friedman, Gross, Jeff Dean). Intern post states no term, so
     #   it rides in via manual_postings with cycle "Winter 2027". Winter only.
     "mechanize",
+    # 2026-10-19, his call ("sure u can add heygen, datarobot"), from the SWElist / Intern
+    #   Insider Oct 19 triage. Winter only:
+    #   HeyGen -- AI video; "Software Engineer Intern (Winter 2027)" (greenhouse heygen
+    #     4540716007), Toronto/LA/SF/Singapore. Quals: "within one year of graduation" (a stretch).
+    #   DataRobot -- MCP & Memory Intern (Workday R-102755), via manual_postings (no term stated).
+    "heygen", "datarobot",
 }
 
 # Companies whose names collapse to something generic once normalized, so they are
@@ -219,6 +225,9 @@ def season_of(cycle: str, title: str = "") -> str:
 WINTER_TERM_OFFERED = {
     ("clay", "software engineering intern"),
     ("exa", "software engineer, intern"),
+    # HeyGen  "Software Engineer Intern" (greenhouse heygen 4540716007): the employer title says
+    #         "(Winter 2027)", the board row's title does not (2026-10-19).
+    ("heygen", "software engineer intern"),
 }
 
 

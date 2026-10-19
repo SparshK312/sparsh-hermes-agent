@@ -1306,6 +1306,11 @@ def test_oct17_manual_postings_and_winter_names():
         check(f"{co} stays below for Summer", TB.bar_of(co, S_), TB.BELOW)
     check("Mechanize is Winter apply (his call Oct 18)", TB.bar_of("Mechanize", W_), TB.APPLY)
     check("Mechanize stays below for Summer", TB.bar_of("Mechanize", S_), TB.BELOW)
+    for co in ("HeyGen", "DataRobot"):
+        check(f"{co} is Winter apply (his call Oct 19)", TB.bar_of(co, W_), TB.APPLY)
+        check(f"{co} stays below for Summer", TB.bar_of(co, S_), TB.BELOW)
+    hg = {"machine": {"company": "HeyGen", "role": "Software Engineer Intern", "cycle": ""}, "human": {"status": ""}}
+    check("HeyGen's season-less row lands on Apply - Winter (named override)", B.queue_placement(hg)[0], "Apply - Winter")
     for look in ("Atom Computing", "Assort", "Atomic Industries"):
         check(f"{look} is NOT promoted by the Oct 17 call", TB.bar_of(look, W_), TB.BELOW)
     rows = MP.collect()
@@ -1315,6 +1320,8 @@ def test_oct17_manual_postings_and_winter_names():
     check("manual_postings carries the Oct 18 Mechanize intern row",
           [r["url"] for r in rows if r["company"] == "Mechanize"],
           ["https://jobs.ashbyhq.com/mechanize/d148d54f-6db7-4c28-9699-0304596f554e"])
+    check("manual_postings carries the Oct 19 DataRobot MCP & Memory row",
+          [r["req_id"] for r in rows if r["company"] == "DataRobot"], ["R-102755"])
     for r in rows:
         tag = r["req_id"] or r["role"][:30]
         check(f"{tag}: id is the canonical id of its own url", r["canonical_id"], canonical_id(r["url"]))

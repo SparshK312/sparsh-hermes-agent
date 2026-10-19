@@ -171,6 +171,63 @@ Learn more about the work: https://www.mechanize.work/what-working-here-is-like
 
 About Mechanize. ~20 person team in San Francisco. Backed by Patrick Collison, Nat Friedman, Daniel Gross, Jeff Dean, Dwarkesh Patel, and Sholto Douglas. Featured in the New York Times https://www.nytimes.com/2025/06/11/technology/ai-mechanize-jobs.html, the Dwarkesh Podcast https://www.dwarkesh.com/p/ege-tamay and Hard Fork https://www.youtube.com/watch?v=M5Lycj5IRwQ.""",
     },
+    # ── DataRobot MCP & Memory Intern, added 2026-10-19 (his call: "sure u can add heygen,
+    #    datarobot"). Boston / Massachusetts-remote, full time. The work is MCP + agent memory,
+    #    the closest match to his agent work in the Oct 19 triage. The posting states NO term;
+    #    cycle "Winter 2027" is his call (confirm Jan-Apr with them). JD from Workday CXS.
+    {
+        "company": "DataRobot", "added": "2026-10-19",
+        "role": "MCP & Memory Intern",
+        "url": "https://datarobot.wd1.myworkdayjobs.com/DataRobot_External_Careers/job/Boston-Massachusetts-US/MCP---Memory-Intern_R-102755",
+        "location": "Boston, MA / Massachusetts remote", "cycle": "Winter 2027", "req_id": "R-102755",
+        "jd": """Job Description:
+DataRobot delivers AI that maximizes impact and minimizes business risk. Our platform and applications integrate into core business processes so teams can develop, deliver, and govern AI at scale. DataRobot empowers practitioners to deliver predictive and generative AI, and enables leaders to secure their AI assets. Organizations worldwide rely on DataRobot for AI that makes sense for their business — today and in the future. 
+This effort is about making AI agents more useful in real work: giving them the right tools, the right context, and a memory that holds up across a conversation and across sessions. The focus is Model Context Protocol (MCP) and agent memory, how an agent discovers tools, calls them safely, keeps track of what it has learned, and stays helpful without someone watching every step. The goal is practical value for people using agents day to day, with clean implementations that others can build on.
+Summary:
+This is a hands-on internship for someone curious about AI agents who wants to learn by building. You do not need to already be an expert. What matters is that you like figuring things out, you move without waiting to be told every next step, and you care about unblocking the people around you. Most of the work sits on MCP and memory: connecting agents to tools, shaping how context is passed in, and designing how an agent remembers what is useful and forgets what is not. You will write code, try ideas, see what breaks, and ship improvements in a fast-moving environment. A good attitude and the willingness to learn matter more than a perfect resume.
+Required Skills:
+Comfort writing and reading Python, and a willingness to get better at it quickly.
+Curiosity about how AI agents work: tools, prompts, context windows, and why an agent succeeds or fails on a real task.
+Interest in MCP — how servers expose tools, how clients call them, and how that contract stays simple and reliable.
+Interest in memory for agents: what to store, what to retrieve, and how that changes what the agent can do next.
+Ability to take a vague problem, try a small version, and show what you learned.
+Clear communication: you say when you are stuck, you share what you tried, and you help other people move faster.
+Good engineering habits you are willing to practice: readable code, small tests, and notes so the next person is not lost.
+You take feedback on board. When someone points out a better approach, a mistake, or a simpler path, use it and adjust.
+Strong Plus:
+You have built or used an MCP server or client, even a small one.
+You have played with agent frameworks or tool calling.
+You have thought about memory, caching, or conversation state in any product, not only in AI.
+You enjoy fast environments and would rather try something today than wait for a perfect plan.
+You like helping teammates get unblocked, even when the task is not yours.
+What You Can Expect To Work On:
+Building and improving MCP servers and clients: tool definitions, inputs and outputs, error handling, and examples other people can run.
+Experimenting with agent memory: what gets saved, how it is retrieved, and how that changes task quality.
+Wiring tools and memory into an agent loop and watching where it gets confused, slow, or wrong.
+Making small, clear changes that unblock teammates - docs, fixtures, smoke tests, and fixes that remove friction.
+Turning a rough idea into something that runs, then tightening it based on what you see.
+Pairing with people who know the system well, then owning the next slice yourself.
+What You Should Expect:
+Work close to how agents actually get used, with MCP and memory at the center.
+A fast pace: short loops, quick feedback, and room to try things without a long approval chain.
+Trust to drive your own tasks once the goal is clear. You will not be micro-managed.
+A team that likes curiosity, a steady attitude, and people who make others faster.
+Room to learn in public: questions are welcome, and “I don’t know yet” is a fine starting point if you go find out.
+A role for someone who wants to grow into agentic systems by shipping, not by waiting until they feel fully ready.
+The talent and dedication of our employees are at the core of DataRobot’s journey to be an iconic company. We strive to attract and retain the best talent by providing competitive pay and benefits with our employees’ well-being at the core. Here’s what your benefits package may include depending on your location and local legal requirements: Medical, Dental & Vision Insurance, Flexible Time Off Program, Paid Holidays, Paid Parental Leave, Global Employee Assistance Program (EAP) and more!
+DataRobot Operating Principles:
+Wow Our Customers
+Set High Standards
+Be Better Than Yesterday
+Be Rigorous
+Assume Positive Intent
+Have the Tough Conversations
+Be Better Together
+Debate, Decide, Commit
+Deliver Results
+Overcommunicate
+Research shows that many women only apply to jobs when they meet 100% of the qualifications while many men apply to jobs when they meet 60%. At DataRobot we encourage ALL candidates, especially women, people of color, LGBTQ+ identifying people, differently abled, and other people from marginalized groups to apply to our jobs, even if you do not check every box. We’d love to have a conversation with you and see if you might be a great fit.""",
+    },
 ]
 
 
