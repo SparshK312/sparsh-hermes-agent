@@ -145,6 +145,12 @@ WINTER_ONLY_APPLY = {
     #     4540716007), Toronto/LA/SF/Singapore. Quals: "within one year of graduation" (a stretch).
     #   DataRobot -- MCP & Memory Intern (Workday R-102755), via manual_postings (no term stated).
     "heygen", "datarobot",
+    # 2026-10-22, his call ("yea sure you can promote it"): 1Password was never named on
+    #   any list, so it defaulted to Below Bar; not a ruling. Six "Developer Intern ...
+    #   Winter 2027" reqs posted Oct 22 (ashby 1password), Jan - Apr 2027, remote
+    #   Canada/US. At least the level of the Oct-9 group A (Geotab, StackAdapt, Kinaxis).
+    #   Winter only.
+    "1password",
 }
 
 # Companies whose names collapse to something generic once normalized, so they are
