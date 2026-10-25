@@ -228,6 +228,52 @@ Deliver Results
 Overcommunicate
 Research shows that many women only apply to jobs when they meet 100% of the qualifications while many men apply to jobs when they meet 60%. At DataRobot we encourage ALL candidates, especially women, people of color, LGBTQ+ identifying people, differently abled, and other people from marginalized groups to apply to our jobs, even if you do not check every box. We’d love to have a conversation with you and see if you might be a great fit.""",
     },
+    # ── Amazon Systems Development Engineer Intern (US) 2027, JD read via amazon.jobs
+    #    search.json 2026-10-24 (his call: stage it). Not on the board before this: the
+    #    brand feeds carry Amazon SDE reqs but this SysDE req never landed. Winter term is
+    #    a selectable preference (Jan-March 2027); summer is the other option.
+    {
+        "company": "Amazon", "added": "2026-10-24",
+        "role": "Systems Development Engineer Intern, (US) 2027",
+        "url": "https://www.amazon.jobs/en/jobs/10573984/systems-development-engineer-intern-us-2027",
+        "location": "Bellevue, Washington (also WA, TX, AZ, MA)", "cycle": "Winter 2027", "req_id": "10573984",
+        "jd": """Applicants should have a minimum of one quarter/semester/trimester remaining in their studies after their internship concludes. 
+
+This position is currently hiring for Winter (Jan-March, 2027) and Summer (May-June, 2027) in several locations in WA, TX, AZ, and MA. 
+
+You will be able to provide your preference of location and start date during the application process but, we cannot guarantee that we can meet your selection based on several factors including but not limited to the availability and business needs of this role. Finalization on the location and start dates available will be provided to you at the time of job offer.
+
+Key job responsibilities
+As a system development engineer intern, you will/may: 
+• Create, improve, or invent tools and/or applications that are a part of a larger system. 
+• Build and operate a supportable product or service, and is making significant technical contributions to it
+• Write code that is secure, stable, testable, maintainable and has minimal defects. 
+• Understanding of a variety of technologies such as hardware, software, networking, and operating systems, and how they interact with one another
+• Build systems and processes that enable other builders through improved safety, agility, and automation
+• Seek to learn the business context and technologies behind your team’s system implementations.
+
+A day in the life
+Our internship program provides hands-on learning and building experiences for students who are interested in a career in system engineering. In addition to working on an impactful project, you will have the opportunity to engage with Amazonians for both personal and professional development, expand your network, and participate in fun activities with other interns throughout the summer. No matter the location of your internship, we give you the tools to own your internship and learn in a real-world setting.
+
+About the team
+Are you interested in building and developing unique technology solutions to solve business and customer problems? Do you want to be a part of a fast-paced organization and contribute to one of the most visited sites on the Internet?
+
+If this describes you, consider joining us as an intern! Amazon is looking for system development engineer interns to join one of our many lines of business. Amazon interns have the opportunity to work alongside the industry’s brightest engineers who innovate every day on behalf of our customers. You will be matched to a manager and a mentor. You will have the opportunity to impact the evolution of Amazon technology as well as lead mission-critical projects early in your career. Your work will contribute to solving some of the most complex technical challenges in the company.
+
+BASIC QUALIFICATIONS
+- Are enrolled in or have completed a Bachelor's degree or above in Computer Science, Computer Engineering, Systems Engineering, Electrical Engineering, or other related discipline
+- Experience coding, scripting, automating in at least one language (e.g., Python, C, C++, Java, Ruby, or PowerShell)
+- Are 18 years of age or older
+- Work 40 hours/week minimum and commit to 12 week internship maximum
+
+PREFERRED QUALIFICATIONS
+- Experience with open-source technologies (e.g. Linux, Spring, React)
+- Experience with TCP/ICP networking fundamentals and application of IP protocols such as: DNS, DHCP, NTP, SMTP, and SNMP
+- Experience with distributed computing, programs and systems
+- Experience with automating and simplifying team development, test, and operations processes
+- Knowledge of computer science fundamentals such as object-oriented design, operating systems, algorithms, data structures, and complexity analysis
+- Experience with documentation and problem-solving skills with attention to detail""",
+    },
 ]
 
 
