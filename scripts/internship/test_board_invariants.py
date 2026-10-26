@@ -1270,6 +1270,111 @@ def test_swelist_links_resolve_before_dedup():
     check("the cache is persisted at the end of the gather", "simplify_resolve.save_cache()" in g, True)
 
 
+def test_short_links_resolve_and_collapse():
+    print("SL1. go.vansh.nyc short links resolve to the employer url; stored twins collapse, never the employer row")
+    import short_link_resolve as R
+    from curated_store import CuratedStore
+    check("key_of strips the ?s= source tag", R.key_of("https://go.vansh.nyc/9t?s=z"), "go.vansh.nyc/9t")
+    check("an employer url is not a short link", R.is_short_link("https://jobs.ashbyhq.com/brainco/x"), False)
+    saved = (R._CACHE, R.MAX_RESOLVES_PER_RUN)
+    try:
+        R._CACHE = {}
+        R.reset_run()
+        check("a 302 to an employer resolves",
+              R.resolve("https://go.vansh.nyc/aa?s=y", _fetch=lambda u: "https://jobs.ashbyhq.com/acme/1/application"),
+              "https://jobs.ashbyhq.com/acme/1/application")
+        check("a redirect to another aggregator is not a resolution",
+              R.resolve("https://go.vansh.nyc/bb", _fetch=lambda u: "https://simplify.jobs/p/x"), "")
+        check("a network error (None) is NOT cached, so it retries next run",
+              (R.resolve("https://go.vansh.nyc/cc", _fetch=lambda u: None), "go.vansh.nyc/cc" in R._CACHE), ("", False))
+        R.MAX_RESOLVES_PER_RUN = 0
+        R.reset_run()
+        check("the budget names its victims", (R.resolve("https://go.vansh.nyc/dd", _fetch=lambda u: "x"),
+                                               R.BUDGET_SKIPPED), ("", ["go.vansh.nyc/dd"]))
+        check("a cached link costs no budget", R.resolve("https://go.vansh.nyc/aa"),
+              "https://jobs.ashbyhq.com/acme/1/application")
+    finally:
+        R._CACHE, R.MAX_RESOLVES_PER_RUN = saved
+        R.reset_run()
+
+    sq = lambda x: re.sub(r"\s+", "", x)
+    g = sq(_code_only((Path(__file__).parent / "wide_net_source.py").read_text()))
+    g = g[g.index(sq("def _gather_postings")):g.index(sq("def _apply_enrich_cap"))]
+    check("short links resolve BEFORE the cid is computed",
+          g.index(sq("short_link_resolve.resolve(")) < g.index(sq("cid = p.canonical_id or canonical_id(p.url)")), True)
+    check("the resolved url becomes the row's id", sq("p.canonical_id = canonical_id(target)") in g, True)
+    check("the budget's victims are logged", sq("short_link_resolve.BUDGET_SKIPPED") in g, True)
+    check("the resolve cache is persisted", sq("short_link_resolve.save_cache()") in g, True)
+
+    st = CuratedStore(Path("/nonexistent/never-saved.json"))
+
+    def put(cid, company, role, loc, url, source, status="", notes="", jd=""):
+        e = st.entry(cid)
+        e["machine"].update({"company": company, "role": role, "location": loc, "url": url,
+                             "source": source, "full_jd": jd, "dead": False})
+        e["human"].update({"status": status, "notes": notes})
+    put("jobs.ashbyhq.com/1password/aaa", "1Password", "Developer Intern - Credential Brokering", "Remote",
+        "https://jobs.ashbyhq.com/1password/aaa", "brand-board", status="To Apply", notes="[Oct 24] STAGED", jd="x" * 400)
+    put("go.vansh.nyc/gT?s=z", "1Password", "Developer Intern, Credential Brokering", "Remote (US | Canada)",
+        "https://go.vansh.nyc/gT?s=z", "wide:vansh-offseason", status="To Apply")
+    # a vansh-only posting whose employer row is harvested for the first time this run
+    put("go.vansh.nyc/D1?s=y", "Apple", "Aeon Modeling Software Intern", "Cupertino",
+        "https://go.vansh.nyc/D1?s=y", "wide:vansh-main", jd="x" * 900)
+    put("jobs.apple.com/en-us/details/200690119", "Apple", "Aeon Modeling Software Intern", "Cupertino, CA",
+        "https://jobs.apple.com/en-us/details/200690119", "wide:vansh-main")
+    # a decided (Not a Fit) employer row and its untouched short-link twin
+    put("jobs.ashbyhq.com/1password/eee", "1Password", "Developer Intern - Data Security", "Remote",
+        "https://jobs.ashbyhq.com/1password/eee", "brand-board", status="Not a Fit")
+    put("go.vansh.nyc/eY?s=z", "1Password", "Developer Intern, Data Security", "Remote (US | Canada)",
+        "https://go.vansh.nyc/eY?s=z", "wide:vansh-offseason")
+    # a short-link row HE touched is never migrated
+    put("go.vansh.nyc/zz?s=y", "Acme", "SWE Intern", "NYC", "https://go.vansh.nyc/zz?s=y",
+        "wide:vansh-main", notes="emailed the recruiter")
+    saved = R._CACHE
+    try:
+        R._CACHE = {"go.vansh.nyc/gT": "https://jobs.ashbyhq.com/1password/aaa/application",
+                    "go.vansh.nyc/D1": "https://jobs.apple.com/en-us/details/200690119",
+                    "go.vansh.nyc/eY": "https://jobs.ashbyhq.com/1password/eee/application",
+                    "go.vansh.nyc/zz": "https://job-boards.greenhouse.io/acme/jobs/9"}
+        migrated = curate._migrate_short_link_rows(st)
+    finally:
+        R._CACHE = saved
+    check("untouched short-link rows are pointed at the employer url (the touched one is not)", migrated, 3)
+    check("the touched row keeps its short link", st.postings["go.vansh.nyc/zz?s=y"]["machine"]["url"],
+          "https://go.vansh.nyc/zz?s=y")
+    curate._collapse_duplicates(st)
+    curate._collapse_shadowed_twins(st)
+    dead = {c for c, e in st.items() if e["machine"].get("dead")}
+    check("the short-link twin dies, the staged employer row lives",
+          ("go.vansh.nyc/gT?s=z" in dead, "jobs.ashbyhq.com/1password/aaa" in dead), (True, False))
+    check("the employer-keyed row survives even when the short-link row has the fuller JD",
+          ("go.vansh.nyc/D1?s=y" in dead, "jobs.apple.com/en-us/details/200690119" in dead), (True, False))
+    check("a short-link twin of a Not-a-Fit req does not reappear undecided",
+          ("go.vansh.nyc/eY?s=z" in dead, "jobs.ashbyhq.com/1password/eee" in dead), (True, False))
+    check("the staged note survives", st.postings["jobs.ashbyhq.com/1password/aaa"]["human"]["notes"], "[Oct 24] STAGED")
+    check("no human status changed", st.postings["jobs.ashbyhq.com/1password/eee"]["human"]["status"], "Not a Fit")
+
+
+def test_harvest_keeps_one_record_per_id_and_the_boards_company():
+    print("CB1. one harvested record per id (brand board wins), and an ATS token names the company")
+    from company_boards import company_for_url
+    check("figureai greenhouse token -> Figure (speedyapply calls it FightCamp)",
+          company_for_url("https://job-boards.greenhouse.io/figureai/jobs/4724521006"), "Figure")
+    check("ashby org -> its board", company_for_url("https://jobs.ashbyhq.com/brainco/b6adda4c/application"), "Brain Co.")
+    check("a url on no known board names nobody", company_for_url("https://joinfightcamp.com/careers/1"), "")
+    sq = lambda x: re.sub(r"\s+", "", x)
+    src = sq(_code_only((Path(__file__).parent / "curate.py").read_text()))
+    r = src[src.index(sq("async def refresh")):]
+    loop = r[r.index(sq("harvested: set[str] = set()")):r.index(sq("_score_into(store, cid"))]
+    check("the store is written from the per-id winners, not from the (company, role, location) groups",
+          sq("for r in by_cid.values():") in loop and sq("for r in best.values():") not in loop, True)
+    pick = r[r.index(sq("by_cid: dict[str, dict] = {}")):r.index(sq("harvested: set[str] = set()"))]
+    check("the per-id winner uses the same brand > JD > fresher rule", sq("_better(r, by_cid[cid])") in pick, True)
+    norm = r[r.index(sq('r["company"] = _clean_company(r["company"])')):r.index(sq("def _better"))]
+    check("non-brand records take the board's company from the url", sq("company_for_url(") in norm
+          and "brand-board" in norm, True)
+
+
 def test_season_month_range_and_oct14_winter_names():
     print("W14. cycle: 'Winter/Spring (January - May 2027)' reads as Winter; Oct 14 Winter-bar names")
     from brand_first_source import _cycle_label
@@ -2594,6 +2699,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_tier_table_names_the_audit_misses,
            test_enrich_cap_never_cuts_target_tiers,
            test_swelist_links_resolve_before_dedup,
+           test_short_links_resolve_and_collapse,
+           test_harvest_keeps_one_record_per_id_and_the_boards_company,
            test_cycle_label_ignores_graduation_dates,
            test_oracle_boards_are_first_class,
            test_coverage_digest_partition,

@@ -170,7 +170,8 @@ sys.path.append(str(VAULT / "Scripts"))
 import brand_first_source  # noqa: E402
 import wide_net_source  # noqa: E402
 import manual_postings  # noqa: E402
-from company_boards import boards as _boards  # noqa: E402
+from company_boards import boards as _boards, company_for_url  # noqa: E402
+import short_link_resolve  # noqa: E402
 from build_curated_xlsx import (PIPELINE_STATUSES, REVIEWED_STATUSES, classify_row, is_locked,  # noqa: E402
                                 write_board)
 try:
@@ -394,11 +395,16 @@ def _dup_quality(e: dict) -> tuple:
     """Higher sorts first. Employer-hosted beats aggregator, then fuller JD, then fresher."""
     m = e.get("machine") or {}
     url = (m.get("url") or "").lower()
-    aggregator = any(a in url for a in ("simplify.jobs", "jobright", "swelist", "api.smartrecruiters"))
+    aggregator = any(a in url for a in ("simplify.jobs", "jobright", "swelist", "api.smartrecruiters",
+                                         "go.vansh.nyc"))
     brand = (m.get("source") == "brand-board")
+    # A row still KEYED by an aggregator short link (its url was rewritten from the cache
+    # by _migrate_short_link_rows) is never re-harvested under that key, so it must never
+    # be the survivor of a collapse: it would strike out and take the posting with it.
+    keyed_by_short_link = bool(m.get("short_link"))
     age = m.get("age_days")
-    return (int(brand), int(not aggregator), len(m.get("full_jd") or ""),
-            -(999 if age is None else int(age)))
+    return (int(brand), int(not keyed_by_short_link), int(not aggregator),
+            len(m.get("full_jd") or ""), -(999 if age is None else int(age)))
 
 
 def _norm_rid(m: dict) -> str:
@@ -436,6 +442,36 @@ def _same_human(store, cids) -> bool:
         h = store.postings[c].get("human") or {}
         seen.add(tuple(sorted((k, (v or "").strip()) for k, v in h.items() if (v or "").strip())))
     return len(seen) == 1
+
+
+def _migrate_short_link_rows(store) -> int:
+    """Rewrite the url of stored rows still keyed by an aggregator short link
+    (go.vansh.nyc/<code>) to the employer URL the resolver cached, so _collapse_duplicates'
+    url pass can match them to the employer's row. Cache-only, no network.
+
+    The KEY is not changed (re-keying the store without the Sheet is the 2026-09-05
+    blank-row defect: the read-back would adopt the Sheet's old ids as orphans). The row
+    keeps its id, is collapsed as a duplicate, and its Sheet row routes off the queue
+    with it. A row he has TOUCHED is left alone and logged: collapsing it would make the
+    short-link row the survivor (touched wins), and that row is never re-harvested.
+    Returns rows rewritten."""
+    n = 0
+    for cid, e in store.postings.items():
+        m = e.get("machine") or {}
+        url = m.get("url") or ""
+        if m.get("dead") or not short_link_resolve.is_short_link(url):
+            continue
+        target = short_link_resolve.cached(url)
+        if not target:
+            continue
+        if _touched(e.get("human") or {}):
+            print(f"[refresh] ⚠️  short-link row {cid} resolves to {target[:70]} but he has "
+                  f"touched it — left as is; resolve by hand", file=sys.stderr)
+            continue
+        m["short_link"] = url
+        m["url"] = target
+        n += 1
+    return n
 
 
 def _collapse_duplicates(store) -> int:
@@ -569,6 +605,15 @@ def _collapse_shadowed_twins(store) -> int:
         # passes, and marking one Not a Fit would have killed the other. Measured: the
         # rid key alone produces the IDENTICAL 5 collapses, so the title key buys nothing
         # and risks exactly the loss this whole pass exists to prevent.
+        # 2026-10-26: the URL itself IS a positive match, stronger than a req id: two
+        # rows whose urls canonicalise to the same posting are one requisition. Needed
+        # for short-link rows that _migrate_short_link_rows pointed at an employer url
+        # with no parseable req id (Ashby/Greenhouse/Microsoft): 1Password's four
+        # Not-a-Fit reqs and both Skipped Microsoft Security & Identity reqs reappeared
+        # undecided this way.
+        u_cid = canonical_id(m.get("url") or "")
+        if u_cid:
+            groups.setdefault(("url", u_cid), []).append(cid)
 
     collapsed = 0
     for key, cids in groups.items():
@@ -693,6 +738,13 @@ async def refresh(notify: bool = False) -> int:
     # (brand-board > more JD > fresher).
     for r in lane1 + lane2 + lane0:
         r["company"] = _clean_company(r["company"])
+        # The employer's own ATS board names the company better than an aggregator's
+        # label (speedyapply calls Figure's greenhouse board "FightCamp"). Only for a
+        # URL on a board in company_boards.py, matched by its ATS token.
+        if r["_src"] != "brand-board":
+            owner = company_for_url(r.get("url", ""))
+            if owner and normalize_company_name(owner) != normalize_company_name(r["company"]):
+                r["company"] = owner
 
     def _better(a, b):
         a1, b1 = a["_src"] == "brand-board", b["_src"] == "brand-board"
@@ -724,8 +776,22 @@ async def refresh(notify: bool = False) -> int:
         if key not in best or _better(r, best[key]):
             best[key] = r
 
-    harvested: set[str] = set()
+    # 🔴 ONE RECORD PER ID (2026-10-26). `best` is keyed on (company, role, location), so
+    # two records for the SAME URL survive it whenever an aggregator spells the company
+    # or title differently -- and both were then written to the same cid below, the LAST
+    # one winning. Lane 2 is written after lane 1, so the aggregator overwrote the
+    # employer's own board: speedyapply labels Figure's greenhouse reqs "FightCamp", and
+    # Figure's Developer Productivity Intern (figureai/4724521006) sat in Below Bar as a
+    # tier-C "FightCamp" row while Figure's brand board was returning it every run.
+    # Same preference as `best` (brand > JD > fresher), applied per id.
+    by_cid: dict[str, dict] = {}
     for r in best.values():
+        cid = r["canonical_id"]
+        if cid not in by_cid or _better(r, by_cid[cid]):
+            by_cid[cid] = r
+
+    harvested: set[str] = set()
+    for r in by_cid.values():
         cid = r["canonical_id"]
         harvested.add(cid)
         _score_into(store, cid, {
@@ -758,6 +824,11 @@ async def refresh(notify: bool = False) -> int:
               f"stored) — almost certainly a network failure. Aborting WITHOUT touching the "
               f"board (no stale-check, no overwrite).", file=sys.stderr)
         return 0
+
+    migrated = _migrate_short_link_rows(store)
+    if migrated:
+        print(f"[refresh] {migrated} short-link row(s) pointed at their employer URL "
+              f"(they collapse into the employer row below)", file=sys.stderr)
 
     # 4) re-score everything (recency decays) + stale-check dropouts
     #

@@ -35,6 +35,7 @@ from internship_scraper import (
 )
 import gmail_source
 import simplify_resolve
+import short_link_resolve
 
 # Comprehensive mode: keep ALL relevant intern roles (incl. non-brand "C" tier),
 # not just recognized brands. Brand still wins ranking via hotness; C-tier is
@@ -140,6 +141,7 @@ def _gather_postings() -> list:
     seen_ct: set[tuple[str, str]] = set()
     cand = []
     simplify_resolve.reset_run()
+    short_link_resolve.reset_run()
     # newest newsletter rows first, so the per-run resolve budget goes to this week's
     # postings rather than the tail of the 12-day IMAP window
     gmail = sorted(gmail, key=lambda p: 999 if p.age_days is None else p.age_days)
@@ -160,6 +162,16 @@ def _gather_postings() -> list:
                 p.canonical_id = canonical_id(hit["url"])
                 p.location = hit.get("location") or p.location
                 p.posted_date = hit.get("posted_date") or p.posted_date
+        # vansh READMEs carry go.vansh.nyc short links (since ~Oct 2026): no req id, so
+        # the id dedup below could never match them to the employer's row. Resolve to the
+        # employer URL FIRST (one cached 302 hop). Cheap gates before the network call.
+        elif (short_link_resolve.is_short_link(p.url)
+                and role_lane(p.title) is not None
+                and classify_period(p.title, p.terms, p.source)[0] != "reject"):
+            target = short_link_resolve.resolve(p.url)
+            if target:
+                p.url = target
+                p.canonical_id = canonical_id(target)
         cid = p.canonical_id or canonical_id(p.url)
         if not cid or cid in seen:
             continue
@@ -206,6 +218,15 @@ def _gather_postings() -> list:
             or simplify_resolve.STATS["budget_exhausted"]:
         print(f"[wide-net] simplify links: {simplify_resolve.STATS}", file=sys.stderr)
     simplify_resolve.save_cache()
+    if short_link_resolve.STATS["resolved"] or short_link_resolve.STATS["failed"] \
+            or short_link_resolve.STATS["budget_exhausted"]:
+        print(f"[wide-net] short links: {short_link_resolve.STATS}", file=sys.stderr)
+    if short_link_resolve.BUDGET_SKIPPED:
+        print(f"[wide-net] ⚠️ short-link budget ({short_link_resolve.MAX_RESOLVES_PER_RUN}/run) "
+              f"spent; {len(short_link_resolve.BUDGET_SKIPPED)} link(s) keep their short id "
+              f"until next run: {', '.join(short_link_resolve.BUDGET_SKIPPED[:20])}",
+              file=sys.stderr)
+    short_link_resolve.save_cache()
     # tier first (the cap protects S/A/B outright), then FRESHEST first within a tier so
     # the tier-C budget rotates onto new postings instead of the same first-seen rows.
     cand.sort(key=lambda p: (_TIER_RANK.get(brand_tier(p.company), 3),

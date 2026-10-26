@@ -30,6 +30,8 @@ Most B-tier entries are derived from REAL verified URLs in the existing
 Application Tracker; the S/A brand boards are validated by --validate-boards.
 """
 
+import re
+
 BOARDS = [
     # ── S tier — FAANG+ & top AI labs ──────────────────────────────────────
     {"name": "NVIDIA", "tier": "S", "ats_type": "workday",
@@ -425,6 +427,32 @@ BOARDS = [
 
 def boards() -> list[dict]:
     return list(BOARDS)
+
+
+# ATS URL shapes that carry the board's own token, so the token identifies the employer.
+# Only the token-in-path ATSes: one token is one employer on these (Workday/iCIMS hosts
+# can be shared tenants, so they are deliberately not here).
+_TOKEN_URL_RES = {
+    "greenhouse": re.compile(r"(?:job-boards|boards)(?:\.eu)?\.greenhouse\.io/(?:embed/job_app\?for=)?([A-Za-z0-9_-]+)", re.I),
+    "ashby": re.compile(r"jobs\.ashbyhq\.com/([^/?#]+)", re.I),
+    "lever": re.compile(r"jobs\.(?:eu\.)?lever\.co/([^/?#]+)", re.I),
+}
+_TOKEN_KEY = {"greenhouse": "token", "ashby": "org", "lever": "site"}
+
+
+def company_for_url(url: str) -> str:
+    """The board's company name when `url` is a posting on a board in BOARDS (matched by
+    its greenhouse token / ashby org / lever site), else ''. Added 2026-10-26: speedyapply
+    labels Figure's greenhouse reqs "FightCamp"; the employer's own token is the truth."""
+    for b in BOARDS:
+        rx = _TOKEN_URL_RES.get(b.get("ats_type", ""))
+        tok = b.get(_TOKEN_KEY.get(b.get("ats_type", ""), ""), "")
+        if not rx or not tok:
+            continue
+        m = rx.search(url or "")
+        if m and m.group(1).lower() == str(tok).lower():
+            return b["name"]
+    return ""
 
 
 def tier_of(name: str) -> str:
