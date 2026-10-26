@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gmail_source                                                       # noqa: E402
 import store_paths                                                        # noqa: E402
 import wide_net_source                                                    # noqa: E402
+import short_link_resolve                                                 # noqa: E402
 from curated_store import CuratedStore                                    # noqa: E402
 from hotness import brand_tier, normalize_company_name, role_lane          # noqa: E402
 from internship_scraper import canonical_id, classify_location, classify_period  # noqa: E402
@@ -124,7 +125,10 @@ def partition(postings: list, idx: dict, days: int = DEFAULT_DAYS) -> tuple[dict
                 nontarget[p.company.strip()].append(p)
         else:
             cid = p.canonical_id or canonical_id(p.url)
-            held = cid in idx["ids"] or key in idx["triples"] or (not key[2] and key[:2] in idx["pairs"])
+            # A short-link posting is held under its EMPLOYER id (2026-10-26).
+            _emp = short_link_resolve.cached(p.url)
+            ids = {cid, canonical_id(_emp)} if _emp else {cid}
+            held = bool(ids & idx["ids"]) or key in idx["triples"] or (not key[2] and key[:2] in idx["pairs"])
             if not held:
                 gaps.append(p)
     return dict(nontarget), gaps

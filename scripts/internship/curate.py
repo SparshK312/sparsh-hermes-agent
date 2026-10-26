@@ -450,11 +450,12 @@ def _migrate_short_link_rows(store) -> int:
     url pass can match them to the employer's row. Cache-only, no network.
 
     The KEY is not changed (re-keying the store without the Sheet is the 2026-09-05
-    blank-row defect: the read-back would adopt the Sheet's old ids as orphans). The row
-    keeps its id, is collapsed as a duplicate, and its Sheet row routes off the queue
-    with it. A row he has TOUCHED is left alone and logged: collapsing it would make the
-    short-link row the survivor (touched wins), and that row is never re-harvested.
-    Returns rows rewritten."""
+    blank-row defect: the read-back would adopt the Sheet's old ids as orphans). An
+    UNTOUCHED row is collapsed into its employer twin. A row he has TOUCHED keeps every
+    human field where he put it: it wins the collapse (touched wins; a Skip/Not-a-Fit row
+    becomes the anchor of the shadowed-twins pass), and the stale-check counts it as seen
+    whenever its employer id is harvested (`m["short_link"]` + its rewritten url), so it is
+    never struck out with his note on it. Returns rows rewritten."""
     n = 0
     for cid, e in store.postings.items():
         m = e.get("machine") or {}
@@ -464,14 +465,17 @@ def _migrate_short_link_rows(store) -> int:
         target = short_link_resolve.cached(url)
         if not target:
             continue
-        if _touched(e.get("human") or {}):
-            print(f"[refresh] ⚠️  short-link row {cid} resolves to {target[:70]} but he has "
-                  f"touched it — left as is; resolve by hand", file=sys.stderr)
-            continue
         m["short_link"] = url
         m["url"] = target
         n += 1
     return n
+
+
+def _in_feed(cid: str, m: dict, harvested: set) -> bool:
+    """Seen this run: its own id was harvested, or it is a short-link row whose employer
+    id was (it stands for that posting; see _migrate_short_link_rows)."""
+    return cid in harvested or (bool(m.get("short_link"))
+                                and canonical_id(m.get("url") or "") in harvested)
 
 
 def _collapse_duplicates(store) -> int:
@@ -642,6 +646,89 @@ def _collapse_shadowed_twins(store) -> int:
     return collapsed
 
 
+def _harvest_winners(records: list[dict]) -> dict[str, dict]:
+    """The harvest's write set: ONE record per canonical id. Pure (no store, no
+    network) so the invariants suite can call it on fixtures. Cleans the company
+    name, lets an ATS token name the company for non-brand records, picks the best
+    record per (company, role, location), then the best per id."""
+    # clean display company names (strip aggregator emoji/symbols) + cross-lane dedup
+    # by (company, role): same role from two sources -> keep the better one
+    # (brand-board > more JD > fresher).
+    for r in records:
+        r["company"] = _clean_company(r["company"])
+        # The employer's own ATS board names the company better than an aggregator's
+        # label (speedyapply calls Figure's greenhouse board "FightCamp"). Only for a
+        # URL on a board in company_boards.py, matched by its ATS token.
+        if r["_src"] != "brand-board":
+            owner = company_for_url(r.get("url", ""))
+            if owner and normalize_company_name(owner) != normalize_company_name(r["company"]):
+                r["company"] = owner
+
+    def _better(a, b):
+        a1, b1 = a["_src"] == "brand-board", b["_src"] == "brand-board"
+        if a1 != b1:
+            return a1
+        if len(a.get("full_jd", "")) != len(b.get("full_jd", "")):
+            return len(a.get("full_jd", "")) > len(b.get("full_jd", ""))
+        # `or 999` is WRONG here: age_days == 0 is falsy, so a role posted TODAY
+        # scored 999 and LOST dedup to an older duplicate — exactly inverted, and
+        # it penalised precisely the postings most worth applying to first.
+        a_age = a.get("age_days")
+        b_age = b.get("age_days")
+        return (999 if a_age is None else a_age) < (999 if b_age is None else b_age)
+
+    # 🔴 LOCATION IS PART OF THE KEY (2026-09-08). This loop keyed on
+    # (company, role) only, which silently re-collapsed exactly what the same fix
+    # in brand_first_source.collect() had just separated one step earlier — the
+    # lane-1 repair was nullified here and never reached the board. Measured on a
+    # live pull: 22 groups / 46 distinct reqs dropped in lane 1, plus 60 groups /
+    # 107 rows in lane 2, including two DIFFERENT Google "Software Engineer
+    # Intern - Multiple Teams" reqs and Palantir's per-city Lever reqs, where
+    # New York (his target) routinely lost to London on the _better() tiebreak.
+    # _better() ranks brand > JD length > age and never considers location, so
+    # which city survived was effectively arbitrary.
+    best: dict[tuple, dict] = {}
+    for r in records:
+        key = (normalize_company_name(r["company"]), r["role"].strip().lower(),
+               (r.get("location") or "").strip().lower())
+        if key not in best or _better(r, best[key]):
+            best[key] = r
+
+    # 🔴 ONE RECORD PER ID (2026-10-26). `best` is keyed on (company, role, location), so
+    # two records for the SAME URL survive it whenever an aggregator spells the company
+    # or title differently -- and both were then written to the same cid below, the LAST
+    # one winning. Lane 2 is written after lane 1, so the aggregator overwrote the
+    # employer's own board: speedyapply labels Figure's greenhouse reqs "FightCamp", and
+    # Figure's Developer Productivity Intern (figureai/4724521006) sat in Below Bar as a
+    # tier-C "FightCamp" row while Figure's brand board was returning it every run.
+    # Same preference as `best` (brand > JD > fresher), applied per id.
+    by_cid: dict[str, dict] = {}
+    for r in best.values():
+        cid = r["canonical_id"]
+        if cid not in by_cid or _better(r, by_cid[cid]):
+            by_cid[cid] = r
+
+    return by_cid
+
+
+def _write_harvest(store, records: list[dict], today: str) -> set[str]:
+    """Write this run's harvest into the store: ONE record per canonical id (the
+    _harvest_winners pick). Returns the harvested ids. Separate from refresh() so the
+    invariants suite can run it on a fixture store."""
+    by_cid = _harvest_winners(records)
+    harvested: set[str] = set()
+    for r in by_cid.values():
+        cid = r["canonical_id"]
+        harvested.add(cid)
+        _score_into(store, cid, {
+            "company": r["company"], "role": r["role"], "location": r["location"],
+            "url": r["url"], "ats_type": r.get("ats_type", ""), "cycle": r.get("cycle", ""),
+            "posted_date": r.get("posted_date", ""), "age_days": r.get("age_days"),
+            "full_jd": r.get("full_jd", ""), "req_id": r.get("req_id", ""),
+        }, first_seen=today, source=r["_src"])
+    return harvested
+
+
 async def refresh(notify: bool = False) -> int:
     # An open-in-Excel lock no longer aborts the whole refresh — we still harvest, score,
     # and update the store JSON, and only DEFER the xlsx render (step 5). That keeps the
@@ -733,73 +820,7 @@ async def refresh(notify: bool = False) -> int:
     for r in lane0:
         r["_src"] = "manual-add"
 
-    # clean display company names (strip aggregator emoji/symbols) + cross-lane dedup
-    # by (company, role): same role from two sources -> keep the better one
-    # (brand-board > more JD > fresher).
-    for r in lane1 + lane2 + lane0:
-        r["company"] = _clean_company(r["company"])
-        # The employer's own ATS board names the company better than an aggregator's
-        # label (speedyapply calls Figure's greenhouse board "FightCamp"). Only for a
-        # URL on a board in company_boards.py, matched by its ATS token.
-        if r["_src"] != "brand-board":
-            owner = company_for_url(r.get("url", ""))
-            if owner and normalize_company_name(owner) != normalize_company_name(r["company"]):
-                r["company"] = owner
-
-    def _better(a, b):
-        a1, b1 = a["_src"] == "brand-board", b["_src"] == "brand-board"
-        if a1 != b1:
-            return a1
-        if len(a.get("full_jd", "")) != len(b.get("full_jd", "")):
-            return len(a.get("full_jd", "")) > len(b.get("full_jd", ""))
-        # `or 999` is WRONG here: age_days == 0 is falsy, so a role posted TODAY
-        # scored 999 and LOST dedup to an older duplicate — exactly inverted, and
-        # it penalised precisely the postings most worth applying to first.
-        a_age = a.get("age_days")
-        b_age = b.get("age_days")
-        return (999 if a_age is None else a_age) < (999 if b_age is None else b_age)
-
-    # 🔴 LOCATION IS PART OF THE KEY (2026-09-08). This loop keyed on
-    # (company, role) only, which silently re-collapsed exactly what the same fix
-    # in brand_first_source.collect() had just separated one step earlier — the
-    # lane-1 repair was nullified here and never reached the board. Measured on a
-    # live pull: 22 groups / 46 distinct reqs dropped in lane 1, plus 60 groups /
-    # 107 rows in lane 2, including two DIFFERENT Google "Software Engineer
-    # Intern - Multiple Teams" reqs and Palantir's per-city Lever reqs, where
-    # New York (his target) routinely lost to London on the _better() tiebreak.
-    # _better() ranks brand > JD length > age and never considers location, so
-    # which city survived was effectively arbitrary.
-    best: dict[tuple, dict] = {}
-    for r in lane1 + lane2 + lane0:
-        key = (normalize_company_name(r["company"]), r["role"].strip().lower(),
-               (r.get("location") or "").strip().lower())
-        if key not in best or _better(r, best[key]):
-            best[key] = r
-
-    # 🔴 ONE RECORD PER ID (2026-10-26). `best` is keyed on (company, role, location), so
-    # two records for the SAME URL survive it whenever an aggregator spells the company
-    # or title differently -- and both were then written to the same cid below, the LAST
-    # one winning. Lane 2 is written after lane 1, so the aggregator overwrote the
-    # employer's own board: speedyapply labels Figure's greenhouse reqs "FightCamp", and
-    # Figure's Developer Productivity Intern (figureai/4724521006) sat in Below Bar as a
-    # tier-C "FightCamp" row while Figure's brand board was returning it every run.
-    # Same preference as `best` (brand > JD > fresher), applied per id.
-    by_cid: dict[str, dict] = {}
-    for r in best.values():
-        cid = r["canonical_id"]
-        if cid not in by_cid or _better(r, by_cid[cid]):
-            by_cid[cid] = r
-
-    harvested: set[str] = set()
-    for r in by_cid.values():
-        cid = r["canonical_id"]
-        harvested.add(cid)
-        _score_into(store, cid, {
-            "company": r["company"], "role": r["role"], "location": r["location"],
-            "url": r["url"], "ats_type": r["ats_type"], "cycle": r["cycle"],
-            "posted_date": r["posted_date"], "age_days": r["age_days"],
-            "full_jd": r["full_jd"], "req_id": r.get("req_id", ""),
-        }, first_seen=today, source=r["_src"])
+    harvested = _write_harvest(store, lane1 + lane2 + lane0, today)
     print(f"[refresh] {len(lane1)} lane-1 + {len(lane2)} lane-2 + {len(lane0)} manual -> "
           f"{len(harvested)} after cross-lane dedup", file=sys.stderr)
     if wide_net_source.CAPPED_OUT_IDS or wide_net_source.CAPPED_OUT_TRIPLES:
@@ -932,10 +953,13 @@ async def refresh(notify: bool = False) -> int:
         strikes_needed = WIDE_STALE_STRIKES if is_wide else STALE_STRIKES
         min_hours = WIDE_STALE_MIN_HOURS if is_wide else STALE_MIN_HOURS
 
-        if (is_brand or is_wide) and cid not in harvested and not exempt:
+        # A short-link row stands for its employer posting (_migrate_short_link_rows):
+        # it is in the feed whenever that employer id was harvested this run.
+        in_feed = _in_feed(cid, m, harvested)
+        if (is_brand or is_wide) and not in_feed and not exempt:
             if _strike(m, run_now, strikes_needed, min_hours):
                 stale += 1
-        elif cid in harvested:
+        elif in_feed:
             _clear_strikes(m)               # reappeared -> it was never dead
             # 🔴 AND CLEAR THE REASON. Leaving it made `dead_reason` a permanent,
             # unclearable brand: a row collapsed as a duplicate, then re-harvested here,

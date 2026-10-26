@@ -879,6 +879,13 @@ def row_to_posting(row: dict, source_name: str) -> Posting | None:
             _url = extract_first_url(apply_text)
             if _url:
                 AGED_OUT_IDS.add(canonical_id(_url))
+                # A short-link row is STORED under its employer id (wide_net_source
+                # resolves it before the cid), so record that id too or the exemption
+                # misses it (2026-10-26 audit). Cache-only: no request from here.
+                import short_link_resolve as _slr
+                _emp = _slr.cached(_url)
+                if _emp:
+                    AGED_OUT_IDS.add(canonical_id(_emp))
             AGED_OUT_TRIPLES.add((
                 normalize_company_name(re.sub(r"<[^>]+>|\*+|\[|\]\([^)]*\)", "", company).strip()),
                 re.sub(r"\s+", " ", re.sub(r"<[^>]+>|\*+", "", title)).strip().lower(),

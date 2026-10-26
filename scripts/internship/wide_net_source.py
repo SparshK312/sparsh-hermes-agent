@@ -218,14 +218,18 @@ def _gather_postings() -> list:
             or simplify_resolve.STATS["budget_exhausted"]:
         print(f"[wide-net] simplify links: {simplify_resolve.STATS}", file=sys.stderr)
     simplify_resolve.save_cache()
-    if short_link_resolve.STATS["resolved"] or short_link_resolve.STATS["failed"] \
-            or short_link_resolve.STATS["budget_exhausted"]:
+    if any(short_link_resolve.STATS[k] for k in short_link_resolve.STATS if k != "cache_hit"):
         print(f"[wide-net] short links: {short_link_resolve.STATS}", file=sys.stderr)
+    if short_link_resolve.FAILED_CODES:
+        print(f"[wide-net] short-link failures by code: {short_link_resolve.FAILED_CODES} "
+              f"(404/410/200 cached as dead; 429/403/5xx/timeouts retry next run)", file=sys.stderr)
     if short_link_resolve.BUDGET_SKIPPED:
-        print(f"[wide-net] ⚠️ short-link budget ({short_link_resolve.MAX_RESOLVES_PER_RUN}/run) "
-              f"spent; {len(short_link_resolve.BUDGET_SKIPPED)} link(s) keep their short id "
-              f"until next run: {', '.join(short_link_resolve.BUDGET_SKIPPED[:20])}",
-              file=sys.stderr)
+        print(f"[wide-net] ⚠️ short-link resolution skipped {len(short_link_resolve.BUDGET_SKIPPED)} "
+              f"link(s) this run (budget {short_link_resolve.MAX_RESOLVES_PER_RUN}/run, "
+              f"wall {short_link_resolve.WALL_BUDGET_S}s, breaker after "
+              f"{short_link_resolve.MAX_CONSECUTIVE_FAILURES} straight failures; counts in STATS); "
+              f"they keep their short id until next run: "
+              f"{', '.join(short_link_resolve.BUDGET_SKIPPED[:20])}", file=sys.stderr)
     short_link_resolve.save_cache()
     # tier first (the cap protects S/A/B outright), then FRESHEST first within a tier so
     # the tier-C budget rotates onto new postings instead of the same first-seen rows.

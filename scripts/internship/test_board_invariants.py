@@ -1096,6 +1096,18 @@ def test_age_filter_discards_are_exempt_from_strikes():
           any(t[1] == "2027 internship - software engineer" for t in S.AGED_OUT_TRIPLES), True)
     check("a fresh row is harvested and NOT recorded", S.row_to_posting(fresh, "speedyapply-swe") is not None
           and S.canonical_id(fresh["posting"]) not in S.AGED_OUT_IDS, True)
+    # 2026-10-26: an over-age SHORT-LINK row is stored under its employer id, so that id
+    # must be recorded too (cache-only lookup).
+    import short_link_resolve as R
+    _saved = R._CACHE
+    try:
+        R._CACHE = {"go.vansh.nyc/Ag": "https://jobs.ashbyhq.com/virtu/abc/application"}
+        S.row_to_posting(dict(old, posting="https://go.vansh.nyc/Ag?s=y"), "vansh-offseason")
+    finally:
+        R._CACHE = _saved
+    check("an over-age short-link row records its EMPLOYER id as well",
+          (S.canonical_id("https://go.vansh.nyc/Ag?s=y") in S.AGED_OUT_IDS,
+           S.canonical_id("https://jobs.ashbyhq.com/virtu/abc/application") in S.AGED_OUT_IDS), (True, True))
     here = Path(__file__).parent
     wn = (here / "wide_net_source.py").read_text()
     col = wn[wn.index("async def collect("):]
@@ -1271,40 +1283,98 @@ def test_swelist_links_resolve_before_dedup():
 
 
 def test_short_links_resolve_and_collapse():
-    print("SL1. go.vansh.nyc short links resolve to the employer url; stored twins collapse, never the employer row")
+    print("SL1. go.vansh.nyc short links: resolver caches only definitive answers; gather re-keys; stored twins collapse")
     import short_link_resolve as R
+    import wide_net_source as W
+    import gmail_source
+    from internship_scraper import Posting, canonical_id
     from curated_store import CuratedStore
     check("key_of strips the ?s= source tag", R.key_of("https://go.vansh.nyc/9t?s=z"), "go.vansh.nyc/9t")
     check("an employer url is not a short link", R.is_short_link("https://jobs.ashbyhq.com/brainco/x"), False)
-    saved = (R._CACHE, R.MAX_RESOLVES_PER_RUN)
+    saved = (R._CACHE, R.MAX_RESOLVES_PER_RUN, R.WALL_BUDGET_S, R.MAX_CONSECUTIVE_FAILURES, R.save_cache)
     try:
+        R.save_cache = lambda: None
         R._CACHE = {}
         R.reset_run()
-        check("a 302 to an employer resolves",
-              R.resolve("https://go.vansh.nyc/aa?s=y", _fetch=lambda u: "https://jobs.ashbyhq.com/acme/1/application"),
-              "https://jobs.ashbyhq.com/acme/1/application")
-        check("a redirect to another aggregator is not a resolution",
-              R.resolve("https://go.vansh.nyc/bb", _fetch=lambda u: "https://simplify.jobs/p/x"), "")
-        check("a network error (None) is NOT cached, so it retries next run",
-              (R.resolve("https://go.vansh.nyc/cc", _fetch=lambda u: None), "go.vansh.nyc/cc" in R._CACHE), ("", False))
+        check("a 302 to an employer resolves and is cached",
+              (R.resolve("https://go.vansh.nyc/aa?s=y", _fetch=lambda u: ("https://jobs.ashbyhq.com/acme/1/application", "302")),
+               R._CACHE.get("go.vansh.nyc/aa")),
+              ("https://jobs.ashbyhq.com/acme/1/application",) * 2)
+        check("a redirect to another aggregator is a definitive miss (cached '')",
+              (R.resolve("https://go.vansh.nyc/bb", _fetch=lambda u: ("https://simplify.jobs/p/x", "302")),
+               R._CACHE.get("go.vansh.nyc/bb")), ("", ""))
+        check("404 is a definitive miss (cached '')",
+              (R.resolve("https://go.vansh.nyc/c4", _fetch=lambda u: ("", "404")), R._CACHE.get("go.vansh.nyc/c4")), ("", ""))
+        for code in ("429", "403", "503", "520", "URLError"):
+            check(f"{code} is transient: NOT cached, retried next run",
+                  (R.resolve(f"https://go.vansh.nyc/t{code}", _fetch=lambda u, c=code: (None, c)),
+                   f"go.vansh.nyc/t{code}" in R._CACHE), ("", False))
+        check("failures are named by code", {k: R.FAILED_CODES.get(k) for k in ("404", "429", "503")},
+              {"404": 1, "429": 1, "503": 1})
+        # the HTTP layer itself: which status codes come back transient (None) vs definitive
+        import io, urllib.error, urllib.request
+
+        class _Op:
+            def __init__(self, code): self.code = code
+            def open(self, req, timeout=None):
+                hdrs = {"Location": "https://jobs.lever.co/x/1"} if self.code in (301, 302) else {}
+                raise urllib.error.HTTPError(req.full_url, self.code, "x", hdrs, io.BytesIO(b""))
+        _bo = urllib.request.build_opener
+        try:
+            got = {}
+            for code in (302, 404, 410, 429, 403, 500, 503, 520):
+                urllib.request.build_opener = lambda *a, c=code: _Op(c)
+                got[code] = R._redirect_target("https://go.vansh.nyc/q")
+        finally:
+            urllib.request.build_opener = _bo
+        check("302 -> Location; 404/410 definitive ''; 429/403/5xx/52x transient None", got,
+              {302: ("https://jobs.lever.co/x/1", "302"), 404: ("", "404"), 410: ("", "410"),
+               429: (None, "429"), 403: (None, "403"), 500: (None, "500"), 503: (None, "503"),
+               520: (None, "520")})
+        R.MAX_CONSECUTIVE_FAILURES = 2
+        R.reset_run()
+        for n in range(3):
+            R.resolve(f"https://go.vansh.nyc/br{n}", _fetch=lambda u: (None, "503"))
+        check("the breaker opens after N straight transient failures and names the skipped link",
+              (R.STATS["breaker_open"], R.BUDGET_SKIPPED), (1, ["go.vansh.nyc/br2"]))
+        R.MAX_CONSECUTIVE_FAILURES = 15
+        R.WALL_BUDGET_S = -1
+        R.reset_run()
+        check("the wall-clock budget skips and names its victim",
+              (R.resolve("https://go.vansh.nyc/ww", _fetch=lambda u: ("https://x.io/1", "302")), R.BUDGET_SKIPPED),
+              ("", ["go.vansh.nyc/ww"]))
+        R.WALL_BUDGET_S = 300
         R.MAX_RESOLVES_PER_RUN = 0
         R.reset_run()
-        check("the budget names its victims", (R.resolve("https://go.vansh.nyc/dd", _fetch=lambda u: "x"),
-                                               R.BUDGET_SKIPPED), ("", ["go.vansh.nyc/dd"]))
+        check("the count budget names its victims",
+              (R.resolve("https://go.vansh.nyc/dd", _fetch=lambda u: ("https://x.io/1", "302")), R.BUDGET_SKIPPED),
+              ("", ["go.vansh.nyc/dd"]))
         check("a cached link costs no budget", R.resolve("https://go.vansh.nyc/aa"),
               "https://jobs.ashbyhq.com/acme/1/application")
-    finally:
-        R._CACHE, R.MAX_RESOLVES_PER_RUN = saved
+        R.MAX_RESOLVES_PER_RUN = 400
         R.reset_run()
 
-    sq = lambda x: re.sub(r"\s+", "", x)
-    g = sq(_code_only((Path(__file__).parent / "wide_net_source.py").read_text()))
-    g = g[g.index(sq("def _gather_postings")):g.index(sq("def _apply_enrich_cap"))]
-    check("short links resolve BEFORE the cid is computed",
-          g.index(sq("short_link_resolve.resolve(")) < g.index(sq("cid = p.canonical_id or canonical_id(p.url)")), True)
-    check("the resolved url becomes the row's id", sq("p.canonical_id = canonical_id(target)") in g, True)
-    check("the budget's victims are logged", sq("short_link_resolve.BUDGET_SKIPPED") in g, True)
-    check("the resolve cache is persisted", sq("short_link_resolve.save_cache()") in g, True)
+        # BEHAVIOUR: the real gather, on a fixture feed. The short link must come out
+        # carrying the employer url AND the employer canonical id.
+        emp = "https://jobs.ashbyhq.com/stripe/0f0f0f0f-1111-2222-3333-444455556666/application"
+        post = Posting(company="Stripe", title="Software Engineer Intern", location="Toronto, ON",
+                       url="https://go.vansh.nyc/St?s=z", posted_date="2026-10-25", age_days=1,
+                       terms="Winter 2027", source="vansh-offseason",
+                       canonical_id=canonical_id("https://go.vansh.nyc/St?s=z"))
+        gsaved = (W._fetch_github, gmail_source.fetch_email_postings, W._load_env, R.resolve)
+        try:
+            W._fetch_github = lambda: [post]
+            gmail_source.fetch_email_postings = lambda env_get: ([], [])
+            W._load_env = lambda: {}
+            R.resolve = lambda url, _fetch=None: emp if R.is_short_link(url) else ""
+            out = W._gather_postings()
+        finally:
+            W._fetch_github, gmail_source.fetch_email_postings, W._load_env, R.resolve = gsaved
+        got = [(p.url, p.canonical_id) for p in out if p.company == "Stripe"]
+        check("gather re-keys a short-link row to the employer id", got, [(emp, canonical_id(emp))])
+    finally:
+        R._CACHE, R.MAX_RESOLVES_PER_RUN, R.WALL_BUDGET_S, R.MAX_CONSECUTIVE_FAILURES, R.save_cache = saved
+        R.reset_run()
 
     st = CuratedStore(Path("/nonexistent/never-saved.json"))
 
@@ -1317,31 +1387,34 @@ def test_short_links_resolve_and_collapse():
         "https://jobs.ashbyhq.com/1password/aaa", "brand-board", status="To Apply", notes="[Oct 24] STAGED", jd="x" * 400)
     put("go.vansh.nyc/gT?s=z", "1Password", "Developer Intern, Credential Brokering", "Remote (US | Canada)",
         "https://go.vansh.nyc/gT?s=z", "wide:vansh-offseason", status="To Apply")
-    # a vansh-only posting whose employer row is harvested for the first time this run
     put("go.vansh.nyc/D1?s=y", "Apple", "Aeon Modeling Software Intern", "Cupertino",
         "https://go.vansh.nyc/D1?s=y", "wide:vansh-main", jd="x" * 900)
     put("jobs.apple.com/en-us/details/200690119", "Apple", "Aeon Modeling Software Intern", "Cupertino, CA",
         "https://jobs.apple.com/en-us/details/200690119", "wide:vansh-main")
-    # a decided (Not a Fit) employer row and its untouched short-link twin
     put("jobs.ashbyhq.com/1password/eee", "1Password", "Developer Intern - Data Security", "Remote",
         "https://jobs.ashbyhq.com/1password/eee", "brand-board", status="Not a Fit")
     put("go.vansh.nyc/eY?s=z", "1Password", "Developer Intern, Data Security", "Remote (US | Canada)",
         "https://go.vansh.nyc/eY?s=z", "wide:vansh-offseason")
-    # a short-link row HE touched is never migrated
+    # TOUCHED short-link rows: a noted one and a Skipped one, each beside an untouched employer twin
     put("go.vansh.nyc/zz?s=y", "Acme", "SWE Intern", "NYC", "https://go.vansh.nyc/zz?s=y",
-        "wide:vansh-main", notes="emailed the recruiter")
+        "wide:vansh-main", status="To Apply", notes="emailed the recruiter")
+    put("job-boards.greenhouse.io/acme/jobs/9", "Acme", "Software Engineer Intern", "New York",
+        "https://job-boards.greenhouse.io/acme/jobs/9", "wide:simplify-main", jd="x" * 800)
+    put("go.vansh.nyc/sk?s=y", "Beta", "ML Intern", "SF", "https://go.vansh.nyc/sk?s=y",
+        "wide:vansh-main", status="Skip", notes="his call: not a fit")
+    put("jobs.lever.co/beta/77", "Beta", "Machine Learning Intern", "San Francisco",
+        "https://jobs.lever.co/beta/77", "wide:simplify-main")
     saved = R._CACHE
     try:
         R._CACHE = {"go.vansh.nyc/gT": "https://jobs.ashbyhq.com/1password/aaa/application",
                     "go.vansh.nyc/D1": "https://jobs.apple.com/en-us/details/200690119",
                     "go.vansh.nyc/eY": "https://jobs.ashbyhq.com/1password/eee/application",
-                    "go.vansh.nyc/zz": "https://job-boards.greenhouse.io/acme/jobs/9"}
+                    "go.vansh.nyc/zz": "https://job-boards.greenhouse.io/acme/jobs/9",
+                    "go.vansh.nyc/sk": "https://jobs.lever.co/beta/77"}
         migrated = curate._migrate_short_link_rows(st)
     finally:
         R._CACHE = saved
-    check("untouched short-link rows are pointed at the employer url (the touched one is not)", migrated, 3)
-    check("the touched row keeps its short link", st.postings["go.vansh.nyc/zz?s=y"]["machine"]["url"],
-          "https://go.vansh.nyc/zz?s=y")
+    check("every live short-link row with a cached target is migrated, touched ones included", migrated, 5)
     curate._collapse_duplicates(st)
     curate._collapse_shadowed_twins(st)
     dead = {c for c, e in st.items() if e["machine"].get("dead")}
@@ -1351,28 +1424,85 @@ def test_short_links_resolve_and_collapse():
           ("go.vansh.nyc/D1?s=y" in dead, "jobs.apple.com/en-us/details/200690119" in dead), (True, False))
     check("a short-link twin of a Not-a-Fit req does not reappear undecided",
           ("go.vansh.nyc/eY?s=z" in dead, "jobs.ashbyhq.com/1password/eee" in dead), (True, False))
+    check("a NOTED short-link row keeps its note and wins; its untouched twin goes",
+          ("go.vansh.nyc/zz?s=y" in dead, "job-boards.greenhouse.io/acme/jobs/9" in dead,
+           st.postings["go.vansh.nyc/zz?s=y"]["human"]["notes"]), (False, True, "emailed the recruiter"))
+    check("a SKIPPED short-link row anchors its twin (the decided req does not reappear undecided)",
+          ("go.vansh.nyc/sk?s=y" in dead, "jobs.lever.co/beta/77" in dead,
+           st.postings["go.vansh.nyc/sk?s=y"]["human"]["status"]), (False, True, "Skip"))
+    harvested = {canonical_id("https://job-boards.greenhouse.io/acme/jobs/9"), "jobs.lever.co/beta/77"}
+    check("a migrated short-link row counts as seen when its employer id was harvested (never struck out)",
+          (curate._in_feed("go.vansh.nyc/zz?s=y", st.postings["go.vansh.nyc/zz?s=y"]["machine"], harvested),
+           curate._in_feed("go.vansh.nyc/sk?s=y", st.postings["go.vansh.nyc/sk?s=y"]["machine"], harvested)),
+          (True, True))
+    check("an unmigrated row is seen only under its own id",
+          curate._in_feed("x/1", {"url": "https://job-boards.greenhouse.io/acme/jobs/9"}, harvested), False)
     check("the staged note survives", st.postings["jobs.ashbyhq.com/1password/aaa"]["human"]["notes"], "[Oct 24] STAGED")
     check("no human status changed", st.postings["jobs.ashbyhq.com/1password/eee"]["human"]["status"], "Not a Fit")
+
+    # The coverage digest must see a short-link posting as HELD when the store has its
+    # employer id (titles/locations differ, so only the id can match).
+    import coverage_digest as CD
+    emp = "https://jobs.ashbyhq.com/stripe/9a9a9a9a-1111-2222-3333-444455556666"
+    idx = CD.store_index({canonical_id(emp): {"machine": {"company": "Stripe", "role": "SWE Intern, Payments",
+                                                          "location": "Toronto"}}})
+    sp = Posting(company="Stripe", title="Software Engineer Intern", location="Remote (Canada)",
+                 url="https://go.vansh.nyc/Sx?s=y", posted_date="2026-10-25", age_days=1, terms="Winter 2027",
+                 source="vansh-offseason", canonical_id=canonical_id("https://go.vansh.nyc/Sx?s=y"))
+    saved = R._CACHE
+    try:
+        R._CACHE = {"go.vansh.nyc/Sx": emp + "/application"}
+        _, gaps = CD.partition([sp], idx, days=14)
+    finally:
+        R._CACHE = saved
+    check("the digest counts a short-link posting as held via its employer id", gaps, [])
 
 
 def test_harvest_keeps_one_record_per_id_and_the_boards_company():
     print("CB1. one harvested record per id (brand board wins), and an ATS token names the company")
     from company_boards import company_for_url
+    from internship_scraper import canonical_id
     check("figureai greenhouse token -> Figure (speedyapply calls it FightCamp)",
           company_for_url("https://job-boards.greenhouse.io/figureai/jobs/4724521006"), "Figure")
     check("ashby org -> its board", company_for_url("https://jobs.ashbyhq.com/brainco/b6adda4c/application"), "Brain Co.")
     check("a url on no known board names nobody", company_for_url("https://joinfightcamp.com/careers/1"), "")
-    sq = lambda x: re.sub(r"\s+", "", x)
-    src = sq(_code_only((Path(__file__).parent / "curate.py").read_text()))
-    r = src[src.index(sq("async def refresh")):]
-    loop = r[r.index(sq("harvested: set[str] = set()")):r.index(sq("_score_into(store, cid"))]
-    check("the store is written from the per-id winners, not from the (company, role, location) groups",
-          sq("for r in by_cid.values():") in loop and sq("for r in best.values():") not in loop, True)
-    pick = r[r.index(sq("by_cid: dict[str, dict] = {}")):r.index(sq("harvested: set[str] = set()"))]
-    check("the per-id winner uses the same brand > JD > fresher rule", sq("_better(r, by_cid[cid])") in pick, True)
-    norm = r[r.index(sq('r["company"] = _clean_company(r["company"])')):r.index(sq("def _better"))]
-    check("non-brand records take the board's company from the url", sq("company_for_url(") in norm
-          and "brand-board" in norm, True)
+    u = "https://job-boards.greenhouse.io/figureai/jobs/4724521006"
+
+    def rec(company, role, src, jd="", url=u, age=1):
+        return {"company": company, "role": role, "location": "San Jose, CA", "url": url,
+                "canonical_id": canonical_id(url), "_src": src, "full_jd": jd, "age_days": age}
+    # BEHAVIOUR on the Oct 26 fixture: brand record first, the aggregator's (longer JD,
+    # different company spelling and title) second, same URL.
+    w = curate._harvest_winners([
+        rec("Figure", "Developer Productivity Intern [Winter 2027]", "brand-board", jd="x" * 100),
+        rec("FightCamp", "Developer Productivity Intern - Winter 2027", "wide:speedyapply-swe", jd="y" * 5000)])
+    check("one record per id", len(w), 1)
+    check("the brand board's record is the one written, whatever the order",
+          (w[canonical_id(u)]["_src"], w[canonical_id(u)]["company"]), ("brand-board", "Figure"))
+    w = curate._harvest_winners([
+        rec("FightCamp", "Developer Productivity Intern - Winter 2027", "wide:speedyapply-swe", jd="y" * 5000),
+        rec("Figure", "Developer Productivity Intern [Winter 2027]", "brand-board", jd="x" * 100)])
+    check("...in either input order", w[canonical_id(u)]["_src"], "brand-board")
+    w = curate._harvest_winners([rec("FightCamp", "Developer Productivity Intern - Winter 2027", "wide:speedyapply-swe")])
+    check("a lone aggregator record on a known board takes the board's company", w[canonical_id(u)]["company"], "Figure")
+    other = "https://careers.example.com/jobs/1"
+    w = curate._harvest_winners([rec("FightCamp", "Coach Intern", "wide:speedyapply-swe", url=other)])
+    check("a url on no known board keeps the aggregator's company", w[canonical_id(other)]["company"], "FightCamp")
+    # BEHAVIOUR at the store: what refresh() actually writes.
+    from curated_store import CuratedStore
+    st = CuratedStore(Path("/nonexistent/never-saved.json"))
+    got = curate._write_harvest(st, [
+        rec("Figure", "Developer Productivity Intern [Winter 2027]", "brand-board", jd="x" * 100),
+        rec("FightCamp", "Developer Productivity Intern - Winter 2027", "wide:speedyapply-swe", jd="y" * 5000)],
+        "2026-10-26")
+    m = st.postings[canonical_id(u)]["machine"]
+    check("the store holds the brand board's record for the id, not the aggregator's",
+          (got, m["company"], m["source"], m["role"]),
+          ({canonical_id(u)}, "Figure", "brand-board", "Developer Productivity Intern [Winter 2027]"))
+    code = re.sub(r"\s+", "", _code_only((Path(__file__).parent / "curate.py").read_text()))
+    r = code[code.index("asyncdefrefresh"):]
+    check("refresh() writes the harvest only through _write_harvest",
+          ("harvested=_write_harvest(store,lane1+lane2+lane0,today)" in r, "_score_into(" in r), (True, False))
 
 
 def test_season_month_range_and_oct14_winter_names():
@@ -1448,10 +1578,11 @@ def test_oct17_manual_postings_and_winter_names():
     check("his own Not a Fit on a manual row still routes to Reviewed", B.classify_row(skip), "reviewed")
     code = _code_only((Path(__file__).parent / "curate.py").read_text()).replace(" ", "")
     check("curate.refresh harvests the manual lane", "lane0=manual_postings.collect()" in code, True)
-    check("...and merges it in BOTH the name-clean and the dedup loop",
-          code.count("inlane1+lane2+lane0:"), 2)
+    check("...and merges it in BOTH the name-clean and the dedup loop (now inside _harvest_winners)",
+          ("_write_harvest(store,lane1+lane2+lane0,today)" in code,
+           code[code.index("def_harvest_winners"):code.index("asyncdefrefresh")].count("forrinrecords:")), (True, 2))
     check("the strike rule still only fires for brand/wide rows (manual rows are safe)",
-          "if(is_brandoris_wide)andcidnotinharvestedandnotexempt:" in code, True)
+          "if(is_brandoris_wide)andnotin_feedandnotexempt:" in code, True)
     from company_boards import BOARDS as _CB
     check("Brain Co.'s Ashby board is wired (the two new co-ops reach the board)",
           any(b.get("org") == "brainco" and b.get("ats_type") == "ashby" for b in _CB), True)
