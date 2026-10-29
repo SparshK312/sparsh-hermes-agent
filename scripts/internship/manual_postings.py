@@ -339,6 +339,65 @@ Familiarity with Linux, Python, or debugging robotic or automated systems.
 - 
 Experience with project management or documentation tools (Confluence, Jira, Notion).""",
     },
+    # ── Genius AI (formerly GlossGenius), Ashby API 2026-10-29. Its Ashby board isn't wired, so the
+    #    Winter req never reached the board (only the Summer one did, via an aggregator). His call: apply.
+    {
+        "company": "Genius AI", "added": "2026-10-29",
+        "role": "Software Engineer Intern Winter 2026-2027",
+        "url": "https://jobs.ashbyhq.com/geniusai/96ebddc5-6ed4-4e68-813b-55d44c315b27",
+        "location": "New York, NY", "cycle": "Winter 2027", "req_id": "96ebddc5-6ed4-4e68-813b-55d44c315b27",
+        "jd": """About Genius AI
+
+Genius AI is building technology to help local businesses run themselves. Genius AI products do the admin work that keeps practitioners from the work they love and the people they serve. From GlossGenius to Reception, its products work 24/7 on busywork like booking, marketing, client management, finances, staff and inventory management, and more.
+
+Genius AI technology has saved businesses 106M in admin hours, earned them $2.0B in additional revenue, and facilitated more than 624M client touch points.
+
+About the Role
+
+As we continue to expand our reach and impact, we are seeking highly motivated and talented engineering interns to join our team for Winter of 2027.
+
+Position: Engineering Intern 
+
+Location: NYC
+
+Duration: January 19, 2027 – April 30, 2027
+
+This internship puts you inside a live engineering team shipping product that hundreds of thousands of service businesses and their clients touch every day. You'll work on real features headed to production, not a side project built to keep you busy. Genius AI is scaling an agentic product at a pace where decisions ship in days, and this role exists so you get real exposure to how that speed and judgment work together. 
+
+You will report to an engineering manager on our team. You must be commutable to our NYC headquarters in Union Square, and will operate in an in-person environment. We default to being in-office 3-4 days per week with required attendance on Tuesdays and Thursdays.
+
+What You'll Do
+
+ - Build and test features for our web and mobile products alongside senior engineers, shaping experiences used by our customers and their clients
+
+ - Architect small pieces of automation with AI, not just use it as an assistant: identify repeatable work in your own project and build the system that removes it
+
+ - Write clean, efficient code that meets Genius AI engineering standards, and own debugging and troubleshooting 
+
+ - Partner with data analysts to collect and interpret usage data, and use those insights to inform how AI gets applied across the product
+
+ - Ship fast, learn faster: iterate on your projects with AI-assisted development on a tight cadence, adjusting based on feedback from senior engineers
+
+ - Expand your technical range deliberately, picking up new languages, frameworks, and AI-native development practices as the team's needs shift
+
+What We're Looking For
+
+ - Currently pursuing a B.S. in Computer Science or related technical field, graduating between 2027 and 2028, with coursework or project experience in software engineering
+
+ - You use AI to learn faster, debug, and ship, and can point to something you've built with it
+
+ - You dig into a problem before waiting for someone to hand you the answer, and you ask for help once you're stuck, not before you've tried
+
+ - Proficient in one or more of JavaScript, TypeScript, Ruby, or Kotlin, with real project experience beyond coursework
+
+ - Comfortable picking up new frameworks and tools quickly, ideally with some exposure to React, Postgres, SQL, or gRPC
+
+ - Strong problem-solving instincts and equally comfortable working independently or pairing with a teammate
+
+ - Clear, direct communicator who can explain technical tradeoffs to both engineers and non-engineers
+
+ - Available to work in person from our Union Square, NYC office""",
+    },
 ]
 
 

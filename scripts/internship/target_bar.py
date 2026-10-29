@@ -151,6 +151,11 @@ WINTER_ONLY_APPLY = {
     #   Canada/US. At least the level of the Oct-9 group A (Geotab, StackAdapt, Kinaxis).
     #   Winter only.
     "1password",
+    # 2026-10-29, his call ("sure add this to the board"): Genius AI (formerly GlossGenius),
+    #   NYC salon/wellness-booking software; $44M Series D led by Lux at a $1.15B valuation
+    #   (Jul 21 2026). "Software Engineer Intern Winter 2026-2027", Jan 19 - Apr 30 2027,
+    #   via manual_postings (ashby geniusai 96ebddc5). Winter only.
+    "genius ai",
 }
 
 # Companies whose names collapse to something generic once normalized, so they are
