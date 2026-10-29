@@ -520,7 +520,9 @@ def _brief(rows, state, cutoff_passed, facts_extra=None, last_call=False):
     G.vault_sync = lambda: {"state": "ok"}
     G.gather_board = lambda: {}
     G.gather_action_items = lambda d="": {"hard_deadlines": "", "this_week": ""}
-    now = _d.datetime.now(G.TZ)
+    # pinned clock: noon today, so no assertion depends on the hour the suite runs at
+    now = _d.datetime.now(G.TZ).replace(hour=12, minute=0, second=0, microsecond=0)
+    G._now = lambda: now
     today, yday = now.strftime("%Y-%m-%d"), (now - _d.timedelta(days=1)).strftime("%Y-%m-%d")
     G._row_for = lambda d: dict(rows.get("T" if d == today else ("Y" if d == yday else ""), {}))
     with contextlib.redirect_stdout(io.StringIO()):

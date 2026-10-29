@@ -155,6 +155,12 @@ def send_morning_card(night: str, caption: str | None = None) -> None:
         _log(f"morning card failed to start: {type(e).__name__}: {e}")
 
 
+def _now() -> datetime.datetime:
+    """The gate's clock (Toronto). A seam so the tests pin it: S2 used the wall clock and
+    failed in the minute before midnight, which blocked an unrelated deploy (2026-10-25)."""
+    return datetime.datetime.now(TZ)
+
+
 def _log(msg: str) -> None:
     try:
         with open(LOG, "a") as lf:
@@ -623,7 +629,7 @@ def health_block(facts: dict) -> list[str]:
 
 # ----------------------------------------------------------------------------- compose: templated (always works)
 def compose_templated(facts: dict) -> str:
-    now = datetime.datetime.now(TZ)
+    now = _now()
     parts = [f"🌅 *Morning, Sparsh.* {now.strftime('%a %b %-d')}.", ""]
     parts += health_block(facts)
 
@@ -908,7 +914,7 @@ def _system_prompt() -> str:
     another way, and a model without one falls back to its training-era 'now'. Local
     zone, not UTC — utcnow() rolls the day over early in western timezones.
     """
-    now = datetime.datetime.now(TZ)
+    now = _now()
     return (f"Today is {now:%A, %B %-d, %Y} ({now:%H:%M} {now.tzname()}). "
             f"Resolve any relative date against that and always use the correct year.\n\n"
             + _STYLE)
@@ -983,7 +989,7 @@ def compose_followup(facts: dict, brief_steps, brief_sleep_h=None) -> str:
 def main() -> int:
     if not DRY_RUN:
         _refresh()
-    now = datetime.datetime.now(TZ)
+    now = _now()
     today = now.strftime("%Y-%m-%d")
     yesterday = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     is_weekend = now.strftime("%a") in ("Sat", "Sun")
