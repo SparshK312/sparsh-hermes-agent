@@ -234,6 +234,23 @@ WINTER_TERM_OFFERED = {
     # HeyGen  "Software Engineer Intern" (greenhouse heygen 4540716007): the employer title says
     #         "(Winter 2027)", the board row's title does not (2026-10-19).
     ("heygen", "software engineer intern"),
+    # 2026-10-29 Apply - Summer audit (vault: "Apply - Summer Winter Audit (Oct 29)"). No term
+    # in the JD; he picks the start in the form or the posting runs year-round. His call.
+    # Uber   "Software Engineer Intern" (Oracle HCM 304178 Toronto, 303922 US): "internship
+    #        and co-op program", term picker behind the email gate; check it when applying.
+    #        The role string is generic: a later Summer-only Uber req with this exact title
+    #        would route here too. Re-check Uber rows on Apply - Winter after the cycle turns.
+    ("uber", "software engineer intern"),
+    # Waabi  "Research Internship/Co-op" (lever waabi 0fd4e30b): the form asks the start date
+    #        AND the number of months.
+    ("waabi", "research internship/co-op"),
+    # Palantir Query Engines (lever da774f81 NYC, 3e59369e London): form asks "What is your
+    #        anticipated start date? (Month/Year)", free text. Two title spellings on the board.
+    ("palantir", "software engineer, internship - query engines"),
+    ("palantir", "software engineer intern - query engines"),
+    # Epic Games (greenhouse 6178818004, 6219626004, Cary NC): "flexible start date in 2027".
+    ("epic games", "technical product management intern"),
+    ("epic games", "sdet intern"),
 }
 
 
