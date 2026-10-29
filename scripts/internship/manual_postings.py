@@ -274,6 +274,71 @@ PREFERRED QUALIFICATIONS
 - Knowledge of computer science fundamentals such as object-oriented design, operating systems, algorithms, data structures, and complexity analysis
 - Experience with documentation and problem-solving skills with attention to detail""",
     },
+    # ── Tesla, read in Chrome 2026-10-29 (no aggregator row reached the board). His call: apply.
+    {
+        "company": "Tesla", "added": "2026-10-29",
+        "role": "Internship, Software Engineer, Infotainment Platforms Validation (Winter/Spring 2027)",
+        "url": "https://www.tesla.com/careers/search/job/286261",
+        "location": "Palo Alto, California", "cycle": "Winter 2027", "req_id": "286261",
+        "jd": _TESLA_TERM + """
+What You'll Do
+- Work on core subsystems running on the infotainment computer to perform validation reviews and risk assessments before releasing software to the fleet
+- Write and ship software to the vehicle and build automated systems in the backend to generate and analyze fleet data from the millions of Tesla vehicles worldwide
+- Define evaluation metrics, create visualizations and dashboards to support the monitoring and refinement of our systems
+- Build and maintain HIL testers and internal frameworks/tools to accelerate experimentation and debugging of features
+- Measure and optimize system performance, leveraging off-the-shelf profiling/tracing tools as well as building new custom tools
+- Work cross-functionally to investigate and fix issues that you identify
+What You'll Bring
+- Currently pursuing a Degree in Computer Science or a related field with a graduation date between 2027 - 2028
+- Proficiency with one of the following: Python, C/C++, Golang, or Java
+- Experience with Linux/Unix environments & system administration, CI/CD systems, and large scale data processing & querying
+- Excellent critical thinking, problem solving, and communication skills
+- Experience with embedded systems software design concepts and automotive communication standards such as CAN, Ethernet, TCP/IP is a plus
+- A passion for troubleshooting failures to determine root causes while constantly improving code quality & system efficiency, testability, monitoring, and observability""",
+    },
+    # ── Figure, Greenhouse API 2026-10-29. The title has no '[Winter 2027]' tag (the JD says Winter 2027, January start), so it never reached the board. His call: apply.
+    {
+        "company": "Figure", "added": "2026-10-29",
+        "role": "Deployment Engineering Intern [Winter 2027]",
+        "url": "https://job-boards.greenhouse.io/figureai/jobs/4721113006",
+        "location": "San Jose, CA", "cycle": "Winter 2027", "req_id": "4721113006",
+        "jd": """We are looking for a Deployment Engineering Intern to join our Commercial Operations team for Winter 2027. This role works directly with deployment engineers and the pilot team to make our humanoid robots easier to operate and troubleshoot in real-world settings. You will help triage and organize issues from the field: reproducing problems, spotting patterns and preparing clear, well-documented reports for the deployment engineering team. You'll also turn what you learn into documentation and training that helps pilots troubleshoot on their own.
+Responsibilities:
+- 
+Triage incoming field issues alongside deployment engineers. Reproduce problems, gather logs and context, and build a playbook for pilots to reference for common issues.
+- 
+Test software and hardware changes and gather feedback from pilot team to create robust SOP and technical systems.
+- 
+Build and maintain a system that keeps technical documentation and training up to date as software and hardware change.
+- 
+Develop curriculum that strengthens pilots' troubleshooting skills, and help coaches teach it efficiently.
+- 
+Shadow deployment engineers on bug triage, issue tracking, and testing, and turn what you learn into better documentation.
+- 
+Collect feedback from pilots and coaches and communicate gaps clearly to engineering.
+Requirements:
+- 
+Currently pursuing a Bachelor's in Electrical, Computer, or Robotics Engineering, Computer Science, or a related field.
+- 
+Minimum 10 weeks internship, starting January 2027.
+- 
+Excellent problem solving and debugging skills.
+- 
+Strong technical writing skills and the ability to explain complex concepts simply.
+- 
+Comfortable learning new systems quickly and working hands-on with hardware.
+- 
+Organized and self-directed, with good judgment in a fast-paced environment.
+- 
+Clear communicator who works well with pilots, coaches, and engineers.
+Bonus Qualifications:
+- 
+Experience creating tutorials, training materials, or teaching (TA, tutoring, mentoring).
+- 
+Familiarity with Linux, Python, or debugging robotic or automated systems.
+- 
+Experience with project management or documentation tools (Confluence, Jira, Notion).""",
+    },
 ]
 
 

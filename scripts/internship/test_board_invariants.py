@@ -1550,8 +1550,11 @@ def test_oct17_manual_postings_and_winter_names():
         check(f"{look} is NOT promoted by the Oct 17 call", TB.bar_of(look, W_), TB.BELOW)
     rows = MP.collect()
     check("manual_postings has the four Oct 17 Tesla reqs",
-          sorted(r["req_id"] for r in rows if r["company"] == "Tesla"),
+          sorted(r["req_id"] for r in rows if r["company"] == "Tesla" and r["posted_date"] == "2026-10-17"),
           ["281482", "282292", "285076", "285085"])
+    check("manual_postings carries the Oct 29 adds (Tesla Infotainment Validation, Figure Deployment Eng)",
+          sorted((r["company"], r["req_id"], r["cycle"]) for r in rows if r["posted_date"] == "2026-10-29"),
+          [("Figure", "4721113006", "Winter 2027"), ("Tesla", "286261", "Winter 2027")])
     check("manual_postings carries the Oct 18 Mechanize intern row",
           [r["url"] for r in rows if r["company"] == "Mechanize"],
           ["https://jobs.ashbyhq.com/mechanize/d148d54f-6db7-4c28-9699-0304596f554e"])
