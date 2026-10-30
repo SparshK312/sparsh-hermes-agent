@@ -249,10 +249,9 @@ WINTER_TERM_OFFERED = {
     # Waabi  "Research Internship/Co-op" (lever waabi 0fd4e30b): the form asks the start date
     #        AND the number of months.
     ("waabi", "research internship/co-op"),
-    # Palantir Query Engines (lever da774f81 NYC, 3e59369e London): form asks "What is your
-    #        anticipated start date? (Month/Year)", free text. Two title spellings on the board.
-    ("palantir", "software engineer, internship - query engines"),
-    ("palantir", "software engineer intern - query engines"),
+    # (Palantir Query Engines was added here on Oct 29 and removed the same night: its JD says
+    #  "This should be your final internship before graduating", so a Jan-Apr term with Microsoft
+    #  Summer 2027 after it doesn't qualify. Rows marked Skip, his call.)
     # Epic Games (greenhouse 6178818004, 6219626004, Cary NC): "flexible start date in 2027".
     ("epic games", "technical product management intern"),
     ("epic games", "sdet intern"),
