@@ -343,6 +343,72 @@ def test_first_run_keeps_apple_history():
     check("a suspiciously short metrics.csv is never used as the Apple history", (got, (m2 / "apple.csv").exists()), ("refused", False))
 
 
+def _sleep_payload(raw: Path, stamp: str, day: str, total, core, deep, rem, start="22:30", end="06:30"):
+    """One synthetic HAE payload holding one sleep record, named like the real ones
+    (UTC export stamp), so main()'s filename sort replays the real arrival order."""
+    p = {"date": f"{day} 00:00:00 -0500", "totalSleep": total, "core": core, "deep": deep, "rem": rem,
+         "awake": 0.2, "inBed": total + 0.2,
+         "sleepStart": f"{day} {start} -0500", "sleepEnd": f"{day} {end} -0500"}
+    f = raw / f"{stamp}.json"
+    f.write_text(json.dumps({"data": {"metrics": [{"name": "sleep_analysis", "units": "hr", "data": [p]}]}}))
+    return f
+
+
+def test_sleep_survives_pruned_full_night():
+    print("H1. hae_process: pruning the full-night payload never lets a shorter re-send overwrite it (issue #2)")
+    root, WM = fresh_env()
+    import hae_process as P
+    raw = root / "hae" / "raw"
+    raw.mkdir()
+    apple = root / "vault" / "07 - Health" / "Metrics" / "apple.csv"
+    day = "2026-01-11"
+
+    def run():
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = P.main([])
+        return rc, WM.read_rows(apple).get(day, {})
+
+    # HAE re-sends one night with shrinking look-back windows; the FULL night is the
+    # OLDEST file, so hae_sync's 30-day mtime prune deletes it first.
+    full = _sleep_payload(raw, "2026-01-11T12-00-00-000001Z", day, 7.4, 4.0, 1.2, 2.2)
+    part1 = _sleep_payload(raw, "2026-01-11T16-00-00-000001Z", day, 3.3, 2.0, 0.3, 1.0, start="03:12")
+    _sleep_payload(raw, "2026-01-11T20-00-00-000001Z", day, 0.5, 0.5, 0.0, 0.0, start="06:00")
+    rc, r = run()
+    check("all payloads present -> the full night", (rc, r.get("sleep_total_h"), r.get("sleep_deep_h")), (0, "7.4", "1.2"))
+    full.unlink()
+    rc, r = run()
+    check("full payload pruned -> the full night is KEPT, not the 3.3h re-send",
+          (rc, r.get("sleep_total_h"), r.get("sleep_core_h"), r.get("sleep_deep_h"), r.get("sleep_rem_h"),
+           r.get("sleep_start"), r.get("sleep_stages_valid")),
+          (0, "7.4", "4.0", "1.2", "2.2", f"{day} 22:30 -0500", "true"))
+    part1.unlink()
+    rc, r = run()
+    check("next scrap pruned too -> still the full night (no ratchet down to 0.5h)", (rc, r.get("sleep_total_h")), (0, "7.4"))
+    _sleep_payload(raw, "2026-01-12T01-00-00-000001Z", day, 7.9, 4.3, 1.3, 2.3)
+    rc, r = run()
+    check("a genuinely fuller record for the night still replaces it", (r.get("sleep_total_h"), r.get("sleep_deep_h")), ("7.9", "1.3"))
+
+    # First-touch's purpose must survive: a row written BEFORE a cleanup fix (here: the
+    # all-zero-stage guard, with no sleep_stages_valid / last_export_utc columns at all)
+    # is reprocessed when its full payload is still on disk.
+    root, WM = fresh_env()
+    import hae_process as P
+    raw = root / "hae" / "raw"
+    raw.mkdir()
+    apple = root / "vault" / "07 - Health" / "Metrics" / "apple.csv"
+    apple.write_text("date,sleep_total_h,sleep_core_h,sleep_deep_h,sleep_rem_h\n"
+                     f"{day},7.4,0.0,0.0,0.0\n2026-01-10,6.8,3.5,1.1,2.2\n")
+    _sleep_payload(raw, "2026-01-11T12-00-00-000001Z", day, 7.4, 0, 0, 0)
+    _sleep_payload(raw, "2026-01-11T16-00-00-000001Z", day, 3.3, 0, 0, 0, start="03:12")
+    _sleep_payload(raw, "2026-01-10T19-00-00-000001Z", "2026-01-10", 2.1, 1.0, 0.4, 0.7, start="04:00")
+    rc, r = run()
+    check("full payload present -> the cleanup reaches the old row (bogus zero stages dropped)",
+          (rc, r.get("sleep_total_h"), "sleep_deep_h" in r, r.get("sleep_stages_valid")), (0, "7.4", False, "false"))
+    old = WM.read_rows(apple).get("2026-01-10", {})
+    check("an old row whose full payload is long gone keeps its night against a surviving scrap",
+          (old.get("sleep_total_h"), old.get("sleep_deep_h"), old.get("sleep_rem_h")), ("6.8", "1.1", "2.2"))
+
+
 def test_coach_baseline_per_source():
     print("B1. coach: HRV/RHR compared only against the SAME source; 'baseline building' until 7 days")
     root, _ = fresh_env()
@@ -638,7 +704,7 @@ def test_morning_card_is_detached():
 
 TESTS = [test_merge_rules, test_reseed_strips_air, test_flat_layout_end_to_end, test_fitbit_apply_and_parse,
          test_sleep_parse, test_client, test_alerts, test_ingest_sleep_priority, test_vault_log_marks_sleep,
-         test_first_run_keeps_apple_history, test_coach_baseline_per_source,
+         test_first_run_keeps_apple_history, test_sleep_survives_pruned_full_night, test_coach_baseline_per_source,
          test_brief_air_wording, test_wrapper_and_run_lock, test_wake_steps_signal,
          test_brief_waits_for_finished_night, test_morning_card_is_detached]
 

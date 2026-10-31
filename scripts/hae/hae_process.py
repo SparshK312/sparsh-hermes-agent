@@ -226,8 +226,8 @@ def process_payload(path: Path, days: dict, seen_sleep: set | None = None) -> No
                     row[col] = v if (agg is None or cur is None) else agg(round(cur), v)
             elif name == "sleep_analysis":
                 # A single night is re-sent across payloads with SHRINKING look-back
-                # windows — e.g. 6.25h (full night) → 5.07h → 1.93h → 0.13h (last 40min).
-                # Last-write-wins grabbed the 0.13h scrap → garbage sleep. Instead keep
+                # windows — e.g. 7.4h (full night) → 3.3h → 0.5h (the last half hour).
+                # Last-write-wins grabbed the 0.5h scrap → garbage sleep. Instead keep
                 # the FULLEST record (largest total) for the day, and take its whole stage
                 # breakdown together so the stages stay consistent with the headline total.
                 # (Summing would be wrong — it'd multi-count the same night.)
@@ -247,9 +247,22 @@ def process_payload(path: Path, days: dict, seen_sleep: set | None = None) -> No
                 # both the all-zero-stage cleanup and `sleep_stages_valid` at whatever the
                 # first post-change run happened to write. `seen_sleep` distinguishes
                 # "already written THIS run" (apply `>`) from "value carried in from the
-                # CSV" (always reprocess once, so fixes reach existing rows).
+                # CSV" (reprocess once, so fixes reach existing rows).
+                #
+                # That reprocess is allowed only from a record AT LEAST as full as the CSV
+                # value (`>=`; a tie is the record that wrote the row, re-read). It used to
+                # be unconditional, and hae_sync prunes raw/ by mtime at 30 days: the full
+                # night is the OLDEST file for its date, so it goes first, and the next run's
+                # first touch was the 3.3h re-send — written over the 7.4h night, then the
+                # 0.5h scrap over that, permanently once the last file aged out (issue #2).
+                # A first touch can therefore never LOWER a total; cleanup fixes still land
+                # whenever the full payload is on disk, which is the only time they could
+                # be computed correctly anyway. Needs no stamp or new column, so CSV rows
+                # from any earlier version behave the same.
                 first_touch_this_run = d not in seen_sleep
-                if total is not None and (first_touch_this_run or prev is None or total > prev):
+                reprocess = (first_touch_this_run and total is not None and prev is not None
+                             and round(total, 2) >= prev)   # CSV holds round(total, 2)
+                if total is not None and (prev is None or total > prev or reprocess):
                     seen_sleep.add(d)
                     row["sleep_total_h"] = round(total, 2)
                     stages = {}
