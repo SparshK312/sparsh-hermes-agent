@@ -1559,6 +1559,10 @@ def test_oct17_manual_postings_and_winter_names():
            ("Tesla", "286261", "Winter 2027")])
     # (Placement on Apply - Winter is asserted per manual row below; mutation-tested 2026-10-29.)
     check("Genius AI stays below the Summer bar", TB.bar_of("Genius AI", TB.SUMMER), TB.BELOW)
+    check("manual_postings carries the Nov 3 Zipline Spring 2027 SWE intern (Winter cycle)",
+          [(r["req_id"], r["cycle"]) for r in rows if r["company"] == "Zipline"],
+          [("7907191003", "Winter 2027")])
+    check("Zipline clears the Winter bar", TB.bar_of("Zipline", TB.WINTER) != TB.BELOW, True)
     check("manual_postings carries the Oct 18 Mechanize intern row",
           [r["url"] for r in rows if r["company"] == "Mechanize"],
           ["https://jobs.ashbyhq.com/mechanize/d148d54f-6db7-4c28-9699-0304596f554e"])

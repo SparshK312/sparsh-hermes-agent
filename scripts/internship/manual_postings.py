@@ -398,6 +398,27 @@ What We're Looking For
 
  - Available to work in person from our Union Square, NYC office""",
     },
+    # ── Zipline, Greenhouse API (flyzipline) 2026-11-03. Published Aug 20 under a title the
+    #    lane filters never matched; he found it in a Spring catch-up list. Consumer web/mobile,
+    #    not the firmware/autonomy reqs already on Reviewed. His call: apply.
+    {
+        "company": "Zipline", "added": "2026-11-03",
+        "role": "Software Engineer Intern (Spring 2027)",
+        "url": "https://www.zipline.com/open-roles/7907191003",
+        "location": "South San Francisco, California", "cycle": "Winter 2027", "req_id": "7907191003",
+        "jd": """What You'll Do
+- Take technical ownership of critical features across Zipline's consumer mobile and web apps, from design through deployment and iteration
+- Build features in the React Native mobile codebase or backend services in Python and Go
+- Collaborate cross-functionally to build user-facing features that are fast, elegant, and grounded in a strong understanding of customer needs
+- Influence our long-term technical roadmap and contribute to team-wide engineering best practices
+What You'll Bring
+- You must have completed the second year of your undergraduate studies. Masters and PhD students are also eligible
+- Passion for software development and curiosity to learn new technology stacks
+- Strong understanding in computer science fundamentals
+- A product mindset and passion for crafting intuitive, delightful customer experiences
+What Else You Should Know
+This internship is a full-time position, in-person at our South San Francisco office. We will host our Spring 2027 interns from (January 2027 - April 2027). The hourly rate for this internship is $50 per hour.""",
+    },
 ]
 
 
