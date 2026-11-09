@@ -45,10 +45,21 @@ from __future__ import annotations
 # "Networking" means a warm lead with NO application (the Mercor row). "Recruiter
 # Outreach" means an EXISTING application that a recruiter has picked up and is actively
 # moving -- further along than cold Applied, short of any booked screen.
+# "Warm Lead - Passed" added 2026-11-09, Sparsh's call (name + placement both his). He
+# applied, a recruiter reached out, HE passed on this cycle (Summer 2027 is Microsoft),
+# and the recruiter is now a contact for new grad: Blue Origin (Nov 6) and all five
+# Palantir rows (Nov 4, "reach back out when you are looking for a FT role"). They were on "Skip", which he rejected: "i'm not like skipping an
+# automatic OA, rather it was a recruiter reach out and a warm lead for the future".
+# Not Networking (that means NO application) and not Rejected (they didn't say no).
+# He asked for it to sort "near the top, with Networking", so it sits directly under
+# Networking and above cold Applied. It is in PIPELINE_STATUSES (a settled relationship
+# row must never be struck as stale) but NOT in IN_PROCESS_STATUSES (nothing is in
+# flight). The person behind each row lives in [[Inbound Leads]] in the vault.
 STATUS_OPTS = ["To Apply", "Applied", "Recruiter Outreach", "OA - To Do", "OA - Done",
                "Phone Screen", "Technical Interview", "Onsite", "Final Round - Sat",
                "Offer", "Rejected", "Rejected after OA", "Rejected after Interview",
-               "Networking", "On Hold", "Skip", "Not a Fit", "Closed"]
+               "Networking", "Warm Lead - Passed", "On Hold", "Skip", "Not a Fit",
+               "Closed"]
 # Every terminal-no status, for consumers that need "he was turned down" as one bucket.
 REJECTED_STATUSES = tuple(s for s in STATUS_OPTS if s.startswith("Rejected"))
 # Statuses that mean "I looked at this and I'm not applying" -> Reviewed sheet, not the
@@ -60,7 +71,8 @@ REVIEWED_STATUSES = {"skip", "not a fit", "closed"}
 # the moment they stop accepting candidates, which is usually right after he applies.
 PIPELINE_STATUSES = {"Applied", "Recruiter Outreach", "OA - To Do", "OA - Done",
                      "Phone Screen", "Technical Interview", "Onsite",
-                     "Final Round - Sat", "Offer", "Networking", "On Hold"}
+                     "Final Round - Sat", "Offer", "Networking", "Warm Lead - Passed",
+                     "On Hold"}
 # The interview funnel proper, for the "In process (OA+)" summary tile.
 IN_PROCESS_STATUSES = ("OA - To Do", "OA - Done", "Phone Screen",
                        "Technical Interview", "Onsite", "Final Round - Sat")
@@ -83,10 +95,12 @@ STATUS_RANK = {"Offer": 0, "Final Round - Sat": 1, "Onsite": 2,
                "Technical Interview": 3, "Phone Screen": 4,
                "OA - To Do": 5, "OA - Done": 6,
                "Recruiter Outreach": 7, "Networking": 8,
-               "Applied": 9, "On Hold": 10,
-               "Rejected after Interview": 11, "Rejected after OA": 12, "Rejected": 13,
+               # 2026-11-09, his placement: with Networking, above cold Applied.
+               "Warm Lead - Passed": 9,
+               "Applied": 10, "On Hold": 11,
+               "Rejected after Interview": 12, "Rejected after OA": 13, "Rejected": 14,
                # 2026-10-05: an APPLIED row can now carry a Reviewed status and stay on
                # My Applications (classify_row). Settled-by-him sorts at the very bottom,
                # under the rejections; on Reviewed these ranks are never consulted.
-               "Closed": 14, "Skip": 15, "Not a Fit": 16}
+               "Closed": 15, "Skip": 16, "Not a Fit": 17}
 UNKNOWN_RANK = STATUS_RANK["Applied"]

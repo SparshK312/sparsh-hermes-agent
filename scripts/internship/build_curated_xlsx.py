@@ -84,6 +84,7 @@ STATUS_FILL = {"To Apply": ("FED7AA", "9A3412"),        # orange  — action nee
                "Final Round - Sat": ("C4B5FD", "4C1D95"),  # deep violet — final round BEHIND him, decision theirs
                "Offer": ("A7F3D0", "065F46"),           # green   — win
                "Networking": ("FBCFE8", "9D174D"),      # pink    — warm outreach
+               "Warm Lead - Passed": ("F5D0FE", "86198F"),  # fuchsia — he passed this cycle; recruiter kept for new grad
                "Rejected": ("FECACA", "991B1B"),        # red     — no
                "Rejected after OA": ("FCA5A5", "7F1D1D"),         # deeper red — cleared the screen, lost the OA
                "Rejected after Interview": ("F87171", "450A0A"),  # deepest red — lost a live round

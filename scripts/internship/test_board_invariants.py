@@ -631,6 +631,37 @@ def test_every_status_is_classified():
           STATUS_RANK["OA - Done"] < STATUS_RANK["Applied"], True)
 
 
+# ── WARM LEAD - PASSED ───────────────────────────────────────────────────────
+# 2026-11-09, Sparsh's call. An application where a recruiter reached out, HE passed on
+# the cycle, and the recruiter became a new-grad contact (Blue Origin, Palantir x5). They
+# sat on "Skip", which reads as "skipped an OA". Placement is his: "near the top, with
+# Networking" -- so it must sort under Networking and above every cold Applied, stay on
+# My Applications, never be struck as stale, and never count as in-flight.
+def test_warm_lead_passed_status():
+    from build_curated_xlsx import (STATUS_OPTS, STATUS_FILL, STATUS_RANK,
+                                    PIPELINE_STATUSES, IN_PROCESS_STATUSES,
+                                    REVIEWED_STATUSES, classify_row)
+    import board_facts
+    print("WL. Warm Lead - Passed: a settled recruiter relationship, sorted with Networking")
+    st = "Warm Lead - Passed"
+    check(f"{st} is a status", st in STATUS_OPTS, True)
+    check(f"{st} has a colour", st in STATUS_FILL, True)
+    check(f"{st} sorts directly under Networking",
+          STATUS_RANK["Networking"] < STATUS_RANK[st], True)
+    check(f"{st} sorts above a cold Applied (his placement)",
+          STATUS_RANK[st] < STATUS_RANK["Applied"], True)
+    check(f"{st} is never struck as stale", st in PIPELINE_STATUSES, True)
+    check(f"{st} is not in the interview funnel (nothing in flight)",
+          st in IN_PROCESS_STATUSES, False)
+    check(f"{st} is not a Reviewed status", st.lower() in REVIEWED_STATUSES, False)
+    check(f"{st} is not in the nudge's live pipeline",
+          st.lower() in board_facts.LIVE_PIPELINE, False)
+    for applied in ("2026-09-12", ""):
+        rec = {"machine": {"company": "X", "role": "Y"},
+               "human": {"status": st, "applied_date": applied}}
+        check(f"{st} routes to My Applications (applied_date={applied!r})",
+              classify_row(rec), "application")
+
 # ── DUE IS A HUMAN COLUMN ────────────────────────────────────────────────────
 # 2026-09-16. "Due" holds the deadline on anything he owes. It is read back as human,
 # so the 2026-09-08 rule binds: a machine-derived value rendered into a read-back
@@ -2874,7 +2905,8 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_board_fanout_is_bounded_and_queueing_is_not_a_timeout,
            test_settled_applications_stay_on_my_applications,
            test_notes_are_prepended_not_replaced,
-           test_unlabelled_simplify_rows_reach_the_board):
+           test_unlabelled_simplify_rows_reach_the_board,
+           test_warm_lead_passed_status):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:
