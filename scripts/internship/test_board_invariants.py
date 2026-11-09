@@ -1647,6 +1647,14 @@ def test_named_winter_term_overrides():
     check("a look-alike company is NOT swept in", TB.winter_term_offered("Claymation Inc", "Software Engineering Intern"), False)
     check("Etched IA Research Engineer Intern (form offers Winter Jan-May) -> Winter, even labelled Summer",
           B.queue_placement(rec("Etched", "IA Research Engineer Intern ", "Summer 2027"))[0], "Apply - Winter")
+    def recid(cid, c, r, cy=""):
+        return {"_cid": cid, "machine": {"company": c, "role": r, "cycle": cy}, "human": {"status": "To Apply"}}
+    check("Tesla 289240 (Winter/Spring 2027 in Tesla's feed, blank here) -> Winter by _id",
+          B.queue_placement(recid("www.tesla.com/careers/search/job/289240", "Tesla",
+                                  "Software Engineer Intern - SI Reinforcement Learning"))[0], "Apply - Winter")
+    check("its Summer twin 289241, SAME title, stays on Summer (why the key is the _id)",
+          B.queue_placement(recid("www.tesla.com/careers/search/job/289241", "Tesla",
+                                  "Software Engineer Intern - SI Reinforcement Learning"))[0], "Apply - Summer")
     check("a different Etched posting is NOT swept in",
           B.queue_placement(rec("Etched", "Infrastructure Engineering & Projects Intern"))[0], "Apply - Summer")
     check("an On Hold Clay row stays on its (Winter) season tab",

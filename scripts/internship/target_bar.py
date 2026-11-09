@@ -262,6 +262,25 @@ WINTER_TERM_OFFERED = {
 }
 
 
+# 2026-11-09, his call: the same idea keyed on the board row's _id, for when the TITLE cannot
+# be the key. Tesla's own feed titles these "(Winter/Spring 2027)", but the board rows came in
+# via Simplify with no term, so they routed to Summer. Title keys would be wrong here: Tesla
+# 289240 (Winter/Spring 2027) and 289241 (Summer 2027) carry the IDENTICAL role string.
+# Verified against tesla.com/cua-api/apps/careers/state, Nov 9 2026.
+WINTER_TERM_IDS = {
+    "www.tesla.com/careers/search/job/289240",  # SI Reinforcement Learning (Winter/Spring 2027)
+    "www.tesla.com/careers/search/job/285801",  # Build & Simulation Platform
+    "www.tesla.com/careers/search/job/284286",  # Supercharger SIL Test Infrastructure SWE
+    "www.tesla.com/careers/search/job/282250",  # Software Validation, Steering/Chassis
+    "www.tesla.com/careers/search/job/282246",  # Software Validation, Vehicle Firmware
+}
+
+
+def winter_term_offered_id(cid: str) -> bool:
+    """True for a board row (_id) verified to be a Winter 2027 posting its text can't show."""
+    return (cid or "").strip() in WINTER_TERM_IDS
+
+
 def winter_term_offered(company: str, role: str) -> bool:
     """True for a named req verified to offer a Winter 2027 term its text can't show."""
     return (normalize_company_name(company or ""),
