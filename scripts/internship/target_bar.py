@@ -255,6 +255,10 @@ WINTER_TERM_OFFERED = {
     # Epic Games (greenhouse 6178818004, 6219626004, Cary NC): "flexible start date in 2027".
     ("epic games", "technical product management intern"),
     ("epic games", "sdet intern"),
+    # 2026-11-09, his call. Etched "IA Research Engineer Intern" (ashby etched 05d67dff): the JD
+    # says "Spring '27 and Summer '27" and the cycle reader takes Summer; the application form's
+    # term picker reads "Winter (January - May)". Same shape as Clay.
+    ("etched", "ia research engineer intern"),
 }
 
 

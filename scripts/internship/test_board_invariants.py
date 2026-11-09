@@ -1645,6 +1645,10 @@ def test_named_winter_term_overrides():
     check("a different Exa posting is NOT swept in",
           B.queue_placement(rec("Exa", "Research Engineer Intern"))[0], "Apply - Summer")
     check("a look-alike company is NOT swept in", TB.winter_term_offered("Claymation Inc", "Software Engineering Intern"), False)
+    check("Etched IA Research Engineer Intern (form offers Winter Jan-May) -> Winter, even labelled Summer",
+          B.queue_placement(rec("Etched", "IA Research Engineer Intern ", "Summer 2027"))[0], "Apply - Winter")
+    check("a different Etched posting is NOT swept in",
+          B.queue_placement(rec("Etched", "Infrastructure Engineering & Projects Intern"))[0], "Apply - Summer")
     check("an On Hold Clay row stays on its (Winter) season tab",
           B.queue_placement({"machine": {"company": "Clay", "role": "Software Engineering Intern", "cycle": ""},
                              "human": {"status": "On Hold"}})[0], "Apply - Winter")
