@@ -66,6 +66,7 @@ SHEET_ID_DEFAULT = "1Kkle7QoKsBMXihoslWjIoMDqKFznwxxA4Y_OgiqJpWI"
 # Apply - Winter / Apply - Summer / Below Bar). Re-exported here for callers.
 TAB_WINTER = BT.TAB_WINTER
 TAB_SUMMER = BT.TAB_SUMMER
+TAB_FALL = BT.TAB_FALL
 TAB_BELOW = BT.TAB_BELOW
 TAB_APPS = BT.TAB_APPS
 TAB_REVIEWED = BT.TAB_REVIEWED
@@ -732,11 +733,14 @@ def write_board(store: dict, sheet_id: str = SHEET_ID_DEFAULT,
     meta_rows = [
         ["schema_version", SCHEMA_VERSION],
         ["generated_at", generated_at],
-        # "queue" keeps its pre-2026-10-04 meaning (rows he can apply from), now the
-        # Winter + Summer tabs; Below Bar is counted on its own line.
-        ["queue", counts[TAB_WINTER] + counts[TAB_SUMMER]],
+        # "queue" keeps its pre-2026-10-04 meaning (rows he can apply from): the sum of
+        # board_tabs.APPLY_TABS, so it follows that tuple. Since 2026-11-11 that is
+        # Winter + Summer + Fall (Apply - Fall is a tab he applies from, so it counts);
+        # each is also on its own line. Below Bar is counted on its own line.
+        ["queue", sum(counts[t] for t in BT.APPLY_TABS)],
         ["queue_winter", counts[TAB_WINTER]],
         ["queue_summer", counts[TAB_SUMMER]],
+        ["queue_fall", counts[TAB_FALL]],
         ["below_bar", counts[TAB_BELOW]],
         ["applications", counts[TAB_APPS]],
         ["reviewed", counts[TAB_REVIEWED]],

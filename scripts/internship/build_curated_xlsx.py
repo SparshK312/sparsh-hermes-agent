@@ -185,6 +185,11 @@ def queue_placement(rec: dict) -> tuple[str, str]:
     Winter, everything else incl. blank -> Summer). The bar comes from the COMPANY
     (target_bar.bar_of). An "On Hold" row is a deliberate park, so it stays on its
     season's tab whatever the bar says. Routing only — no status is ever written.
+
+    FALL (2026-11-11): a Fall 2027 row goes to Apply - Fall when its company clears the
+    FALL bar (top tier only) AND fall_location_ok(location) (Toronto/Canada/remote/blank/
+    unclear). Otherwise it goes to Below Bar — never Reviewed, never dropped; this function
+    cannot send a row anywhere but a queue tab. An On Hold Fall row stays on Apply - Fall.
     """
     import board_tabs as BT
     import target_bar as TB
@@ -192,10 +197,21 @@ def queue_placement(rec: dict) -> tuple[str, str]:
     season = TB.season_of(m.get("cycle", ""), m.get("role", ""))
     # 2026-10-14: a named req that offers Winter where the text can't show it (Clay's
     # term is only in its form; Exa says "take off a semester") -> TB.WINTER_TERM_OFFERED.
+    # 🔴 Checked BEFORE the Fall override below: Winter wins (his priority slot).
     if season != TB.WINTER and (TB.winter_term_offered(m.get("company", ""), m.get("role", ""))
                                 or TB.winter_term_offered_id(rec.get("_cid", ""))):
         season = TB.WINTER
+    # 2026-11-11: a named req verified to offer Fall 2027 its label can't show (Amazon's
+    # three Canadian reqs, labelled Summer / "2027") -> TB.FALL_TERM_IDS.
+    elif season != TB.WINTER and TB.fall_term_offered_id(rec.get("_cid", "")):
+        season = TB.FALL
     bar = TB.bar_of(m.get("company", ""), season)
+    if season == TB.FALL:
+        if (h.get("status") or "").strip().lower() == "on hold":
+            return BT.TAB_FALL, bar
+        if bar == TB.BELOW or not TB.fall_location_ok(m.get("location", "")):
+            return BT.TAB_BELOW, bar
+        return BT.TAB_FALL, bar
     # 2026-10-09 group B: a big-name enterprise's Winter row is promoted only on a
     # direct résumé fit (lane + scored JD), never on the company alone.
     if season == TB.WINTER and bar == TB.BELOW and TB.winter_fit_promotes(

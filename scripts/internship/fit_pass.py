@@ -56,7 +56,7 @@ JD_HEAD = 2200
 JD_TAIL = 1300
 CHUNK_SIZE = 5                      # postings per LLM call (smaller = steadier recall, no dropped items)
 MAX_LLM_PER_RUN = 120              # hard cost guard (first run is ~94)
-PROMPT_VERSION = "fit-v3.8"        # v3.8: firmware-embedded DISQUALIFIER + Fall-2026 example fix + clearance/degree gates
+PROMPT_VERSION = "fit-v3.9"        # v3.9: Fall 2027 is a valid term (top-tier, alongside capstone); 2028 terms stay wrong-cycle
 
 # ── Targeted invalidation ─────────────────────────────────────────────────────
 # A PROMPT_VERSION bump used to re-score EVERY cached row: 466 live rows (~$2.40, ~20
@@ -85,6 +85,11 @@ _V38_RE = re.compile(
     re.I,
 )
 
+# v3.9 (2026-11-11): Fall 2027 (Sep-Dec 2027) stopped being wrong-cycle. Only a row whose
+# cached reasoning or title names that term can move; on Nov 11 the VPS store held 22 LIVE
+# rows matching this (mostly "continuing in Fall 2027" eligibility lines in jd_summary).
+_V39_RE = re.compile(r"fall 2027|autumn 2027|sep.{0,4}dec 2027", re.I)
+
 _RESCORE_IF = {
     # v3.6 changed only what the model knows about his graduation date.
     "fit-v3.6": lambda m: bool(_GRAD_RE.search(" ".join(str(m.get(k) or "") for k in
@@ -93,6 +98,10 @@ _RESCORE_IF = {
     # clearance, or a completed degree could move. Everything else keeps its verdict,
     # per his standing instruction not to re-score the whole board on a bump.
     "fit-v3.8": lambda m: bool(_V38_RE.search(" ".join(str(m.get(k) or "") for k in
+                                              ("fit_why", "fit_jd_summary", "fit_disqualifier", "role")))),
+    # v3.9: only rows that mention Fall 2027. NEVER remove this while (3, 9) is in
+    # _KNOWN_VERSIONS: a version with no predicate is a BLANKET re-score of the whole board.
+    "fit-v3.9": lambda m: bool(_V39_RE.search(" ".join(str(m.get(k) or "") for k in
                                               ("fit_why", "fit_jd_summary", "fit_disqualifier", "role")))),
 }
 
@@ -117,7 +126,7 @@ def _all_versions_between(lo: tuple, hi: tuple) -> list:
 
 # Every version that ever shipped, so a row cached on v3.3 knows it missed v3.4 and v3.5
 # (blanket) even though only v3.6 has a predicate.
-_KNOWN_VERSIONS = [(3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 8)]   # bump to force re-score on prompt changes (part of cache key)
+_KNOWN_VERSIONS = [(3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 8), (3, 9)]   # bump to force re-score on prompt changes (part of cache key)
 # 🔴 v3.7 IS DELIBERATELY ABSENT. It never shipped -- it existed for ~20 minutes inside the
 # 2026-09-07 session before being superseded by v3.8, and its predicate key was renamed
 # rather than duplicated. Listing it here while _RESCORE_IF has no "fit-v3.7" entry made
@@ -127,6 +136,12 @@ _KNOWN_VERSIONS = [(3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 8)]   # b
 # the waste the targeted-invalidation machinery exists to prevent.
 # RULE: never add a version number here without a matching predicate in _RESCORE_IF,
 # unless you actually intend a full re-score.
+#                                    v3.9 (2026-11-11): FALL 2027 is a valid term (his call:
+#                                          takeable at a top-tier company alongside capstone;
+#                                          the company/location gate lives in the routing, not
+#                                          here). Winter/Spring/Summer 2028 stay wrong-cycle; an
+#                                          8-month Sep 2027-Apr 2028 stays long-placement.
+#                                          Targeted predicate _V39_RE, NOT a blanket re-score.
 #                                    v3.8 (2026-09-07): firmware/embedded is a DISQUALIFIER
 #                                          ("firmware-embedded") so those rows leave Apply Now
 #                                          entirely. Shipped first as a <=35 score band, which

@@ -38,7 +38,13 @@ BOARDS = [
      "host": "nvidia.wd5.myworkdayjobs.com", "site": "NVIDIAExternalCareerSite"},
     {"name": "Anthropic", "tier": "S", "ats_type": "greenhouse", "token": "anthropic"},
     {"name": "OpenAI", "tier": "S", "ats_type": "ashby", "org": "openai"},
-    {"name": "Amazon", "tier": "S", "ats_type": "amazon"},
+    # countries=[] = no country filter (global), on purpose. Until 2026-11-11 the fetcher
+    # sent `country[]`, which amazon.jobs ignores, so the board has always seen every
+    # country. Switching to the working `normalized_country_code[]` USA+CAN filter would
+    # have stopped fetching ~48 UK/EU reqs, which would then die by stale-strike, and
+    # UK/Europe roles are IN wherever he self-authorises (his call Oct 4 + Oct 8).
+    # fall_watch passes ("CAN",) explicitly, so it is unaffected.
+    {"name": "Amazon", "tier": "S", "ats_type": "amazon", "countries": []},
     # SpaceX was never a tracked board — its roles only ever reached the queue
     # via the wide net, the lane whose dead-signal is least trustworthy. It is
     # also the single biggest beneficiary of the work-model location fix: every

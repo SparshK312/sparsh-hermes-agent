@@ -96,12 +96,31 @@ if [ -f "$INV" ]; then
   # 🔴 NOT `cmd | tail`: a pipeline's exit status is the LAST command's, so `| tail`
   # always succeeds and the gate silently passes. That exact mistake was made writing
   # this gate. Capture, then test the real status.
-  INV_OUT="$("$INV_PY" "$INV" 2>&1)"; INV_RC=$?
+  # ⚠️ 2026-11-11: `OUT="$(cmd)"; RC=$?` under `set -e` exits AT THE ASSIGNMENT when cmd
+  # fails, so the deploy did abort, but with the test's output and the message below
+  # never printed. `if OUT=...; then` is exempt from set -e and keeps both.
+  if INV_OUT="$("$INV_PY" "$INV" 2>&1)"; then INV_RC=0; else INV_RC=$?; fi
   echo "$INV_OUT" | tail -3
   if [ "$INV_RC" -ne 0 ]; then
     echo "  ❌ BOARD INVARIANTS FAILED (exit $INV_RC) — deploy aborted."
     echo "     Fix the defect. Do not skip this; every one of these tests exists because"
     echo "     the defect it covers already shipped once."
+    exit 1
+  fi
+  echo "  ✓ invariants hold"
+  echo
+fi
+# Fall 2027 watcher (fall_watch.py, hot_watch seen-set, Amazon pager, runner exit codes).
+# Same gate, same rule: added 2026-11-11, every assertion mutation-tested.
+FWT="$REPO_ROOT/scripts/internship/test_fall_watch.py"
+if [ -f "$FWT" ]; then
+  echo "[0b/3] Fall-watch invariants..."
+  FW_PY="${INV_PY:-/Users/sparshk/Documents/School Vault - UofT/.venv/bin/python}"
+  [ -x "$FW_PY" ] || FW_PY="$(command -v python3)"
+  if FWT_OUT="$("$FW_PY" "$FWT" 2>&1)"; then FWT_RC=0; else FWT_RC=$?; fi
+  echo "$FWT_OUT" | tail -3
+  if [ "$FWT_RC" -ne 0 ]; then
+    echo "  ❌ FALL-WATCH INVARIANTS FAILED (exit $FWT_RC) — deploy aborted."
     exit 1
   fi
   echo "  ✓ invariants hold"
@@ -305,10 +324,11 @@ ssh -i "$VPS_SSH_KEY" "$VPS_HOST" "
   # decoys and cron kept running whatever had last been scp'd by hand (found 2026-09-05).
   cp scripts/internship/run_curate_vps.sh ~/.hermes/scripts/run_curate_vps.sh
   cp scripts/internship/run_hot_watch.sh  ~/.hermes/scripts/run_hot_watch.sh
+  cp scripts/internship/run_fall_watch.sh ~/.hermes/scripts/run_fall_watch.sh
   cp scripts/internship/run_revive_dead.sh ~/.hermes/scripts/run_revive_dead.sh
   # Weekly coverage digest (2026-09-12): what the tier table hid this week.
   cp scripts/internship/run_coverage_digest.sh ~/.hermes/scripts/run_coverage_digest.sh
-  chmod +x ~/.hermes/scripts/run_curate_vps.sh ~/.hermes/scripts/run_hot_watch.sh ~/.hermes/scripts/run_revive_dead.sh ~/.hermes/scripts/run_coverage_digest.sh
+  chmod +x ~/.hermes/scripts/run_curate_vps.sh ~/.hermes/scripts/run_hot_watch.sh ~/.hermes/scripts/run_fall_watch.sh ~/.hermes/scripts/run_revive_dead.sh ~/.hermes/scripts/run_coverage_digest.sh
   # Morning email triage (2026-10-04). Until today NOTHING copied scripts/email/: the
   # VPS ran a hand-placed Sep-4 copy, so the fix to its 60-row My Applications cap
   # (commit 12e183e) deployed and changed nothing. Same "never-executed decoy" shape

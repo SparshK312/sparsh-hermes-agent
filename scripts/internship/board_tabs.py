@@ -18,9 +18,17 @@ queue became three tabs, his call:
                      just we're aiming for something better". NOT Reviewed — Reviewed
                      keeps hard-gate failures and his own Skip / Not a Fit.
 The bar lives in target_bar.py.
+
+2026-11-11, his call: a fourth queue tab.
+  Apply - Fall    -> Fall 2027 (Sep-Dec) rows at a TOP-TIER company (target_bar FALL bar),
+                     located in Toronto/Canada/remote, to take alongside capstone. A Fall
+                     row below that bar, or clearly on-site outside Canada, goes to Below
+                     Bar. Created on the first refresh after deploy (_ensure_tabs adds any
+                     tab in TABS that is missing, then ensure_format formats it).
 """
 TAB_WINTER = "Apply - Winter"
 TAB_SUMMER = "Apply - Summer"
+TAB_FALL = "Apply - Fall"
 TAB_BELOW = "Below Bar"
 TAB_APPS = "My Applications"
 TAB_REVIEWED = "Reviewed"
@@ -33,10 +41,13 @@ TAB_META = "_meta"
 LEGACY_QUEUE = "Apply Now"
 
 # Every queue-shaped tab (same headers, "To Apply" default, Priority column).
-QUEUE_TABS = (TAB_WINTER, TAB_SUMMER, TAB_BELOW)
+QUEUE_TABS = (TAB_WINTER, TAB_SUMMER, TAB_FALL, TAB_BELOW)
 # The tabs he applies from. Below Bar is deliberately NOT here: the nudges and
-# list-live surface targets, not the "aiming higher" pile.
-APPLY_TABS = (TAB_WINTER, TAB_SUMMER)
+# list-live surface targets, not the "aiming higher" pile. (board.py list-live reads
+# this, so it shows Apply - Fall too; board_facts, which feeds the nudges, reads Winter
+# and Summer BY NAME and does not read Fall — unchanged on 2026-11-11, his call later.)
+APPLY_TABS = (TAB_WINTER, TAB_SUMMER, TAB_FALL)
 
-# Render order (also tab order on a fresh sheet).
-TABS = (TAB_WINTER, TAB_SUMMER, TAB_BELOW, TAB_APPS, TAB_REVIEWED)
+# Render order (also tab order on a fresh sheet; an added tab lands at the END of an
+# existing sheet, since addSheet takes no index here).
+TABS = (TAB_WINTER, TAB_SUMMER, TAB_FALL, TAB_BELOW, TAB_APPS, TAB_REVIEWED)

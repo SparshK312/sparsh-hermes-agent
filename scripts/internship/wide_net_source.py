@@ -155,7 +155,7 @@ def _gather_postings() -> list:
         if (p.source == "swelist" and simplify_resolve.uuid_of(p.url)
                 and brand_tier(p.company) != "C"
                 and role_lane(p.title) is not None
-                and classify_period(p.title, p.terms, p.source)[0] != "reject"):
+                and classify_period(p.title, p.terms, p.source, p.company)[0] != "reject"):
             hit = simplify_resolve.resolve(p.url)
             if hit:
                 p.url = hit["url"]
@@ -167,7 +167,7 @@ def _gather_postings() -> list:
         # employer URL FIRST (one cached 302 hop). Cheap gates before the network call.
         elif (short_link_resolve.is_short_link(p.url)
                 and role_lane(p.title) is not None
-                and classify_period(p.title, p.terms, p.source)[0] != "reject"):
+                and classify_period(p.title, p.terms, p.source, p.company)[0] != "reject"):
             target = short_link_resolve.resolve(p.url)
             if target:
                 p.url = target
@@ -211,7 +211,7 @@ def _gather_postings() -> list:
             continue
         if REJECT_NON_NA_LOCATIONS and classify_location(p.location)[0] == "reject":
             continue
-        if classify_period(p.title, p.terms, p.source)[0] == "reject":
+        if classify_period(p.title, p.terms, p.source, p.company)[0] == "reject":
             continue
         cand.append(p)
     if simplify_resolve.STATS["resolved"] or simplify_resolve.STATS["failed"] \

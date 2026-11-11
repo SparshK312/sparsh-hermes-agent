@@ -44,6 +44,7 @@ CHAT_ID_KEYS = ("TELEGRAM_CHAT_ID", "HERMES_TELEGRAM_CHAT_ID")
 CHAT_ID_DEFAULT = "696500863"   # Sparsh
 WATCH_TIERS = {"S", "A"}
 MAX_ALERT = 8          # never send more than this many in one message
+SEEN_MAX = 20000       # seen-set cap; the OLDEST ids are dropped first (see _record_seen)
 QUIET_START, QUIET_END = 23, 7    # local hours: hold alerts overnight
 
 
@@ -71,9 +72,44 @@ def _load() -> dict:
         return {"seen": [], "seeded": False, "last_run": None}
 
 
+def _ordered_seen(st: dict) -> list[str]:
+    """The seen ids in FIRST-SEEN order, duplicates dropped.
+
+    🔴 2026-11-11: `seen` used to be written as sorted(seen) and trimmed with
+    [-20000:], which keeps the ALPHABETICALLY last 20k ids, not the newest. Past the
+    cap that would drop recent ids (which then re-alert) and keep ancient ones. It is
+    now an append-only list in first-seen order. Migration from the old sorted list
+    loses nothing: every existing id is kept, in its old (alphabetical) order, ahead
+    of everything seen afterwards, so they are the first to go if the cap is ever
+    reached (592 ids on 2026-11-11, far below it)."""
+    out: list[str] = []
+    have: set[str] = set()
+    for x in st.get("seen") or []:
+        if x not in have:
+            have.add(x)
+            out.append(x)
+    return out
+
+
+def _record_seen(seen_list: list[str], ids) -> list[str]:
+    """Append ids not already present, keeping first-seen order."""
+    have = set(seen_list)
+    for i in ids:
+        if i and i not in have:
+            have.add(i)
+            seen_list.append(i)
+    return seen_list
+
+
+def _trim(seen_list: list[str], cap: int | None = None) -> list[str]:
+    cap = SEEN_MAX if cap is None else cap
+    return seen_list[-cap:] if len(seen_list) > cap else seen_list
+
+
 def _save(st: dict) -> None:
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    st["seen"] = st["seen"][-20000:]
+    st["seen"] = _trim(st["seen"])
+    st["seen_order"] = "first-seen"
     STATE.write_text(json.dumps(st))
 
 
@@ -143,7 +179,8 @@ def main() -> int:
         else set(WATCH_TIERS)
 
     st = _load()
-    seen = set(st.get("seen", []))
+    seen_list = _ordered_seen(st)
+    seen = set(seen_list)
 
     try:
         rows = asyncio.run(poll(tiers))
@@ -154,10 +191,9 @@ def main() -> int:
     fresh = [r for r in rows if r.get("canonical_id") and r["canonical_id"] not in seen]
     _log(f"{len(rows)} live on watched boards · {len(fresh)} not seen before")
 
-    for r in rows:
-        if r.get("canonical_id"):
-            seen.add(r["canonical_id"])
-    st["seen"] = sorted(seen)
+    _record_seen(seen_list, (r.get("canonical_id") for r in rows))
+    seen = set(seen_list)
+    st["seen"] = seen_list
     st["last_run"] = datetime.now().isoformat(timespec="seconds")
 
     if seed or not st.get("seeded"):
@@ -174,7 +210,8 @@ def main() -> int:
     if QUIET_START <= hour or hour < QUIET_END:
         _log(f"{len(fresh)} new, but it is {hour:02d}:00 — holding until morning")
         # do NOT record them as seen, so the next daytime run still alerts
-        st["seen"] = sorted(seen - {r["canonical_id"] for r in fresh})
+        held = {r["canonical_id"] for r in fresh}
+        st["seen"] = [x for x in seen_list if x not in held]
         _save(st)
         return 0
 

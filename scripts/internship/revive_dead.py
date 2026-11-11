@@ -52,7 +52,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from curated_store import CuratedStore  # noqa: E402
-from internship_scraper import PAST_PERIODS_LOWER  # noqa: E402
+from internship_scraper import FALL_PERIODS_LOWER, PAST_PERIODS_LOWER, fall_admitted  # noqa: E402
 
 import store_paths  # noqa: E402
 VAULT = store_paths.vault_root()
@@ -168,6 +168,11 @@ def worth_reviving(m: dict, store=None) -> tuple[bool, str]:
         # A calendar fact, not a judgement: he is at Shopify through Dec 18 2026, so a
         # Fall-2026 req cannot be worked no matter how open it is. Without this, one run
         # would have added 129 Fall-2026 rows to the queue.
+        return False, "past-cycle"
+    # 2026-11-11: Fall 2027 left PAST_PERIODS_LOWER (takeable at a top-tier company,
+    # alongside capstone). A Fall 2027 row at a company BELOW the FALL bar is still a
+    # calendar no, so it stays "past-cycle"; a top-tier one may be checked and revived.
+    if cycle and cycle in FALL_PERIODS_LOWER and not fall_admitted(m.get("company", "")):
         return False, "past-cycle"
 
     raw = (m.get("dead_reason") or "").strip()

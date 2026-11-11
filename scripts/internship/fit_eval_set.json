@@ -349,5 +349,44 @@
       "fit_band": "high"
     },
     "origin": "real: Jane Street 8611307002 (2026-10-04) — 'May-August', NO year anywhere; was scored wrong-cycle 15 in production. Must be none. JD header reproduces the scraped page text the false positive fired on."
+  },
+  {
+    "id": "fall27_toronto",
+    "company": "Google",
+    "title": "Software Engineering Intern, Fall 2027",
+    "location": "Toronto, ON, Canada",
+    "cycle": "Fall 2027",
+    "jd": "Software Engineering Intern, Fall 2027. This is a 14-week internship running September to December 2027 in our Toronto office. Minimum qualifications: currently pursuing a Bachelor's, Master's or PhD degree in Computer Science or a related technical field, returning to your program after the internship. Experience with one or more general purpose programming languages such as Java, C++, Python or Go. Preferred: experience with data structures and algorithms, distributed systems, or machine learning. You will design, build and test production software with a host team, and work with your mentor on code reviews and design documents.",
+    "expected": {
+      "disqualifier": "none",
+      "fit_band": "high"
+    },
+    "origin": "synthetic 2026-11-11: Fall 2027 became a valid term (fit-v3.9). Not a real posting."
+  },
+  {
+    "id": "winter28_wrongcycle",
+    "company": "Stripe",
+    "title": "Software Engineer, Intern (Winter 2028)",
+    "location": "Toronto, ON, Canada",
+    "cycle": "Winter 2028",
+    "jd": "Software Engineer Intern, Winter 2028. This internship runs January to April 2028 in Toronto. You are pursuing a Bachelor's degree in Computer Science or a related field and will return to school after the internship. You will build APIs and internal tools in Ruby, Java and Go with a product team, ship code to production, and present your project at the end of the term.",
+    "expected": {
+      "disqualifier": "wrong-cycle",
+      "fit_band": "low"
+    },
+    "origin": "synthetic 2026-11-11: Fall 2027 became a valid term (fit-v3.9). Not a real posting."
+  },
+  {
+    "id": "fall27_8month",
+    "company": "Cohere",
+    "title": "Software Engineer Co-op (8 months)",
+    "location": "Toronto, ON, Canada",
+    "cycle": "Fall 2027",
+    "jd": "Software Engineer Co-op. This is an 8-month co-op running September 2027 to April 2028, full-time in our Toronto office. You are enrolled in a Bachelor's program in Computer Science or Engineering. You will work on model serving infrastructure in Python and Go, build internal evaluation tooling, and partner with research teams on deployment.",
+    "expected": {
+      "disqualifier": "long-placement",
+      "fit_band": "low"
+    },
+    "origin": "synthetic 2026-11-11: Fall 2027 became a valid term (fit-v3.9). Not a real posting."
   }
 ]

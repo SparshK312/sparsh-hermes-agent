@@ -2443,7 +2443,7 @@ def test_outreach_tab_is_never_touched_by_the_refresh():
 def test_target_bar_names_and_collisions():
     print("TB1. target_bar: his named calls, by season, and the look-alikes")
     import target_bar as TB
-    S_, W_ = TB.SUMMER, TB.WINTER
+    S_, W_, F_ = TB.SUMMER, TB.WINTER, TB.FALL
     for name in ("Google", "Google DeepMind", "Meta", "Apple", "OpenAI", "Anthropic",
                  "xAI", "Jane Street", "Citadel", "Citadel Securities"):
         check(f"{name} is accept", TB.bar_of(name, S_), TB.ACCEPT)
@@ -2503,7 +2503,9 @@ def test_target_bar_names_and_collisions():
     # Season: Spring 2027 is the US label for Jan-Apr; blank defaults to Summer.
     for cyc, want in (("Winter 2027", W_), ("Spring 2027", W_),
                       ("Winter 2027, Spring 2027", W_), ("Fall 2026, Winter 2027", W_),
-                      ("Summer 2027", S_), ("", S_), ("TBD", S_), ("Fall 2027", S_)):
+                      ("Summer 2027", S_), ("", S_), ("TBD", S_),
+                      # 2026-11-11: Fall 2027 is its own season (top-tier only, FB1).
+                      ("Fall 2027", F_)):
         check(f"season_of({cyc!r})", TB.season_of(cyc), want)
     # A cycle-less row falls back to its title; a labelled cycle is never overridden.
     for cyc, title, want in (("", "Software Engineer (Winter Co-Op)", W_),
@@ -2862,6 +2864,330 @@ def test_settled_applications_stay_on_my_applications():
         check(f"_route ran ({type(exc).__name__}: {exc})", False, True)
 
 
+# ── FALL 2027 (2026-11-11, his call) ─────────────────────────────────────────────
+# Fall 2027 (Sep-Dec) became takeable alongside capstone in Toronto, for a TOP-TIER name
+# only. Until now every Fall 2027 posting was thrown away (PAST_PERIODS_LOWER). The design
+# FAILS CLOSED BY COMPANY: the period gate admits Fall only for a company that clears
+# target_bar's FALL bar, a caller that passes no company keeps the old reject, and a Fall
+# row that does reach the store but is below bar / clearly US-onsite goes to Below Bar.
+# Everything that routed before must route the same, except rows that are purely Fall 2027.
+def test_fall_bar_and_season():
+    print("FB1. target_bar FALL: top tier only, Winter > Summer > Fall, fall_location_ok fails open")
+    import target_bar as TB
+    F_, S_, W_ = TB.FALL, TB.SUMMER, TB.WINTER
+    check("Amex Fall is below", TB.bar_of("Amex", F_), TB.BELOW)
+    check("American Express Fall is below", TB.bar_of("American Express", F_), TB.BELOW)
+    check("Google Fall is accept", TB.bar_of("Google", F_), TB.ACCEPT)
+    check("Anthropic Fall is accept", TB.bar_of("Anthropic", F_), TB.ACCEPT)
+    for name in ("Amazon", "Microsoft", "NVIDIA", "Cohere", "Shopify", "Uber", "Stripe",
+                 "Databricks", "Waabi"):
+        check(f"{name} Fall is apply", TB.bar_of(name, F_), TB.APPLY)
+    for name in ("Cohere Health", "Uber Freight", "Some Unknown Startup", ""):
+        check(f"look-alike / unknown {name!r} Fall is below", TB.bar_of(name, F_), TB.BELOW)
+    # 🔴 The flood guard: APPLY_NAMES applies in every season, so the FALL branch must
+    # return before it. Every apply-tier name not on the short Fall list stays BELOW.
+    leaked = sorted(n for n in TB.APPLY_NAMES - TB.FALL_NAMES - TB.ACCEPT_NAMES
+                    if TB.bar_of(n, F_) == TB.APPLY)
+    check("no APPLY_NAMES-only company is ever APPLY for Fall", leaked, [])
+    check("FALL_NAMES stays short (top tier, not the apply list)", len(TB.FALL_NAMES) <= 20, True)
+    check("Microsoft Summer is still below (unchanged)", TB.bar_of("Microsoft", S_), TB.BELOW)
+    check("Shopify Summer is still below (unchanged)", TB.bar_of("Shopify", S_), TB.BELOW)
+    check("Amex Summer is still apply (unchanged)", TB.bar_of("Amex", S_), TB.APPLY)
+    for cyc, title, want in (("Fall 2027", "", F_), ("Autumn 2027", "", F_),
+                             ("Summer 2027, Fall 2027", "", S_),
+                             ("Fall 2027, Summer 2027", "", S_),
+                             ("Fall 2027, Winter 2027", "", W_),
+                             ("Spring 2027, Fall 2027", "", W_),
+                             ("Winter 2028", "", S_), ("Spring 2028", "", S_),
+                             ("Summer 2028", "", S_), ("Fall 2028", "", S_),
+                             ("", "Software Engineer Intern - Fall", S_),
+                             ("", "Software Engineer Intern (Fall Co-op)", S_)):
+        check(f"season_of({cyc!r}, {title!r})", TB.season_of(cyc, title), want)
+    check("'Winter 2028' is never FALL", TB.season_of("Winter 2028") == F_, False)
+    for loc in ("Toronto, ON", "CA, ON, Toronto", "CA, BC, Vancouver", "CA-ON-Toronto",
+                "Toronto, Ontario, Canada", "Montréal, Quebec, CAN", "Waterloo", "Remote",
+                "Remote - US", "Remote, USA", "", "   ", "Multiple Locations", "Hybrid",
+                "CANADA STORE SUPPORT CENTER - 7000", "New York, NY; Toronto, ON",
+                "San Francisco, CA, Toronto, Canada", "Toronto Headquarters"):
+        check(f"fall_location_ok({loc!r})", TB.fall_location_ok(loc), True)
+    for loc in ("Mountain View, CA", "Mountain View, CA (ON-SITE)", "New York, NY", "Seattle, WA",
+                "San Francisco, California", "Bellevue, Washington, Mountain View, California",
+                "US, CA, Santa Clara", "London, United Kingdom", "Berlin, Germany"):
+        check(f"fall_location_ok({loc!r}) is False", TB.fall_location_ok(loc), False)
+
+
+def _frec(cid, company, cycle, location, status="", disq="none"):
+    r = _qrec(cid, company, cycle, status, disq=disq)
+    r["machine"]["location"] = location
+    return r
+
+
+def test_fall_routing():
+    print("FB2. queue_placement: a top-tier Fall row in Canada/remote -> Apply - Fall, else Below Bar")
+    import build_curated_xlsx as BX
+    import board_tabs as BT
+    import target_bar as TB
+    from internship_scraper import canonical_id
+    cases = [  # (company, cycle, location, status, want)
+        ("Google", "Fall 2027", "Toronto, ON", "", BT.TAB_FALL),
+        ("Google", "Fall 2027", "Mountain View, CA", "", BT.TAB_BELOW),
+        ("Google", "Fall 2027", "", "", BT.TAB_FALL),
+        ("Amazon", "Fall 2027", "CA, ON, Toronto", "", BT.TAB_FALL),
+        ("Amex", "Fall 2027", "Toronto, ON", "", BT.TAB_BELOW),
+        ("Rippling", "Fall 2027", "Remote", "", BT.TAB_BELOW),
+        # On Hold is a deliberate park: Apply - Fall whatever the bar or location says.
+        ("Google", "Fall 2027", "Toronto, ON", "On Hold", BT.TAB_FALL),
+        ("Amex", "Fall 2027", "New York, NY", "On Hold", BT.TAB_FALL),
+        # Unchanged neighbours: a Summer/Fall row is Summer; Winter wins.
+        ("Google", "Summer 2027, Fall 2027", "Mountain View, CA", "", BT.TAB_SUMMER),
+        ("Amex", "Summer 2027, Fall 2027", "New York, NY", "", BT.TAB_SUMMER),
+        ("Stripe", "Winter 2027, Fall 2027", "Toronto, ON", "", BT.TAB_WINTER),
+    ]
+    for i, (co, cyc, loc, st, want) in enumerate(cases):
+        r = _frec(f"f{i}", co, cyc, loc, st)
+        check(f"{co} / {cyc} / {loc or 'blank'} / {st or 'no status'} is a queue row",
+              BX.classify_row(r), "queue")
+        check(f"{co} / {cyc} / {loc or 'blank'} / {st or 'no status'} -> {want}",
+              BX.queue_placement(r)[0], want)
+    # A disqualified Fall row still goes to Reviewed via classify_row (unchanged), and a
+    # below-bar Fall row is never sent anywhere but a queue tab by queue_placement.
+    check("a wrong-cycle Fall row is still Reviewed",
+          BX.classify_row(_frec("dq", "Google", "Fall 2027", "Toronto", disq="wrong-cycle")), "reviewed")
+    # FALL_TERM_IDS: an _id override for reqs whose label can't show Fall (Amazon CAN).
+    for cid in sorted(TB.FALL_TERM_IDS):
+        check(f"FALL_TERM_IDS entry is a canonical _id: {cid[:60]}", canonical_id("https://" + cid), cid)
+    amz = "www.amazon.jobs/en/jobs/10553947/software-development-engineer-intern-summer-2027-can"
+    check("the 10553947 SDE Intern CAN req is seeded", amz in TB.FALL_TERM_IDS, True)
+    r = _frec(amz, "Amazon", "Summer 2027", "CA, BC, Vancouver")
+    check("a FALL_TERM_IDS row labelled Summer 2027 -> Apply - Fall", BX.queue_placement(r)[0], BT.TAB_FALL)
+    r = _frec("www.amazon.jobs/en/jobs/99999999/other", "Amazon", "Summer 2027", "CA, BC, Vancouver")
+    check("an unlisted Amazon Summer row stays on Summer", BX.queue_placement(r)[0], BT.TAB_SUMMER)
+    r = _frec(amz, "Amazon", "Winter 2027", "CA, BC, Vancouver")
+    check("a FALL_TERM_IDS row whose cycle says Winter stays on Winter", BX.queue_placement(r)[0], BT.TAB_WINTER)
+    tesla = "www.tesla.com/careers/search/job/289240"
+    check("a WINTER_TERM_IDS row stays on Winter",
+          BX.queue_placement(_frec(tesla, "Tesla", "", "Palo Alto, CA"))[0], BT.TAB_WINTER)
+    TB.FALL_TERM_IDS.add(tesla)
+    try:
+        check("Winter override beats Fall override when an _id is in both",
+              BX.queue_placement(_frec(tesla, "Tesla", "", "Palo Alto, CA"))[0], BT.TAB_WINTER)
+    finally:
+        TB.FALL_TERM_IDS.discard(tesla)
+
+
+def test_fall_period_gate():
+    print("FB3. classify_period admits Fall 2027 only for a top-tier company; every gate passes it")
+    import ast
+    from internship_scraper import (classify_period, triage_posting, Posting,
+                                    PAST_PERIODS_LOWER, FALL_PERIODS_LOWER)
+    from brand_first_source import _cycle_label, _accept
+    import brand_first_source as BFS
+    import ats_router as A
+    import coverage_digest as CD
+    import worklist as WL
+    from types import SimpleNamespace as NS
+    T = "Software Engineer Intern - Fall 2027"
+    check("Fall 2027 + Google admits", classify_period(T, "", "simplify-main", company="Google")[0], "match")
+    check("Fall 2027 + no company rejects (unwired callers stay shut)",
+          classify_period(T, "", "simplify-main", company="")[0], "reject")
+    check("Fall 2027 + positional default rejects", classify_period(T, "", "simplify-main")[0], "reject")
+    check("Fall 2027 + Amex rejects", classify_period(T, "", "simplify-main", company="Amex")[0], "reject")
+    check("Autumn 2027 + Google admits", classify_period("SWE Intern", "Autumn 2027", "x", company="Google")[0], "match")
+    check("Autumn 2027 + Amex rejects", classify_period("SWE Intern", "Autumn 2027", "x", company="Amex")[0], "reject")
+    for t in ("Winter 2028", "Spring 2028", "Summer 2028"):
+        check(f"{t} rejects for Google", classify_period(f"SWE Intern - {t}", "", "x", company="Google")[0], "reject")
+    check("Fall 2027 + Winter 2028 (8 months) rejects for Google",
+          classify_period("SWE Co-op", "Fall 2027, Winter 2028", "x", company="Google")[0], "reject")
+    check("a 12-month Fall 2027 placement rejects for Google",
+          classify_period("SWE Intern - Fall 2027 (12-month)", "", "x", company="Google")[0], "reject")
+    check("Summer 2027 + Fall 2027 at Amex still matches (target wins, unchanged)",
+          classify_period("SWE Intern", "Summer 2027, Fall 2027", "x", company="Amex")[0], "match")
+    check("fall 2027 left PAST_PERIODS_LOWER", "fall 2027" in PAST_PERIODS_LOWER, False)
+    check("winter/spring/summer 2028 stay in PAST_PERIODS_LOWER",
+          all(t in PAST_PERIODS_LOWER for t in ("winter 2028", "spring 2028", "summer 2028")), True)
+    check("FALL_PERIODS_LOWER holds fall 2027", "fall 2027" in FALL_PERIODS_LOWER, True)
+
+    # triage_posting passes the posting's company.
+    def post(co):
+        return Posting(company=co, title=T, location="Toronto, ON", url="https://x/1",
+                       posted_date="2026-11-11", age_days=0, terms="", source="simplify-main",
+                       canonical_id="x/1")
+    check("triage_posting: Google Fall 2027 passes the period gate",
+          triage_posting(post("Google"))["checks"]["period"][0], "match")
+    check("triage_posting: Amex Fall 2027 is still skipped",
+          triage_posting(post("Amex"))["verdict"], "skip")
+
+    # brand_first: _accept takes the company, and _one_board passes the board's name.
+    fall = A.JobRecord(title="Software Engineer Intern", location="Toronto, ON", url="u",
+                       full_jd="This internship runs Fall 2027, September to December, in Toronto.")
+    check("_accept: Fall 2027 at Google passes", _accept(fall, "S", "Google"), True)
+    check("_accept: Fall 2027 with no company still rejects", _accept(fall), False)
+    check("_accept: Fall 2027 at Amex rejects", _accept(fall, "B", "Amex"), False)
+    import asyncio
+    saved = A.fetch_board
+    async def fake_fetch(client, board, prefilter=None):
+        return [A.JobRecord(title="Software Engineer Intern", location="Toronto, ON",
+                            url=f"https://x/{board['name']}", full_jd=fall.full_jd)]
+    try:
+        A.fetch_board = fake_fetch
+        got_g = asyncio.run(BFS._one_board(None, {"name": "Google", "ats_type": "greenhouse", "tier": "S"}))
+        got_a = asyncio.run(BFS._one_board(None, {"name": "Amex", "ats_type": "greenhouse", "tier": "B"}))
+    finally:
+        A.fetch_board = saved
+    check("_one_board passes board['name']: a Google Fall req is kept", len(got_g), 1)
+    check("_one_board: an Amex Fall req is dropped", len(got_a), 0)
+    check("the kept Google row carries cycle Fall 2027", got_g[0]["cycle"] if got_g else "", "Fall 2027")
+
+    # _cycle_label: Winter/Spring/Summer 2027 beat Fall 2027; Fall must be PURELY Fall.
+    check("'returning to school Fall 2027. Summer 2027 program' -> Summer 2027",
+          _cycle_label("SWE Intern", "returning to school Fall 2027. Summer 2027 program"), "Summer 2027")
+    check("a pure Fall 2027 JD -> Fall 2027",
+          _cycle_label("SWE Intern", "The internship runs Fall 2027 in Toronto."), "Fall 2027")
+    check("Fall 2027 then Winter 2028 -> the out-of-window term, not Fall",
+          _cycle_label("SWE Co-op", "Runs Fall 2027 and continues through Winter 2028."), "Winter 2028")
+    check("a graduation Fall 2027 is still ignored",
+          _cycle_label("SWE Intern", "You must be graduating in Fall 2027 or later."), "")
+
+    # Every period-gate caller passes a company (fall_watch.py excluded: built separately).
+    here = Path(__file__).resolve().parent
+    bare = []
+    for f in sorted(here.glob("*.py")):
+        if f.name.startswith("test_") or f.name.startswith("fall_watch"):
+            continue
+        for node in ast.walk(ast.parse(f.read_text())):
+            if (isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", ""))
+                    == "classify_period" and len(node.args) + len(node.keywords) < 4):
+                bare.append(f"{f.name}:{node.lineno}")
+    check("every classify_period call passes the company", bare, [])
+
+    # coverage_digest, worklist and revive follow the same company rule.
+    def cp(co):
+        return NS(company=co, title="Software Engineer Intern - Fall 2027", location="Toronto",
+                  terms="", source="simplify-main")
+    check("coverage digest: Google Fall 2027 is in lane", CD.is_in_lane(cp("Google")), True)
+    check("coverage digest: Acme Fall 2027 is not", CD.is_in_lane(cp("Acme")), False)
+    check("worklist: Fall 2027 is in TAKEABLE", "Fall 2027" in WL.TAKEABLE, True)
+    check("worklist: Fall 2027 at Google is takeable", WL.takeable("Fall 2027", "Google"), True)
+    check("worklist: Fall 2027 at TikTok is not", WL.takeable("Fall 2027", "TikTok"), False)
+    check("worklist: Fall 2027 with no company is not", WL.takeable("Fall 2027"), False)
+    check("worklist: Summer 2027, Fall 2027 at Amex is takeable", WL.takeable("Summer 2027, Fall 2027", "Amex"), True)
+    check("worklist: Winter 2028 at Google is not", WL.takeable("Winter 2028", "Google"), False)
+    check("worklist: blank still passes", WL.takeable("", ""), True)
+    check("revive refuses a below-bar Fall 2027 row",
+          revive_dead.worth_reviving({"cycle": "Fall 2027", "company": "Amex"}), (False, "past-cycle"))
+    check("revive refuses a Fall 2027 row with no company",
+          revive_dead.worth_reviving({"cycle": "Fall 2027"})[0], False)
+    check("revive allows a Google Fall 2027 row",
+          revive_dead.worth_reviving({"cycle": "Fall 2027", "company": "Google"}), (True, ""))
+    check("revive still refuses Winter 2028 at Google",
+          revive_dead.worth_reviving({"cycle": "Winter 2028", "company": "Google"})[0], False)
+
+
+def test_fall_tab_on_the_sheet():
+    print("FB4. write_board: Apply - Fall is created, every row once, _meta counts it, edits read back")
+    import build_curated_gsheet as G
+    import board_tabs as BT
+    from build_curated_xlsx import QUEUE_HEADERS
+    check("Apply - Fall is a queue tab", BT.TAB_FALL in BT.QUEUE_TABS, True)
+    check("Apply - Fall is an apply tab", BT.TAB_FALL in BT.APPLY_TABS, True)
+    check("Apply - Fall renders right after Summer", BT.TABS[BT.TABS.index(BT.TAB_SUMMER) + 1], BT.TAB_FALL)
+    check("Apply - Fall carries the queue headers", G._HEADERS.get(BT.TAB_FALL), QUEUE_HEADERS)
+    check("Apply - Fall is read back", BT.TAB_FALL in G._readback_tabs({}), True)
+    check("Apply - Fall has column widths", BT.TAB_FALL in G._WIDTHS, True)
+    amz = "www.amazon.jobs/en/jobs/10553947/software-development-engineer-intern-summer-2027-can"
+    store_recs = [_frec("g-f", "Google", "Fall 2027", "Toronto, ON"),
+                  _frec(amz, "Amazon", "Summer 2027", "CA, BC, Vancouver"),
+                  _frec("g-mv", "Google", "Fall 2027", "Mountain View, CA"),
+                  _frec("amex-f", "Amex", "Fall 2027", "Toronto, ON"),
+                  _frec("stripe-s", "Stripe", "Summer 2027", "Toronto, ON"),
+                  _frec("js-w", "Jane Street", "Winter 2027", "New York, NY"),
+                  _frec("app-f", "Google", "Fall 2027", "Toronto, ON", status="Applied")]
+    store = {r["_cid"]: {"machine": r["machine"], "human": r["human"]} for r in store_recs}
+    fake = _FakeSheet()
+    for t in BT.TABS:               # a sheet as it is today: every tab but the new one
+        if t != BT.TAB_FALL:
+            fake.add(t, [list(G._HEADERS[t])])
+    fake.add(BT.TAB_META, [])
+    _render(fake, store, G)
+    check("the Fall tab was created", BT.TAB_FALL in fake.tabs, True)
+    check("ensure_format ran once for the new tab", fake.calls.count("ENSURE_FORMAT"), 1)
+    placed = {t: _tab_ids(fake, t) for t in BT.TABS}
+    every = [c for ids in placed.values() for c in ids]
+    check("no row is written to two tabs", len(every), len(set(every)))
+    check("every row is on the board exactly once", sorted(every), sorted(store))
+    check("Apply - Fall", sorted(placed[BT.TAB_FALL]), sorted([amz, "g-f"]))
+    check("Below Bar holds the US-onsite and below-bar Fall rows", sorted(placed[BT.TAB_BELOW]), ["amex-f", "g-mv"])
+    check("Summer / Winter unchanged", (placed[BT.TAB_SUMMER], placed[BT.TAB_WINTER]), (["stripe-s"], ["js-w"]))
+    check("an applied Fall row is on My Applications", placed[BT.TAB_APPS], ["app-f"])
+    meta = {r[0]: r[1] for r in fake.tabs[BT.TAB_META]["rows"] if len(r) > 1}
+    check("_meta queue_fall", meta.get("queue_fall"), 2)
+    check("_meta queue = every apply tab (Winter + Summer + Fall)", meta.get("queue"), 4)
+    frow = next(r for r in fake.tabs[BT.TAB_FALL]["rows"] if r and r[0] == "g-f")
+    check("the Fall tab renders the To Apply default, never a machine status",
+          frow[QUEUE_HEADERS.index("Status")], "To Apply")
+    # second run: idempotent
+    fake.calls.clear()
+    _render(fake, store, G)
+    check("second run: no new tab, no forced ensure_format",
+          ("ENSURE_FORMAT" in fake.calls, "addSheet" in fake.calls), (False, False))
+    check("second run: same placement", {t: sorted(_tab_ids(fake, t)) for t in BT.TABS},
+          {t: sorted(v) for t, v in placed.items()})
+    # a human edit typed on the Fall tab is read back, and survives the row moving tabs
+    rows = fake.tabs[BT.TAB_FALL]["rows"]
+    i = next(k for k, r in enumerate(rows) if r and r[0] == "g-f")
+    while len(rows[i]) < len(QUEUE_HEADERS):
+        rows[i].append("")
+    rows[i][QUEUE_HEADERS.index("Notes")] = "uncle referral asked"
+    rows[i][QUEUE_HEADERS.index("Priority")] = "P1"
+    res = _render(fake, store, G)
+    check("a Notes edit on the Fall tab is read back", res["human"].get("g-f", {}).get("notes"), "uncle referral asked")
+    check("a Priority edit on the Fall tab is read back",
+          res["human"].get("g-f", {}).get("priority_override"), "P1")
+    store["g-f"]["machine"]["location"] = "Mountain View, CA"
+    store["g-f"]["human"].update(res["human"].get("g-f", {}))
+    _render(fake, store, G)
+    brow = next((r for r in fake.tabs[BT.TAB_BELOW]["rows"] if r and r[0] == "g-f"), None)
+    check("a row that moves Fall -> Below Bar keeps its note",
+          (brow or [""] * len(QUEUE_HEADERS))[QUEUE_HEADERS.index("Notes")], "uncle referral asked")
+    check("and is no longer on the Fall tab", "g-f" in _tab_ids(fake, BT.TAB_FALL), False)
+
+
+def test_fit_v39_is_targeted():
+    print("FB5. fit-v3.9: Fall 2027 is a valid term, re-scored by predicate, never the whole board")
+    import fit_pass as FP
+    check("PROMPT_VERSION is fit-v3.9", FP.PROMPT_VERSION, "fit-v3.9")
+    preds = {FP._ver(k) for k in FP._RESCORE_IF}
+    check("the current version has a targeted predicate", FP._ver(FP.PROMPT_VERSION) in preds, True)
+    missing = [v for v in FP._KNOWN_VERSIONS if v >= (3, 6) and v not in preds]
+    check("every known version since v3.6 has a predicate (else a BLANKET re-score)", missing, [])
+    def m(ver, why="", summ="", disq="none", role="Software Engineer Intern"):
+        return {"fit_prompt_ver": ver, "fit_why": why, "fit_jd_summary": summ,
+                "fit_disqualifier": disq, "role": role}
+    check("v3.8 row with unrelated reasoning is NOT re-scored",
+          FP._affected_by_bump(m("fit-v3.8", "Target SWE intern Summer 2027, strong brand.")), False)
+    check("v3.6 row with unrelated reasoning is NOT re-scored",
+          FP._affected_by_bump(m("fit-v3.6", "Strong brand, backend role.")), False)
+    check("v3.8 'Fall 2027 is outside target terms' IS re-scored",
+          FP._affected_by_bump(m("fit-v3.8", "Fall 2027 is outside target terms.", disq="wrong-cycle")), True)
+    check("v3.8 'Sep–Dec 2027' summary IS re-scored",
+          FP._affected_by_bump(m("fit-v3.8", "", "Co-op running Sep - Dec 2027 in Toronto.")), True)
+    check("v3.8 Autumn 2027 title IS re-scored",
+          FP._affected_by_bump(m("fit-v3.8", role="SWE Intern (Autumn 2027)")), True)
+    check("a v3.9 row is never re-scored by the bump",
+          FP._affected_by_bump(m("fit-v3.9", "Fall 2027 term")), False)
+    rub_path = Path(__file__).parent / "fit_rubric.md"
+    if not rub_path.exists():   # gitignored; deploy.sh scp's it, so it exists where the gate runs
+        print("     (fit_rubric.md not present here — rubric checks run in the repo)")
+        return
+    rub = rub_path.read_text()
+    check("rubric: Fall 2027 is a target term",
+          "Target terms (used for wrong-cycle): Winter 2027, Spring 2027, Summer 2027, Fall 2027." in rub, True)
+    check("rubric: Winter 2028 stays wrong-cycle (worked example)",
+          '"Software Engineering Intern, Winter 2028' in rub and '"disqualifier":"wrong-cycle","fit_score":20,"fit_why":"Winter 2028' in rub, True)
+    check("rubric: Sep 2027 - Apr 2028 stays long-placement",
+          '"fit_why":"8-month Sep 2027–Apr 2028 co-op' in rub, True)
+
+
 for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_permanent_burial,
            test_shadowed_twins_needs_a_requisition_id, test_brand_tier_collisions,
            test_queue_sort, test_grouping_cannot_undo_the_sort,
@@ -2918,7 +3244,12 @@ for fn in (test_review_status_never_fabricates, test_revive_gate_is_not_a_perman
            test_settled_applications_stay_on_my_applications,
            test_notes_are_prepended_not_replaced,
            test_unlabelled_simplify_rows_reach_the_board,
-           test_warm_lead_passed_status):
+           test_warm_lead_passed_status,
+           test_fall_bar_and_season,
+           test_fall_routing,
+           test_fall_period_gate,
+           test_fall_tab_on_the_sheet,
+           test_fit_v39_is_targeted):
     # A raised exception is a FAILURE, not a reason to stop: one crashing test used to
     # hide every test after it, which is how a suite reports "green" while blind.
     try:

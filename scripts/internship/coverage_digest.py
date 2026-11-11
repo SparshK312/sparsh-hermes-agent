@@ -95,7 +95,7 @@ def is_in_lane(p) -> bool:
         return False
     if _FIRMWARE_RE.search(p.title or ""):
         return False
-    return classify_period(p.title, p.terms, p.source)[0] != "reject"
+    return classify_period(p.title, p.terms, p.source, p.company)[0] != "reject"
 
 
 def partition(postings: list, idx: dict, days: int = DEFAULT_DAYS) -> tuple[dict, list]:

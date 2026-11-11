@@ -13,6 +13,7 @@ store, and each rewrite dropped something different:
   • none excluded Fall 2027 — a term he cannot take, because his final academic
     year is Fall 2027 - Winter 2028. Four Fall-2027 roles at fit 84-88 sat in the
     Aug-11 "ranked queue" as recommendations.
+    (2026-11-11: Fall 2027 is now takeable at a TOP-TIER company only; see TAKEABLE.)
   • none capped per-company, so a single employer posting 20 near-identical reqs
     (TikTok, 2026-08-18) takes over the entire top of the list.
 
@@ -41,21 +42,31 @@ STORE = store_paths.store_path()
 
 # The only terms he can actually take. Rotation #3 = Winter 2027 (Jan-Apr),
 # rotation #4 = Summer 2027 (May-Aug). US employers often label Jan-Apr "Spring".
-# Fall 2027 onward = final academic year, NOT takeable.
-TAKEABLE = ("Winter 2027", "Spring 2027", "Summer 2027")
+# Fall 2027 (2026-11-11): takeable alongside capstone at a TOP-TIER company only. That
+# company gate is applied upstream (classify_period) before a row reaches the store, and
+# again in takeable() below, because the store can hold a below-bar Fall row
+# (a wide-net row's cycle comes from its JD, its gate from the feed's terms; the live
+# TikTok "Search Data Infra" row on Nov 11 is one). Winter 2028 onward = NOT takeable.
+TAKEABLE = ("Winter 2027", "Spring 2027", "Summer 2027", "Fall 2027")
+TOP_TIER_ONLY = ("Fall 2027",)
 
 
 def load():
     return json.loads(STORE.read_text())["postings"]
 
 
-def takeable(cycle: str | None) -> bool:
+def takeable(cycle: str | None, company: str = "") -> bool:
     """Untagged passes (46% of the board has no cycle and the good stuff hides
-    there) — but an explicitly out-of-window term is rejected."""
+    there) — but an explicitly out-of-window term is rejected. A Fall-2027-only
+    cycle passes only at a company that clears the FALL bar (2026-11-11)."""
+    from internship_scraper import fall_admitted
     c = cycle or ""
     if not c.strip():
         return True
-    return any(t in c for t in TAKEABLE)
+    hits = [t for t in TAKEABLE if t in c]
+    if any(t not in TOP_TIER_ONLY for t in hits):
+        return True
+    return bool(hits) and fall_admitted(company)
 
 
 def rows(min_fit=70, cycle=None, unscored=False):
@@ -66,7 +77,7 @@ def rows(min_fit=70, cycle=None, unscored=False):
             continue
         if (h.get("status") or "To Apply") != "To Apply":
             continue
-        if not takeable(m.get("cycle")):
+        if not takeable(m.get("cycle"), m.get("company", "")):
             continue
         if (m.get("fit_disqualifier") or "none") not in ("none", ""):
             continue

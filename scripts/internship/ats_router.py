@@ -808,19 +808,103 @@ async def _board_lever_impl(client, board) -> list[JobRecord]:
     return out
 
 
+AMAZON_SEARCH = "https://www.amazon.jobs/en/search.json"
+AMAZON_PAGE = 100          # result_limit; 100 is what the API honours (measured 2026-11-11)
+AMAZON_MAX_PAGES = 10      # 1,000 rows per query. Announces itself when hit (below).
+AMAZON_COUNTRIES = ("USA", "CAN")
+
+
+def amazon_search_url(query: str, countries=AMAZON_COUNTRIES, offset: int = 0,
+                      limit: int = AMAZON_PAGE) -> str:
+    """🔴 2026-11-11: the filter is `normalized_country_code[]`. The old `country[]`
+    parameter is IGNORED by amazon.jobs -- `intern` with country[]=USA&country[]=CAN
+    returned 475 hits, the same as no filter at all, i.e. every country on earth.
+    normalized_country_code[]=USA&...=CAN returns 101."""
+    cc = "".join(f"&normalized_country_code%5B%5D={c}" for c in countries)
+    return (f"{AMAZON_SEARCH}?base_query={query.replace(' ', '+')}"
+            f"&result_limit={limit}&offset={offset}&sort=recent{cc}")
+
+
+async def amazon_search(client, query: str, countries=AMAZON_COUNTRIES,
+                        max_pages: int = AMAZON_MAX_PAGES,
+                        page_useful=None) -> tuple[list[dict], int | None]:
+    """Every job for one query, paged with `offset` until `hits` is exhausted.
+
+    🔴 2026-11-11: this used to be ONE request at result_limit=100 with no paging, so
+    anything past the 100th hit was silently invisible ("internship 2027" = 159 hits,
+    100 seen). Now it pages, and if the page budget runs out first it says how many
+    rows it did NOT see -- a cap whose discards are silent is a timer for the
+    stale-strike.
+
+    Raises BoardFetchError on a non-200 / unparseable page (it used to `continue`,
+    which made a failed query indistinguishable from a query with no results).
+
+    `page_useful(job) -> bool`, optional: stop paging (LOUDLY) once a whole page has
+    no job it accepts. Why it exists, measured 2026-11-11: with the country filter on,
+    "software development engineer internship" stops matching exactly and amazon.jobs
+    falls back to a fuzzy match -- 1,725 hits, ZERO intern titles in the first 100.
+    Paging that costs 10 requests of noise every run. The stop is announced with the
+    count it skipped, so it is never read as "there was nothing there".
+    Returns (jobs, hits)."""
+    jobs: list[dict] = []
+    hits: int | None = None
+    offset = 0
+    pages = 0
+    while True:
+        if pages >= max_pages:
+            print(f"[ats_router] amazon {query!r}: page cap {max_pages} hit — returned "
+                  f"{len(jobs)} of {hits} hits, {(hits or 0) - len(jobs)} NOT SEEN",
+                  file=sys.stderr)
+            break
+        url = amazon_search_url(query, countries, offset)
+        data, code = await _get_json(client, url, {**JSON_HEADERS, "User-Agent": UA})
+        pages += 1
+        if not isinstance(data, dict):
+            print(f"[ats_router] amazon {query!r} offset {offset}: fetch FAILED "
+                  f"(HTTP {code})", file=sys.stderr)
+            raise BoardFetchError(f"amazon {query!r} offset {offset}: HTTP {code}")
+        if data.get("error"):
+            print(f"[ats_router] amazon {query!r} offset {offset}: API error "
+                  f"{data.get('error')!r}", file=sys.stderr)
+            raise BoardFetchError(f"amazon {query!r}: API error {data.get('error')!r}")
+        batch = data.get("jobs") or []
+        try:
+            hits = int(data.get("hits")) if data.get("hits") is not None else None
+        except (TypeError, ValueError):
+            hits = None
+        jobs.extend(batch)
+        offset += len(batch)
+        if (not batch or (hits is not None and offset >= hits)
+                or (hits is None and len(batch) < AMAZON_PAGE)):
+            break
+        if page_useful is not None and not any(page_useful(j) for j in batch):
+            print(f"[ats_router] amazon {query!r}: page {pages} had no useful row — "
+                  f"stopped paging (fuzzy-fallback guard); returned {len(jobs)} of "
+                  f"{hits} hits, {(hits or 0) - len(jobs)} NOT SEEN", file=sys.stderr)
+            return jobs, hits
+    if hits is not None and len(jobs) < hits and pages < max_pages:
+        # The API stopped handing out rows before `hits` was reached.
+        print(f"[ats_router] amazon {query!r}: API returned {len(jobs)} of {hits} hits "
+              f"after {pages} page(s) — {hits - len(jobs)} NOT SEEN", file=sys.stderr)
+    return jobs, hits
+
+
 async def _board_amazon(client, board) -> list[JobRecord]:
     """amazon.jobs search.json — public JSON search. Drive with intern queries,
-    union + dedup by job_path. Rich payload (quals + description)."""
+    union + dedup by job_path. Rich payload (quals + description).
+
+    A failed query RAISES (via amazon_search) rather than being skipped: a partial
+    union looks exactly like "those reqs closed" to the stale-check, so the whole
+    board is better retried once and, failing that, recorded in BOARD_FETCH_FAILURES
+    (which exempts its postings from the strike)."""
     queries = board.get("queries", _amazon_default_queries())
+    countries = tuple(board.get("countries", AMAZON_COUNTRIES))
     out: dict[str, JobRecord] = {}
-    base = "https://www.amazon.jobs/en/search.json"
     for q in queries:
-        url = (f"{base}?base_query={q.replace(' ', '+')}&result_limit=100&sort=recent"
-               f"&country%5B%5D=USA&country%5B%5D=CAN")
-        data, code = await _get_json(client, url, {**JSON_HEADERS, "User-Agent": UA})
-        if not data:
-            continue
-        for j in data.get("jobs", []):
+        jobs, _hits = await amazon_search(
+            client, q, countries,
+            page_useful=lambda j: default_intern_filter(j.get("title", "")))
+        for j in jobs:
             path = j.get("job_path", "")
             if not path or path in out:
                 continue

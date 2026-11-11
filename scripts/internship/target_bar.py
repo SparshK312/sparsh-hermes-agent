@@ -44,6 +44,9 @@ from hotness import TIER_EXCEPTIONS, _name_matches, normalize_company_name, word
 
 ACCEPT, APPLY, BELOW = "accept", "apply", "below"
 WINTER, SUMMER = "winter", "summer"
+# 2026-11-11, his call: Fall 2027 (Sep-Dec) is takeable alongside capstone in Toronto,
+# for a TOP-TIER name only. Its own season with its own, much shorter list (FALL_NAMES).
+FALL = "fall"
 
 # ── ACCEPT: he would renege on Microsoft Summer 2027 for these ────────────────
 ACCEPT_NAMES = {
@@ -107,6 +110,21 @@ APPLY_NAMES = {
     "hudson river trading", "pdt partners", "sierra", "replit", "cursor",
     "anysphere", "cognition", "mistral", "elevenlabs", "etched", "cerebras",
     "dropbox", "paypal", "visa", "blue origin", "roblox", "discord", "reddit",
+}
+
+# ── FALL 2027: top tier only (2026-11-11) ───────────────────────────────────────
+# Fall ACCEPT = ACCEPT_NAMES (checked first in bar_of). Fall APPLY = THIS list and nothing
+# else. 🔴 APPLY_NAMES does NOT carry over: bar_of's FALL branch returns before the
+# APPLY_NAMES line, so ~150 apply-tier names cannot flood the Fall tab. Big tech, the
+# frontier labs and unicorns with a real Toronto/Canada engineering presence, and two
+# top quants. A Fall term means a term off capstone, so the bar is "worth that", not
+# "worth applying to". ⬜ My pick from his examples (Amazon, Google, Meta, Apple,
+# Microsoft, NVIDIA, Cohere, Shopify, Uber, Stripe, Databricks, OpenAI, Anthropic,
+# Waabi); he has not ruled on each name. Strike or add here, then run the suite.
+FALL_NAMES = {
+    "amazon", "aws", "microsoft", "nvidia",
+    "cohere", "shopify", "uber", "stripe", "databricks", "waabi",
+    "two sigma", "hudson river trading",
 }
 
 # Applies only to WINTER rows. Microsoft Summer 2027 is accepted (2026-10-02), so a
@@ -206,6 +224,9 @@ def season_of(cycle: str, title: str = "") -> str:
     Winter if the cycle names Winter 2027 OR Spring 2027 — US employers label the
     Jan-Apr term "Spring" (internship_scraper.py:473-476, worklist.py:45-47) — even
     when Summer is also listed ("Summer or Winter" rows go where he looks first).
+    Fall (2026-11-11) ONLY when the cycle names Fall/Autumn 2027 and no Winter, Spring
+    or Summer 2027: precedence is Winter > Summer > Fall, so "Summer 2027, Fall 2027"
+    is a Summer row. A title saying "Fall" with no year never makes a row Fall.
     EVERYTHING ELSE is Summer, including blank: an unlabelled "2027 Software Engineer
     Intern" is almost always a summer role (his call 2026-10-04). The Cycle cell
     stays blank on the Sheet, so an unconfirmed cycle remains visible as such.
@@ -222,7 +243,56 @@ def season_of(cycle: str, title: str = "") -> str:
     if not re.search(r"\b(winter|spring|summer|fall|autumn)\s+20\d\d\b", c) and \
             re.search(r"\b(winter|spring)\b", (title or "").lower()):
         return WINTER
+    if "summer 2027" in c:
+        return SUMMER
+    if re.search(r"\b(fall|autumn)\s+2027\b", c):
+        return FALL
     return SUMMER
+
+
+# Canadian signal for fall_location_ok. Province CODES are matched case-sensitively and
+# only in the positions ATS boards put them ("Toronto, ON", "CA, ON, Toronto",
+# "CA-ON-Toronto"), so "ON-SITE" or a stray "ab" cannot read as a province. A bare "CA"
+# is NEVER Canadian here: "Mountain View, CA" is California.
+_CA_CODES = "AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT"
+# No `^` alternative (review, 2026-11-11): a LEADING code is how ISO country codes are
+# written ("NL, Amsterdam", "PE, Lima", "SK, Bratislava"), and it read those as provinces.
+# Amazon's Canadian form "CA, ON, Toronto" is still caught by the `,\s*` branch.
+_CA_CODE_RE = re.compile(rf"(?:,\s*|\bCA-)({_CA_CODES})(?![A-Za-z])(?![\s-]*(?:SITE|Site|site))")
+_CA_WORD_RE = re.compile(
+    r"\bcanad|\bontario\b|\bquebec\b|\bqu[ée]bec\b|\bbritish columbia\b|\balberta\b|"
+    r"\bmanitoba\b|\bsaskatchewan\b|\bnova scotia\b|\bnew brunswick\b|\bnewfoundland\b|"
+    r"\bprince edward island\b|"
+    r"\btoronto\b|\bwaterloo\b|\bkitchener\b|\bottawa\b|\bkanata\b|\bmontr[ée]al\b|"
+    r"\bvancouver\b|\bburnaby\b|\bcalgary\b|\bedmonton\b|\bmarkham\b|\bmississauga\b|"
+    r"\bnorth york\b|\boakville\b|\bvaughan\b|\brichmond hill\b|\bhalifax\b|\bwinnipeg\b")
+
+
+def fall_location_ok(loc: str) -> bool:
+    """Can a FALL 2027 row at this location be taken alongside capstone in Toronto?
+
+    FAILS OPEN. True for Canada / a Canadian city or province / anything remote / blank /
+    unclear text ("Multiple Locations", "Hybrid", "CANADA STORE SUPPORT CENTER"), and for a
+    multi-city string with any Canadian city in it. False ONLY for a location that is
+    clearly somewhere else and on-site ("Mountain View, CA", "New York, NY", "London, UK").
+    A False row is routed to Below Bar, never dropped and never sent to Reviewed: the
+    cost of a wrong False is a row he has to look one tab over for, so ambiguity is True.
+    """
+    s = (loc or "").strip()
+    if not s:
+        return True
+    low = s.lower()
+    if "remote" in low:
+        return True
+    if _CA_WORD_RE.search(low) or _CA_CODE_RE.search(s):
+        return True
+    from internship_scraper import classify_location
+    status, reason = classify_location(s)
+    if status == "match":                 # a US / North-American signal and no Canadian one
+        return False
+    if status == "reject" and not reason.startswith("no US/Canada signal"):
+        return False                      # a named non-North-American country or city
+    return True                           # no recognisable place: fail open
 
 
 # 2026-10-14, his call: postings that DO offer a Jan-Apr 2027 term but never say so in
@@ -281,6 +351,34 @@ def winter_term_offered_id(cid: str) -> bool:
     return (cid or "").strip() in WINTER_TERM_IDS
 
 
+# 2026-11-11, his call: the Fall twin of WINTER_TERM_IDS. Board rows (_id, i.e.
+# internship_scraper.canonical_id of the URL, as stored and in the Sheet's hidden column A)
+# verified to offer a FALL 2027 term that their cycle label cannot show. Routed to
+# Apply - Fall whatever the label says. Amazon has no separate Fall posting: Fall 2027 is a
+# season option inside these three Canadian reqs, labelled Summer / "2027". Verified on
+# amazon.jobs Nov 11 2026 (vault: "Fall 2027 Watcher - Build Plan"). The _ids below are the
+# store keys read off the VPS store on Nov 11 (the www. variants; the bare amazon.jobs/...
+# twins are dead duplicates).
+# 🔴 PRECEDENCE: Winter wins. A row whose cycle says Winter/Spring 2027, or that is in
+# WINTER_TERM_OFFERED / WINTER_TERM_IDS, stays on Apply - Winter even if listed here
+# (Winter 2027 is his priority slot; build_curated_xlsx.queue_placement applies this).
+FALL_TERM_IDS = {
+    # SDE Intern - Summer 2027 (CAN): "Fall 2027 (Start August/September; End
+    # November/December)" is one of the season options; all Canadian intern sites.
+    "www.amazon.jobs/en/jobs/10553947/software-development-engineer-intern-summer-2027-can",
+    # ML Systems SDE Intern, Annapurna Labs, Toronto: "starts January 2027, May 2027,
+    # September 2027".
+    "www.amazon.jobs/en/jobs/10538066/ml-systems-software-development-engineer-intern-annapurna-labs-2027",
+    # SDE Intern, ROBOTICS - 2027, Toronto: "summer intern and spring/fall co-op roles".
+    "www.amazon.jobs/en/jobs/10535280/software-development-engineer-intern-robotics-2027",
+}
+
+
+def fall_term_offered_id(cid: str) -> bool:
+    """True for a board row (_id) verified to offer a Fall 2027 term its label can't show."""
+    return (cid or "").strip() in FALL_TERM_IDS
+
+
 def winter_term_offered(company: str, role: str) -> bool:
     """True for a named req verified to offer a Winter 2027 term its text can't show."""
     return (normalize_company_name(company or ""),
@@ -297,6 +395,10 @@ def bar_of(company: str, season: str) -> str:
         return BELOW
     if _matches_any(ACCEPT_NAMES, nn, w):
         return ACCEPT
+    # 🔴 FALL returns HERE, before APPLY_NAMES, which apply in every season. Fall is top
+    # tier only: FALL_NAMES or nothing (2026-11-11).
+    if season == FALL:
+        return APPLY if _matches_any(FALL_NAMES, nn, w) else BELOW
     if _matches_any(APPLY_NAMES, nn, w):
         return APPLY
     if season == WINTER and (_matches_any(WINTER_ONLY_APPLY, nn, w)
@@ -332,4 +434,5 @@ BAR_RANK = {ACCEPT: 0, APPLY: 1, BELOW: 2}
 if __name__ == "__main__":
     import sys
     for name in sys.argv[1:] or ["Google", "D. E. Shaw & Co.", "Rippling", "Microsoft"]:
-        print(f"{name!r:40} summer={bar_of(name, SUMMER):6} winter={bar_of(name, WINTER)}")
+        print(f"{name!r:40} summer={bar_of(name, SUMMER):6} winter={bar_of(name, WINTER):6} "
+              f"fall={bar_of(name, FALL)}")

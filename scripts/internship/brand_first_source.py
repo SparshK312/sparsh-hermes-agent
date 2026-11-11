@@ -8,8 +8,9 @@ For each board in company_boards.BOARDS:
 Filter each role:
   • role_lane(title) is not None         (SWE/ML/Data/PM; embedded/HW rejected)
   • classify_location != "reject"         (US/Canada; remote/unclear kept)
-  • classify_period != "reject"           (Fall 2026 / Winter 2027 / Summer 2027;
-                                           past cycles like Summer 2026 dropped)
+  • classify_period != "reject"           (Winter 2027 / Summer 2027; Fall 2027 only
+                                           at a top-tier company, 2026-11-11; past
+                                           cycles like Summer 2026 dropped)
 Dedup by canonical_id. Returns store-ready machine-field dicts (the orchestrator
 scores them with hotness and upserts into curated_store).
 """
@@ -137,7 +138,8 @@ def _cycle_label(title: str, jd: str) -> str:
     #      cycle he is actually free for. Reordering classify_period alone did NOT
     #      fix it, because by then the label already said the wrong thing.
     # Collect every candidate in order, then prefer one that is an actual target.
-    from internship_scraper import TARGET_PERIODS_LOWER
+    from internship_scraper import (FALL_PERIODS_LOWER, PAST_PERIODS_LOWER,
+                                    TARGET_PERIODS_LOWER)
     found: list[str] = []
     for src, is_jd in ((title or "", False), (jd or "", True)):
         if not src:
@@ -158,9 +160,21 @@ def _cycle_label(title: str, jd: str) -> str:
                     found.append(f"{season.title()} {m.group(3)}")
     if not found:
         return ""
+    # 🔴 2026-11-11: Winter/Spring/Summer 2027 BEAT Fall 2027. Fall 2027 is now takeable at
+    # a top-tier company, so a Fall label routes a row to Apply - Fall. Boilerplate like
+    # "returning to school in Fall 2027" sits beside the real Summer term in many JDs; the
+    # target pass below runs first, so it can never label a Summer row Fall.
     for f in found:                       # a target term wins wherever it appears
         if f.lower() in TARGET_PERIODS_LOWER:
             return f
+    # A Fall 2027 label must be PURELY Fall: if the first term is Fall 2027 but another
+    # out-of-window term (Winter/Spring/Summer 2028, Fall 2026...) is also named as a work
+    # term, return that one, so the row is rejected exactly as it was before Fall opened
+    # ("Fall 2027 - Winter 2028" is an 8-month placement, not a Fall term).
+    if found[0].lower() in FALL_PERIODS_LOWER:
+        past = next((f for f in found if f.lower() in PAST_PERIODS_LOWER), None)
+        if past:
+            return past
     return found[0]                       # otherwise keep the old first-match answer
 
 
@@ -176,7 +190,7 @@ def _cycle_label(title: str, jd: str) -> str:
 REJECT_NON_NA_LOCATIONS = False
 
 
-def _accept(rec: A.JobRecord, tier: str = "C") -> bool:
+def _accept(rec: A.JobRecord, tier: str = "C", company: str = "") -> bool:
     # intern / co-op / new-grad only (board pulls return full-time roles too)
     if not A.default_intern_filter(rec.title):
         return False
@@ -197,9 +211,11 @@ def _accept(rec: A.JobRecord, tier: str = "C") -> bool:
         return False
     if REJECT_NON_NA_LOCATIONS and classify_location(rec.location)[0] == "reject":
         return False
-    # period: title + the JD head (brand boards rarely put the term in the title)
+    # period: title + the JD head (brand boards rarely put the term in the title).
+    # `company` lets a Fall 2027 req through at a top-tier company (2026-11-11); without
+    # it Fall 2027 is rejected as before.
     bag_terms = _cycle_label(rec.title, rec.full_jd)
-    if classify_period(rec.title, bag_terms, "brand-first")[0] == "reject":
+    if classify_period(rec.title, bag_terms, "brand-first", company)[0] == "reject":
         return False
     return True
 
@@ -264,7 +280,7 @@ async def _one_board(client, board: dict) -> list[dict]:
     for r in recs:
         if not r.title or not r.url:
             continue
-        if _accept(r, tier):
+        if _accept(r, tier, board["name"]):
             out.append(_to_record(r, board["name"], tier))
         elif (tier in ("S", "A", "B") and A.default_intern_filter(r.title)
               and role_lane(r.title) is None):

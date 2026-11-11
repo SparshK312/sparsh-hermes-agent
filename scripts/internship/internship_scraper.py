@@ -475,6 +475,9 @@ NEGATIVE_ROLE_KEYWORDS = [
 # and Summer 2027 (May–Aug). US employers routinely label Jan–Apr "Spring", so
 # spring 2027 stays. Final year is Fall 2027 – Winter 2028 — he is back in school
 # full-time from Sept 2027, so FALL 2027 AND LATER ARE NOT TAKEABLE.
+# 🔁 2026-11-11, his call: FALL 2027 IS TAKEABLE AT A TOP-TIER COMPANY ONLY, in
+# Toronto/Canada/remote, alongside capstone. See FALL_PERIODS_LOWER below — it is NOT a
+# target period (that would admit Fall everywhere); classify_period admits it per company.
 TARGET_PERIODS_LOWER = ["winter 2027", "spring 2027", "summer 2027"]
 
 # Periods outside the takeable window → reject. (Named "PAST" historically; it is
@@ -485,9 +488,31 @@ PAST_PERIODS_LOWER = [
     "summer 2024", "spring 2024", "winter 2024",
     # filled by the Shopify extension
     "fall 2026",
-    # back in school for the final year — not takeable
-    "fall 2027", "winter 2028", "spring 2028", "summer 2028",
+    # back in school for the final year — not takeable. ("fall 2027" moved to
+    # FALL_PERIODS_LOWER on 2026-11-11; Winter–Summer 2028 stay out, always.)
+    "winter 2028", "spring 2028", "summer 2028",
 ]
+
+# 🔴 FALL 2027 — FAIL CLOSED BY COMPANY (2026-11-11, his call: worth taking alongside
+# capstone in Toronto, but for a TOP-TIER name only). classify_period admits one of these
+# ONLY when the caller passes a `company` whose target_bar.bar_of(company, FALL) is not
+# BELOW. A caller that passes no company keeps the old answer (reject), so any gate nobody
+# wired stays shut instead of flooding the board. Deliberately NOT a third return status:
+# every caller tests `!= "reject"`, so a new status would admit Fall everywhere.
+# "autumn 2027" is new here (before, it was not in any list and read as "unclear", i.e.
+# KEPT at any company); it now behaves exactly like "fall 2027".
+FALL_PERIODS_LOWER = ["fall 2027", "autumn 2027"]
+
+
+def fall_admitted(company: str) -> bool:
+    """True when a Fall 2027 posting at this company may pass the period gate.
+
+    target_bar is imported HERE, not at module level: hotness imports this module at
+    import time and target_bar imports hotness, so a top-level import is circular."""
+    if not (company or "").strip():
+        return False
+    import target_bar as TB
+    return TB.bar_of(company, TB.FALL) != TB.BELOW
 
 OFFSEASON_SOURCE_NAMES = {"simplify-offseason", "vansh-offseason"}
 
@@ -612,11 +637,17 @@ def classify_role(title: str) -> tuple[str, str]:
     return "unclear", "no strong tech-role keyword"
 
 
-def classify_period(title: str, terms: str, source: str) -> tuple[str, str]:
+def classify_period(title: str, terms: str, source: str,
+                    company: str = "") -> tuple[str, str]:
     """Returns one of ('match' | 'reject' | 'unclear', reason).
 
     Period info is rare in titles (~5% of postings). Source repo is a stronger
-    signal — off-season repos by definition only carry Fall/Winter/Spring."""
+    signal — off-season repos by definition only carry Fall/Winter/Spring.
+
+    `company` (added 2026-11-11) only matters for a Fall 2027 posting: it is admitted
+    when fall_admitted(company), i.e. the company clears target_bar's FALL bar, and the
+    posting names NO other out-of-window term and is not a 12/16-month placement.
+    Omit it and Fall 2027 is rejected exactly as before."""
     bag = " ".join([title or "", terms or ""]).lower()
 
     # 🔴 A TARGET PERIOD BEATS A PAST ONE WHEN BOTH APPEAR (reordered 2026-09-08).
@@ -640,8 +671,18 @@ def classify_period(title: str, terms: str, source: str) -> tuple[str, str]:
     if target_hit:
         return "match", f"explicit target period: '{target_hit}'"
 
-    # Past periods → reject (only when NO target period is present)
-    for p in PAST_PERIODS_LOWER:
+    # Fall 2027 at a top-tier company → match, but ONLY when it is purely Fall 2027:
+    # no other out-of-window term beside it (a "Fall 2027 – Winter 2028" placement stays
+    # rejected; Winter–Summer 2028 are never takeable) and no 12/16-month placement.
+    fall_hit = next((p for p in FALL_PERIODS_LOWER if p in bag), None)
+    if (fall_hit and not any(p in bag for p in PAST_PERIODS_LOWER)
+            and not re.search(r"\b(?:12|16)[\s-]?month", bag)
+            and fall_admitted(company)):
+        return "match", f"fall 2027 at a top-tier company: '{fall_hit}'"
+
+    # Past periods → reject (only when NO target period is present). Fall 2027 that was
+    # not admitted above is rejected here, as it was before 2026-11-11.
+    for p in PAST_PERIODS_LOWER + FALL_PERIODS_LOWER:
         if p in bag:
             return "reject", f"past period: '{p}'"
 
@@ -662,7 +703,7 @@ def triage_posting(p: "Posting") -> dict:
     company_watchlisted = is_watchlist_company(p.company)
     loc_status, loc_reason = classify_location(p.location)
     role_status, role_reason = classify_role(p.title)
-    period_status, period_reason = classify_period(p.title, p.terms, p.source)
+    period_status, period_reason = classify_period(p.title, p.terms, p.source, p.company)
     age_recent = (p.age_days is not None) and (p.age_days <= 7)
 
     checks = {
