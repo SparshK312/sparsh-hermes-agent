@@ -1,0 +1,72 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # manual trigger
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        # 3.11 (floor) + 3.13 (matches the dev venv and a modern VPS) so a
+        # green CI actually reflects the runtime the scripts execute under.
+        python-version: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test deps
+        run: pip install pytest pyyaml
+
+      - name: Run test suite
+        run: pytest tests/ -v --tb=short
+
+      - name: Run the standalone invariant suites (they were deploy-only until 2026-11-16)
+        run: |
+          set -e
+          for t in scripts/fitness/test_exercise_playbook.py scripts/fitness/test_health_cards.py \
+                   scripts/hae/test_wearable_invariants.py scripts/vault/test_log_append.py \
+                   plugins/vault-write-guard/test_decide.py; do
+            echo "== $t"; python3 "$t" | tail -2
+          done
+
+      - name: Verify deploy.sh syntax
+        run: bash -n scripts/deploy.sh
+
+      - name: Verify image-routing patcher round-trips on a synthesized fixture
+        run: |
+          # The voice-wrapper patcher was retired (v0.18.2 upstream fixed the bug).
+          # The image-routing patcher survives — round-trip it on a synthetic fixture.
+          mkdir -p /tmp/fake-hermes/agent
+          cat > /tmp/fake-hermes/agent/image_routing.py <<'EOF'
+          def build_native_content_parts(image_paths, user_text):
+              text = (user_text or "").strip()
+              if image_paths:
+                  base_text = text or "What do you see in this image?"
+                  return base_text
+          EOF
+          IR=/tmp/fake-hermes/agent/image_routing.py
+          HERMES_IMAGE_ROUTING=$IR python3 scripts/patch/image_routing_patch.py --check | grep -q "unpatched"
+          HERMES_IMAGE_ROUTING=$IR python3 scripts/patch/image_routing_patch.py
+          HERMES_IMAGE_ROUTING=$IR python3 scripts/patch/image_routing_patch.py --check | grep -q "patched"
+          HERMES_IMAGE_ROUTING=$IR python3 scripts/patch/image_routing_patch.py --revert
+          HERMES_IMAGE_ROUTING=$IR python3 scripts/patch/image_routing_patch.py --check | grep -q "unpatched"
+          # v2 shape (upstream v2026.9.7 … v0.23.x): the placeholder lives in combined_text.
+          printf '%s\n' 'def build_native_content_parts(text, attached):' \
+            "    combined_text = f\"{text or 'What do you see in this image?'}\\n\\n\" + \"\\n\".join(h for _, h in attached)" \
+            '    return combined_text' > $IR
+          cp $IR $IR.orig
+          HERMES_IMAGE_ROUTING=$IR python3 scripts/patch/image_routing_patch.py --check | grep -q "unpatched"
+          HERMES_IMAGE_ROUTING=$IR python3 scripts/patch/image_routing_patch.py
+          HERMES_IMAGE_ROUTING=$IR python3 scripts/patch/image_routing_patch.py --check | grep -q "patched"
+          python3 -c "import runpy; ns = runpy.run_path('$IR'); assert ns['build_native_content_parts']('', [(0, '[img]')]) == '\n\n[img]'"
+          HERMES_IMAGE_ROUTING=$IR python3 scripts/patch/image_routing_patch.py --revert
+          cmp $IR $IR.orig

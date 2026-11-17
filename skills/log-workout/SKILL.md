@@ -1,0 +1,281 @@
+---
+name: log-workout
+description: 'Log a workout — completed session, mid-workout update, single-set addition, or correction. Triggers on any lift/cardio description in text or voice. Examples: "did pull day, lat pulldown 100 lb 3 sets", "currently working out, started incline bench 50 lb 3x", "finished rear delt, 2nd set was 30 lb" (UPDATE prior set), "25 lb 3 sets" (continuation of prior exercise from context), "/log_workout upper A", "did 30 min cardio". Writes a structured canonical file at 07 - Health/Workouts/<date>.md with a YAML exercises[] array (per-set weight/reps — this is the source of truth for PR + volume tracking) AND updates the daily note frontmatter ''lifted'' field + the Health section ''**Workout:**'' line (back-compat for daily-note Dataview lift-count). Read-merge-write on the workouts file so progressive updates over a 60-minute session accumulate correctly. Vault-only — no MCP, no external tools.'
+version: 2.0.0
+platforms: [linux, macos]
+metadata:
+  hermes:
+    tags: [health, workout, vault-write, structured-data]
+    category: health
+---
+
+# log-workout
+
+## ⚡ How to log — read first, follow exactly
+
+1. **The date is GIVEN** in the turn context (`[Current date …] Today = YYYY-MM-DD`, plus recent days for backfill). Use it exactly — **never run `date` or guess.**
+2. **Read** the existing `07 - Health/Workouts/<date>.md` first (so you know what is already logged and the exact exercise names), then **write with `vault_log.py workout` via `terminal` — the ONE and ONLY write.** To ADD work, send ONLY the new exercise/sets with `--append`; the writer merges them into the file. The writer REFUSES a write that would drop sets already logged.
+3. **Log immediately — NO confirmation menu.** Don't show a "✓ Log · ✎ Edit" gate or wait for approval. Write it, then **show the breakdown** (the exercises + sets you logged). If he says it's off, fix it then (reactive).
+
+🛑 **Direct vault writes are BLOCKED by a guard.** `patch` / `write_file` / `execute_code` on `Workouts/` or the daily-note health fields will be rejected — don't attempt them. `vault_log.py workout` (run via `terminal`) is the only way a workout reaches the vault. (Reading the workout file is fine.)
+
+## What changed in v2
+
+v1 wrote a prose `**Workout:**` line to the daily note. That made progressive overload impossible to query — "what was my preacher curl max in May" required reading every daily note by hand. v2 keeps the daily-note line for the quick-scan UX, but the **canonical record** is now a structured file at `07 - Health/Workouts/<date>.md` with a YAML `exercises:` array of `{weight_lb, reps, ...}` objects. Dataview can now answer PR + volume questions.
+
+## When to Use
+
+Any time the user mentions a workout — completed, in-progress, single-set continuation, or correction.
+
+Examples:
+- "did pull day, lat pulldown 100 lb 3 sets" → new session, append exercise
+- "currently working out, hitting back and bi. lat pulldown 50/side dual cable, 3 sets" → new session, first exercise
+- "done with 3 sets of single-arm rows at 55 lb. Now doing rear delt flys 25 lb, 2 sets" → mid-session, append next exercise
+- "finished rear delt, 2nd set was 30 lb" → UPDATE the 2nd set of the latest "rear delt" exercise
+- "25 lb 3 sets" → CONTINUATION: from prior message context, the user is continuing the most recently announced exercise
+- "did 30 min cardio" → cardio entry
+- "/log_workout upper A"
+
+Do **NOT** use for:
+- Pre-workout planning ("planning to lift today") — wait until in-progress or done
+- Food/protein around workouts → log-food
+- Sleep/recovery notes → those are manual frontmatter / journal
+
+## Vault-only — no MCP, deterministic write
+
+READ the existing workout file with `read_file` / `obsidian-vault-write`. Do the WRITE with the deterministic writer **`vault_log.py workout`** (exactly like log-food → `vault_log.py food`) — it writes the canonical Workouts file (regenerating the body), sets the daily-note `lifted:` field, and updates the `**Workout:**` line in one safe call. **Never hand-patch the YAML** (`patch` on frontmatter, `python3 -c`, heredocs, `execute_code`): those trip Hermes' approval gate (nagging Sparsh to "approve a command" for every set), are hard-blocked in cron, and corrupt repeated `key:` lines. No Hevy MCP. Architecture decision in [[Architecture]] D6.
+
+## Step-by-step
+
+### 0. Photo input — check the FULL image cache before asking (skip if text-only)
+
+When the user sends a Hevy screenshot, **do NOT use `clarify` to ask for weights/reps as a first move.** The user typically sends multiple screenshots in the same session — a summary card (exercise names + set counts + total volume, but NO per-set weights) plus one or more detail screens (per-exercise sets with weight × reps). Check for all of them first:
+
+```
+ls -t /home/hermes/.hermes/image_cache/img_*.jpg
+```
+
+`vision_analyze` every image not already read in this conversation. The summary card is usually the first image sent; detail screens are subsequent. Only after exhausting the cache with no weight data should you log with `reps: null` / `weight_lb: null` placeholders — and even then, do not use `clarify`; just log the structure and note weights are missing in the reply.
+
+### 1. Determine today's date
+
+In America/New_York: `YYYY-MM-DD`.
+
+### 2. Read the existing workout file (if any)
+
+Path: `07 - Health/Workouts/<date>.md`. If the file exists, parse the YAML frontmatter's `exercises:` array into a structured form. If it doesn't exist, this is the first log of the day — start with `exercises: []`.
+
+### 3. Classify the user's message into ONE action
+
+- **`APPEND_NEW_EXERCISE`** — user mentions an exercise name not yet in `exercises[]`, OR this is the first log of a fresh session. Add a new entry to `exercises[]`.
+- **`APPEND_SET_TO_LATEST`** — user mentions sets/weight without naming an exercise (e.g., "25 lb 3 sets" after "now doing hammer curls"). Append the new sets to `exercises[-1].sets`.
+- **`UPDATE_SET`** — user corrects a specific prior set (e.g., "rear delt 2nd set was actually 30 lb"). Find the matching exercise (by name, fuzzy-matched), then mutate `exercises[i].sets[j]`.
+- **`FINALIZE`** — user signals end-of-session ("done", "that's it", empty message, photo with no caption mid-conversation). Compute totals; no exercise change. **→ Then auto-send the post-workout review (step 10): coaching readout + the muscle diagram.** If you're not sure he's actually done, ask one short question before triggering it.
+
+If the action is genuinely ambiguous (e.g., "did 20 lb" with no prior context), ask one clarifying question instead of guessing.
+
+### 4. Build / mutate the structured exercises array
+
+YAML schema for each exercise entry:
+
+```yaml
+- name: <Exercise Name>          # canonical-case, e.g. "Lat Pulldown"
+  unilateral: true|false         # default false; true for single-arm / single-leg
+  machine: <optional>            # e.g. "dual-cable", "smith", "hammer-strength"
+  notes: <optional free-text>    # e.g. "50 lb/side dual cable, total load 100 lb"
+  sets:
+    - {weight_lb: 100, reps: 12}
+    - {weight_lb: 100, reps: 10}
+    - {weight_lb: 100, reps: 8}
+```
+
+**Unilateral handling**: chest-supported single-arm row at 55 lb done for 3 sets per arm = 6 entries in `sets`, each with a `side: left|right` field. The body display pairs them. If the user just says "55 lb each arm, 3 sets" without specifying side order, log them as 3 left + 3 right (or just 3 sets with `unilateral: true` and `each_arm: true`, no per-side breakdown).
+
+**Dropsets / supersets**: add a `note` field on the set: `{weight_lb: 100, reps: 8, note: "dropset"}`. Don't over-engineer the schema for rare cases.
+
+**Reps unknown** (user said "lat pulldown 100 lb 3 sets" with no rep count): write `reps: null` and add the count later if mentioned. Don't fabricate.
+
+### 5. Build the category label
+
+`lifted` field for daily-note frontmatter — same shape as v1. ~30 chars max.
+
+- `Push (chest/shoulders/triceps)` / `Pull (back/biceps)` / `Legs` — his split is Push/Pull/Legs ([[Training Plan]])
+- `Cardio (<duration>)` — pure cardio
+- `Mixed (<brief>)` — anything else
+
+Match the user's actual training, not the plan label (if the rotation said Pull but he did Push, log Push — see Pitfall #5).
+
+### 6. Write the structured workout file
+
+`07 - Health/Workouts/<date>.md`:
+
+```yaml
+---
+type: workout
+date: YYYY-MM-DD
+split: <category label from step 5>
+duration_min: <optional, only if user mentioned>
+total_sets: <auto-computed: sum of len(ex.sets) across exercises>
+exercises:
+  - name: Lat Pulldown
+    machine: dual-cable
+    notes: "50 lb/side dual cable, total load 100 lb"
+    sets:
+      - {weight_lb: 100, reps: 12}
+      - {weight_lb: 100, reps: 10}
+      - {weight_lb: 100, reps: 8}
+  - name: Chest-Supported Row
+    unilateral: true
+    notes: "55 lb each arm"
+    sets:
+      - {weight_lb: 55, reps: 10}
+      - {weight_lb: 55, reps: 10}
+      - {weight_lb: 55, reps: 10}
+last_updated: <ISO 8601 timestamp, America/New_York>
+---
+
+# Workout — <Day Mon D, YYYY> · <split>
+
+> Source: log-workout v2. Daily-note `**Workout:**` line links back here.
+
+## Lat Pulldown (3 sets)
+*50 lb/side dual cable, total load 100 lb*
+
+- Set 1: 100 lb × 12
+- Set 2: 100 lb × 10
+- Set 3: 100 lb × 8
+
+## Chest-Supported Row (3 sets, unilateral)
+*55 lb each arm*
+
+- Set 1: 55 lb × 10
+- Set 2: 55 lb × 10
+- Set 3: 55 lb × 10
+```
+
+The schema above is exactly the shape the script writes. **You build a JSON array of exercise objects; the script does the write**, regenerates the body, recomputes `total_sets`, creates the `07 - Health/Workouts/` dir, AND updates the daily note. Never hand-edit the body or the frontmatter.
+
+**Adding to the session (`APPEND_NEW_EXERCISE`, `APPEND_SET_TO_LATEST`, `FINALIZE`) — the normal case.** Send ONLY what is new, with `--append`. A same-named exercise gets the new sets appended; a new name is added at the end. Use the exercise name exactly as it already appears in the file.
+
+```
+/usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py workout \
+  --date <YYYY-MM-DD> \
+  --split "<category label from step 5>" \
+  [--duration-min <N>] \
+  --append \
+  --exercises '<ONLY the new exercise(s)/set(s) as compact JSON>'
+```
+
+**Correcting or removing a set (`UPDATE_SET`).** Send the FULL corrected array (everything from step 2 with the fix applied) and add `--allow-shrink` instead of `--append`. Without `--allow-shrink` the writer refuses any write that loses logged sets and tells you what would be lost; that refusal means "you forgot `--append`" far more often than "he wants sets deleted", so re-check before reaching for it.
+
+**Apostrophes.** An exercise name or note containing `'` (e.g. Farmer's walk) breaks the single-quoted shell argument. For those, write the JSON array to `/tmp/hermes_workout.json` with `write_file` and pass `--exercises-file /tmp/hermes_workout.json` in place of `--exercises '…'`.
+
+Example `--exercises` payload: `'[{"name":"Lat Pulldown","machine":"dual-cable","notes":"50/side","sets":[{"weight_lb":100,"reps":12},{"weight_lb":100,"reps":10}]}]'`. Use `reps: null` (JSON `null`) when reps are unknown — don't fabricate.
+
+### 7. Daily note — handled by the writer
+
+The `vault_log.py workout` call in step 6 already sets the daily-note `lifted:` field (appending with `+` if a label is already present, e.g. `Push + Cardio`) and rewrites the `## Health` → `**Workout:**` line linking to `[[Workouts/<date>]]`. **Nothing to do manually here.**
+
+### 8. PR detection (best-effort)
+
+For each set added or updated in step 4, check if its `weight_lb` exceeds all prior `weight_lb` values for that exercise name across `07 - Health/Workouts/*.md` (excluding today's file). If a new max, flag in the reply: `🎯 PR — Lat Pulldown: 100 lb (prev max 95 lb)`.
+
+If reading historical workout files fails (file not parseable, etc.) → skip PR detection silently. Don't block the log.
+
+### 9. Reply to the user
+
+Format:
+```
+🏋️ Logged: <category label>.
+<N exercises, M total sets so far>.
+[Optional PR alert]
+[Optional milestone: "Session 1/3 for the week" or "Week target hit 🎯"; the weekly target is `sessions_per_week` in the Training Plan frontmatter]
+```
+
+Examples:
+- `🏋️ Logged: Pull. 5 exercises, 14 sets. Session 1/3 for the week.`
+- `🏋️ Logged: Push. 4 exercises, 12 sets. 🎯 PR — Incline DB Press: 45 lb (prev max 40 lb).`
+- `🏋️ Logged: Cardio (30 min).`
+
+### 10. On FINALIZE (workout DONE) — auto-send the post-workout review
+
+When the action is **`FINALIZE`** — it's CLEAR the workout is finished (Sparsh says "done" / "that's it" / "finished my workout" / "wrapping up" / "that's my push day", or has clearly moved on) — then **after the final `vault_log.py workout` write, automatically run the post-workout review** (he should NOT have to ask):
+
+**First, teach any genuinely-new movement to the exercise playbook** (so the muscle diagram is complete). The playbook resolves almost everything automatically — exact match, fuzzy match against his history, and anatomical keywords (`pushdown`→Triceps, `leg press`→Quads, etc.). Only a *truly novel* name it can't place needs you. Run:
+
+```
+/home/hermes/.hermes/venvs/fitness/bin/python3 /home/hermes/.hermes/scripts/fitness/exercise_playbook.py resolve --name "<exercise 1>" --name "<exercise 2>" ...
+```
+
+For each name in the `misses` list (rare), assign its muscles from anatomy and teach it ONCE — it's an exact hit forever after:
+
+```
+/home/hermes/.hermes/venvs/fitness/bin/python3 /home/hermes/.hermes/scripts/fitness/exercise_playbook.py teach --name "<exact logged name>" --primary "Triceps" --secondary "Front Delts, Side Delts"
+```
+
+Muscle-group names must be from this exact set: `Chest, Front Delts, Side Delts, Triceps, Lats, Mid-Back, Rear Delts, Biceps, Quads, Hamstrings, Glutes, Calves`. Cardio / core / forearm work resolves to "untracked" on its own — **do NOT teach it muscles** (it correctly trains nothing scored). If `misses` is empty (the usual case), skip straight to the review.
+
+Then run the post-workout review:
+
+```
+HERMES_VAULT=/home/hermes/vault /home/hermes/.hermes/venvs/fitness/bin/python3 /home/hermes/.hermes/scripts/fitness/coach.py --mode session-review
+```
+
+Run it via `terminal` (note the **fitness venv** — the muscle card needs `cairosvg`). It **self-sends two Telegram messages**: a coaching readout of how the session went (lifts vs last time, what to push next) AND the muscle diagram of the muscles he hit today. It prints `[SILENT]`/the wake-gate — **relay nothing extra after it**; the script delivers both. Your own step-9 "🏋️ Logged" line still goes out as the immediate confirmation; the review follows from the script.
+
+**Only auto-trigger when it's clearly done.** If you're not sure he's finished (he just logged a set and might keep going), do NOT run it — keep logging, or ask ONE short question ("Done for today, or more to go?"). Once he confirms, run it. **Never run it mid-session** (it's a wrap-up). One review per finished session.
+
+## Vault-write conventions
+
+- Date format `YYYY-MM-DD`, Eastern local time.
+- Use `read_file` to READ the existing workout file; use `vault_log.py workout` to WRITE (it handles quoting, body regen, and the daily-note backref).
+- `lifted` is a free-form string — the writer quotes it if needed. Read first (step 2), then send only the additions with `--append`; send the full corrected array with `--allow-shrink` only for a correction.
+- `grep -c '^---$'` on both the daily note AND the workout file should return exactly 2 after a write.
+- Preserve all other daily-note frontmatter + body content exactly. Only touch `lifted:` and `**Workout:**`.
+- See `references/superset_and_continuation.md` for the logging pattern for supersets, unilateral work, and continuation updates. See `references/hevy-screenshot-structure.md` for the Hevy image layout (summary card vs detail screens) and the cache-check pattern.
+
+## Log the change
+
+Skip the log for routine workout logs — the workout file IS the canonical record. The log only gets an entry for first-of-day workout creation:
+
+```
+## [YYYY-MM-DD] ingest | 07 - Health/Workouts/<date>.md — <split> session started (N exercises so far)
+```
+
+Subsequent updates within the same session: no log entry needed.
+
+## Pitfalls
+
+1. **Hevy summary card ≠ full workout data — check the cache before asking.** The Hevy share card shows exercise names, set counts, total volume, and duration — but NO per-set weights or reps. Users routinely send the summary card PLUS detail screens in the same session. **Before using `clarify` or asking the user for weights, run `ls -t /home/hermes/.hermes/image_cache/img_*.jpg` and `vision_analyze` any unread images.** Detail screens (per-exercise breakdown with weight × reps) are typically the 2nd and 3rd images sent. Only after exhausting the cache with no weight data should you log with `weight_lb: null` / `reps: null` placeholders — and still do NOT use clarify; just note the gap in the reply and ask the user to send the detail screenshots. Never fabricate per-set data silently.
+
+2. **Voice transcription noise** — fillers ("um", "and then"), homophones ("found his shoulder press" instead of "fourth he shoulder press"). Clean up when parsing. If a number sounds wrong (e.g., "two hundred pounds" for a known 40 lb dumbbell exercise), flag in reply rather than logging the bad number.
+
+2. **Continuation messages** — "25 lb 3 sets" after "now doing X" means `APPEND_SET_TO_LATEST`, NOT a new exercise. Use the LATEST mentioned exercise in the conversation, even if it wasn't the most recent `APPEND_NEW_EXERCISE` action (user might be replying about a still-active exercise).
+
+2b. **Unclear exercise names** — if the user gives a description but not the exact exercise name (e.g. "forearm-targeting barbell raise/curl"), pick the closest canonical label, preserve the user's uncertainty in `notes`, and keep going. Don't block the log just because the exercise name is fuzzy.
+
+3. **Updates vs additions** — "2nd set was 30 lb" means `UPDATE_SET` on the latest matching exercise's set 2. "Did another set at 30 lb" means APPEND a new set.
+
+4. **Plate units** — default lb (matches [[Profile]] baselines). If user says kg, store as lb (convert: kg × 2.20462), note in `notes` field: "user said 20 kg → ~44 lb".
+
+5. **Plan vs reality** — don't normalize to plan vocabulary. If he did Push when the rotation said Pull, log Push. The gap is signal, not noise.
+
+6. **Cardio + lifting same day** — `lifted: Push + Cardio (20 min)`. In the workouts file, both go under the same `exercises:` array with cardio entries having `name: Treadmill`, `sets: [{duration_min: 20, distance_km: 3.2}]` (no weight_lb).
+
+7. **Skipped session reported** — "didn't lift today, just rested" → do NOT create the workout file, do NOT set `lifted`. Don't write "rest" — it confuses the week-summary lift-count.
+
+8. **Duplicate session same day** — if `lifted` already has content AND the user describes a separate workout (e.g., "lifted in the morning, doing cardio later"), update `lifted` with `+` and APPEND new exercises to the same workouts file. Different sessions don't get separate files.
+
+8b. **Placeholder workout gets upgraded later** — if the first message only confirms a workout happened but gives no exercise detail, it is fine to create a temporary placeholder entry. When the user later supplies the actual split/exercises for that same day, overwrite the placeholder split/body with the real workout details rather than leaving a generic "Mixed (gym session)" record around.
+
+9. **Dual-cable / per-side weight ambiguity** — user says "50 lb dual cable, 3 sets". If the machine adds the two sides (total load), log `weight_lb: 100` with `notes: "50 lb/side dual cable"`. If the machine is per-side and only one side is the working load, log `weight_lb: 50`. Ask the user once when ambiguous; remember the choice for future logs of the same machine.
+
+10. **Supersets and paired unilateral work** — keep paired movements as separate `exercises[]` entries and preserve the order performed. Use `notes` to link them as a superset instead of collapsing them into prose. For one-side-at-a-time work, keep `side` on each set so left/right order survives later corrections.
+
+11. **Reps unknown** — write `reps: null`. Don't fabricate ("probably 10"). The user fills it in later if they care.
+
+12. **Mid-message corrections** — user says "I didn't eat turkey link, it was chicken sausage" → that's log-food's domain, NOT log-workout. Don't get confused by mixed-topic messages; route the food correction to log-food separately.
+
+13. **Heavy day vs light day editorializing** — stay factual. Don't write "great session!" in the reply. Coaching commentary belongs to the `/health-coach` skill (Phase 4), not the logger.
+
+14. **PR false positives** — a "new PR" of 5 lb on an exercise the user only ever did once before isn't really a PR; it's a first-time-with-weight. Only flag if the prior max came from ≥2 prior sessions. Cheap heuristic; avoids spamming the user with bogus PRs.

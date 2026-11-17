@@ -1,0 +1,1252 @@
+#!/usr/bin/env python3
+"""
+health_morning_brief_gate.py — the consolidated morning brief, SELF-CONTAINED.
+
+This is a SCRIPT-MODE Hermes cron (no agent half). It runs every ~15 min in the
+morning window and decides, ONCE per day, whether to send the brief — event-driven
+on last night's sleep landing, with a weekday-09:00 / weekend-11:00 fallback.
+
+When it fires it does EVERYTHING synchronously, so there is no failure-detection
+problem and nothing can silently vanish:
+  1. refresh the Apple Watch data (hae_process -> metrics.csv, hae_daily_ingest
+     -> today's daily-note frontmatter), logging to sync.log (not stdout).
+  2. GATHER facts: last night's sleep + yesterday's activity (from metrics.csv),
+     today's Schedule + Tasks (from the daily note), Hard Deadlines + this-week
+     (from Action Items).
+  3. COMPOSE the brief:
+       - try compose_rich(): one focused, retryable OpenAI API call (small ~3-4K
+         context, immune to the openai-codex big-context broken-pipe that kills
+         agent-mode cron runs).
+       - on any failure -> compose_templated(): a pure-Python brief from the same
+         facts. ALWAYS works, so the morning message ALWAYS lands.
+  4. SEND the brief itself via the Telegram Bot API, then print {"wakeAgent": false}
+     so Hermes' cron skips the agent entirely (no LLM turn, nothing it could hijack
+     or drop). If the direct send fails, it prints the brief instead so Hermes' agent
+     delivers it as a fallback. When NOT firing it prints the wake-gate and is silent.
+
+Fire-once is tracked in brief_state.json (last_brief_date), marked only AFTER a
+CONFIRMED send, so a delivery failure (or mid-run crash) retries on the next tick.
+
+  --dry-run         force-fire, compose + PRINT, do NOT mark state or refresh-gate
+  --no-llm          skip compose_rich (test the templated path only)
+"""
+from __future__ import annotations
+
+import csv
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.request
+import urllib.error
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+HOME = Path.home()
+SCRIPTS = HOME / ".hermes" / "scripts"
+HEALTH = HOME / ".hermes" / "health" / "hae"
+STATE = HEALTH / "brief_state.json"
+LOG = HEALTH / "sync.log"
+ENV_FILE = HOME / ".hermes" / ".env"
+
+
+def _default_vault() -> Path:
+    """HERMES_VAULT wins; else the VPS path if it exists (production), else the
+    Mac dev path — same code in both places, no split-brain."""
+    env = os.environ.get("HERMES_VAULT")
+    if env:
+        return Path(env)
+    vps = Path("/home/hermes/vault")
+    if vps.exists():
+        return vps
+    return Path.home() / "Documents" / "Vault"
+
+
+VAULT = _default_vault()
+
+# Printed as the final stdout line to skip the Hermes cron agent entirely
+# (run_job honors {"wakeAgent": false} → no LLM turn, nothing delivered). The
+# brief sends itself via the Bot API, so the agent layer is pure waste + a
+# hijack risk; this is the real "silent, $0" gate ([SILENT] is an agent marker,
+# not a script-stdout one).
+WAKE_GATE_SKIP = '{"wakeAgent": false}'
+CSVP = VAULT / "07 - Health" / "Metrics" / "metrics.csv"
+DAILY_DIR = VAULT / "04 - Daily Notes"
+ACTION_ITEMS = VAULT / "00 - Dashboard" / "Action Items.md"
+TZ = ZoneInfo("America/New_York")
+CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+
+WEEKDAY_CUTOFF = datetime.time(9, 0)
+WEEKEND_CUTOFF = datetime.time(11, 0)
+
+# 2026-10-13: the Fitbit night arrives in pieces — a session processed mid-night sits at
+# a partial total until he wakes, and the 7 AM brief sent that stub as last night's sleep. An Air
+# night counts as FINISHED only when the band saw him start walking (25 steps; at most 14
+# were seen in a whole night asleep) soon after the night's end: wake_gap_min, written by
+# fitbit_sync. A real end is his wake-up (gap 30-125 min measured); a stub's end is hours
+# before he moves (~240 min), so his morning steps cannot pass a stub off as finished.
+WAKE_GAP_MAX_MIN = 150
+# A later sleep total this far from what the brief said earns one correction message.
+SLEEP_CORRECTION_H = 0.5
+# 2026-10-18: on a late weekend wake the 11:00 brief had a partial total "so far" and the band
+# kept revising the night for hours (+0.4 h by ~12:00, +0.45 h by ~13:30), never crossing
+# 0.5h while the morning job was still running, so no correction went out. On the window's
+# last call (job runs */15 7-13, last tick 13:45) a brief that went out WITHOUT the finished
+# night is corrected once if the finished total moved by SLEEP_SETTLE_H or more.
+LAST_CALL = datetime.time(13, 40)
+SLEEP_SETTLE_H = 0.25
+
+# Migrated off OpenRouter 2026-08-26 — one vendor (Anthropic).
+ANTHROPIC_MODEL = "claude-haiku-4-5"
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+
+DRY_RUN = "--dry-run" in sys.argv
+NO_LLM = "--no-llm" in sys.argv
+FORCE = "--force" in sys.argv   # on-demand: refresh data + send NOW, ignore fire-once/cutoff
+
+
+# ----------------------------------------------------------------------------- refresh
+def _refresh() -> None:
+    """Run the data pipeline; keep its noise out of stdout (-> sync.log)."""
+    try:
+        with open(LOG, "a") as lf:
+            lf.write(f"\n=== {datetime.datetime.now(TZ).isoformat()} brief-gate refresh ===\n")
+            # Fitbit Air first (2026-10-08): the brief waits for last night's sleep, and the
+            # Air's arrives through the Google Health API, not the Apple export.
+            for s in ("fitbit_sync.py", "hae_process.py", "hae_daily_ingest.py"):
+                try:
+                    subprocess.run([sys.executable, str(SCRIPTS / s)],
+                                   stdout=lf, stderr=lf, timeout=120)
+                except Exception as e:  # noqa: BLE001
+                    lf.write(f"{s} error: {e}\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+FIT_PY = HOME / ".hermes" / "venvs" / "fitness" / "bin" / "python3"
+CARDS = SCRIPTS / "fitness" / "health_cards.py"
+
+
+def send_morning_card(night: str, caption: str | None = None) -> None:
+    """The visual half of the brief (his call, 2026-10-17: send the morning card in addition to the
+    text). Rendered in the fitness venv (cairosvg) and sent right after the text.
+    DETACHED (review, 2026-10-17): the scheduler gives this whole script 120 s, and a slow
+    render or upload must never turn into a "Script Error" message after a good brief. The
+    child logs its own outcome ([SENT] / send-failed) to sync.log. Never touches brief state."""
+    if DRY_RUN:
+        return
+    if not (FIT_PY.exists() and CARDS.exists()):
+        _log(f"morning card: renderer missing ({FIT_PY} / {CARDS})")
+        return
+    try:
+        lf = open(LOG, "a")
+        lf.write(f"{datetime.datetime.now(TZ).isoformat()} brief: morning card started ({night})\n")
+        lf.flush()
+        cmd = [str(FIT_PY), str(CARDS), "morning", "--send", "--sleep-state", night]
+        if caption:
+            cmd += ["--caption", caption]
+        subprocess.Popen(cmd,
+                         stdout=lf, stderr=lf, stdin=subprocess.DEVNULL, start_new_session=True,
+                         env={**os.environ, "HERMES_VAULT": str(VAULT)})
+        lf.close()
+    except Exception as e:  # noqa: BLE001
+        _log(f"morning card failed to start: {type(e).__name__}: {e}")
+
+
+def _now() -> datetime.datetime:
+    """The gate's clock (Eastern). A seam so the tests pin it: S2 used the wall clock and
+    failed in the minute before midnight, which blocked an unrelated deploy (2026-10-25)."""
+    return datetime.datetime.now(TZ)
+
+
+def _log(msg: str) -> None:
+    try:
+        with open(LOG, "a") as lf:
+            lf.write(f"{datetime.datetime.now(TZ).isoformat()} brief: {msg}\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ----------------------------------------------------------------------------- state + csv
+def _load_state() -> dict:
+    try:
+        return json.loads(STATE.read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_state(state: dict) -> None:
+    try:
+        STATE.write_text(json.dumps(state))
+    except Exception:  # noqa: BLE001
+        _log("WARN: could not write brief_state.json")
+
+
+def _row_for(date: str) -> dict:
+    if not CSVP.exists():
+        return {}
+    with CSVP.open(newline="") as fh:
+        for r in csv.DictReader(fh):
+            if r.get("date") == date:
+                return r
+    return {}
+
+
+def _fnum(r: dict, k: str):
+    try:
+        return float(r.get(k))
+    except (TypeError, ValueError):
+        return None
+
+
+# ----------------------------------------------------------------------------- gather: vault
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _section(text: str, header: str) -> str:
+    """Return the lines under a '## header' up to the next '## ' (or '# ') header."""
+    lines = text.split("\n")
+    out, capturing = [], False
+    hl = header.lower()
+    for ln in lines:
+        if capturing:
+            if re.match(r"^#{1,2} ", ln):
+                break
+            out.append(ln)
+        else:
+            # Exact header match (allowing trailing text after a space), so
+            # "## Schedule" does NOT also capture "## Scheduled Maintenance".
+            hs = ln.strip().lower()
+            if hs == hl or hs.startswith(hl + " "):
+                capturing = True
+    return "\n".join(out).strip()
+
+
+def gather_schedule(today: str) -> list[str]:
+    """Non-empty rows of the daily note's '## Schedule' markdown table."""
+    note = DAILY_DIR / f"{today}.md"
+    sec = _section(_read(note), "## schedule")
+    rows = []
+    for ln in sec.split("\n"):
+        if not ln.strip().startswith("|"):
+            continue
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        if cells[0].lower() in ("time", "") and cells[1].lower() in ("activity", ""):
+            continue  # header / separator / empty
+        if set("".join(cells)) <= set("-: "):
+            continue  # separator row
+        if any(c for c in cells):
+            t, a = cells[0], " ".join(cells[1:]).strip()
+            rows.append(f"{t} — {a}".strip(" —") if t else a)
+    return [r for r in rows if r]
+
+
+def gather_tasks(today: str) -> list[str]:
+    """Unchecked '- [ ]' items under the daily note's '## Tasks'."""
+    note = DAILY_DIR / f"{today}.md"
+    sec = _section(_read(note), "## tasks")
+    out = []
+    for ln in sec.split("\n"):
+        m = re.match(r"^\s*-\s*\[ \]\s*(.+)$", ln)
+        if m and m.group(1).strip():
+            out.append(m.group(1).strip())
+    return out
+
+
+def _clip(s: str, limit: int) -> str:
+    """Trim to ~limit chars but cut on a line boundary so no item is sliced mid-line."""
+    if len(s) <= limit:
+        return s
+    cut = s.rfind("\n", 0, limit)
+    return s[: cut if cut > 0 else limit].rstrip()
+
+
+# NOTE: "~~" is deliberately NOT a marker. Striking part of a heading is a normal edit
+# in this vault ("### Submit the ~~draft~~ final form by Aug 17"), and treating it
+# as resolution silently dropped live items. Both genuinely-resolved blocks carry an
+# explicit ✅ marker anyway, so nothing is lost.
+_RESOLVED_MARKERS = ("✅ resolved", "✅ dropped", "✅ done", "— done", "no longer relevant",
+                     "moot", "cancelled", "canceled", "superseded")
+
+# A line worth keeping in the digest: it names a date or a hard deadline.
+_DATE_RE = re.compile(
+    r"\b(\d{4}-\d{2}-\d{2}"
+    r"|(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{1,2}"
+    r"|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{1,2}"
+    r"|\bdeadline\b|\bdue\b|\bby \d{1,2}\s*(?:am|pm)\b)",
+    re.I,
+)
+
+
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+
+
+def _line_date(line: str, today: datetime.date):
+    """The date a line is ABOUT: its earliest UPCOMING date, else its earliest date.
+
+    A plain min() over every date in the line was wrong — these rows cite their history
+    inline ("Tue Aug 4 (action) → Wed Aug 19 (hard deadline)", or a row that also
+    mentions "confirmed Aug 3" and "runway Aug 12–21"). min() returned the past
+    reference, so the row was classified as past and two live deadlines (one on Aug 19)
+    were both dropped from the brief."""
+    found = []
+    for m in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", line):
+        try:
+            found.append(datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        except ValueError:
+            pass
+    for m in re.finditer(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*(\d{1,2})\b",
+                         line, re.I):
+        try:
+            found.append(datetime.date(today.year, _MONTHS[m.group(1).lower()], int(m.group(2))))
+        except ValueError:
+            pass
+    if not found:
+        return None
+    future = [d for d in found if d >= today]
+    return min(future) if future else min(found)
+
+
+def _trim_line(line: str, limit: int = 170) -> str:
+    """Shorten a kept line to its gist, cutting on a word boundary.
+    For a markdown table row, keep the first two cells (the date and what it is) and
+    drop the trailing notes column, which is where the length lives."""
+    s = line.strip()
+    if s.startswith("|"):
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if len(cells) >= 2:
+            s = f"| {cells[0]} | {cells[1]}"
+    if len(s) <= limit:
+        return s
+    cut = s.rfind(" ", 0, limit)
+    return s[: cut if cut > 40 else limit].rstrip() + "…"
+
+
+def _condense_deadlines(section: str, per_block: int = 14) -> str:
+    """Heading + the few dated lines under it, per block.
+
+    Dropping resolved blocks alone did NOT achieve the goal. Measured against the real
+    Action Items: after pruning, the Aug 19 / Aug 15 / Aug 17 / Aug 22 items sat at
+    offsets 4385-6466, all past the 2600-char clip — one live block's 18 lines of
+    supporting argument consumed the entire budget, and the clip ended up containing
+    NONE of those dates (strictly worse than before for "Aug 22").
+
+    The brief needs the dated headlines, not the reasoning behind them. Keeping each
+    block's heading plus its dated lines fits every block inside the budget."""
+    blocks: list[list[str]] = [[]]
+    for line in section.split("\n"):
+        if line.startswith("### "):
+            blocks.append([line])
+        else:
+            blocks[-1].append(line)
+
+    out: list[str] = []
+    for b in blocks:
+        if not b:
+            continue
+        heading = b[0] if b[0].startswith("### ") else ""
+        if heading and any(mk in heading.lower() for mk in _RESOLVED_MARKERS):
+            continue                                   # settled — drop the whole block
+        # Prefer UPCOMING dates. These blocks are chronological, so taking the first N
+        # dated lines pulled JULY rows out of a Jul–Aug table and still surfaced none of
+        # the deadlines that matter (Aug 15/17/19/22).
+        cands = [ln for ln in b[1:] if ln.strip() and _DATE_RE.search(ln)]
+        today = datetime.datetime.now(TZ).date()
+        upcoming = []
+        for ln in cands:
+            d = _line_date(ln, today)
+            if d and d >= today:
+                upcoming.append((d, ln))
+        upcoming.sort(key=lambda x: x[0])
+        # ONLY upcoming lines. Topping up with past/undated prose let one block's
+        # 600-char argument paragraphs back in and pushed the later deadlines out of
+        # the clip again. A block with nothing upcoming contributes just its heading,
+        # which is the right amount of signal for a morning brief.
+        # Truncate each line. Some collisions rows carry a 500-char notes column, so 17
+        # kept lines came to 5,492 chars and the 2600 clip then dropped the back half —
+        # which is how Aug 17/19/21 kept falling out even once they were selected. The
+        # brief needs the date and the gist, not the full rationale.
+        body = [_trim_line(ln) for _, ln in upcoming[:per_block]]
+        if heading:
+            out.append(heading)
+        elif not body:
+            continue                                   # preamble with nothing dated
+        out.extend(body)
+    return "\n".join(out).strip()
+
+
+def _vault_module(name: str):
+    """Import a stdlib-only helper from scripts/vault (repo) or ~/.hermes/scripts/vault (VPS)."""
+    here = Path(__file__).resolve().parent
+    for cand in (here.parent / "vault", here / "vault", Path.home() / ".hermes" / "scripts" / "vault"):
+        if (cand / f"{name}.py").is_file():
+            if str(cand) not in sys.path:
+                sys.path.insert(0, str(cand))
+            break
+    return __import__(name)
+
+
+def gather_action_items(today: str = "") -> dict:
+    """The open rows of Action Items' THIS WEEK table (via today_actions.build).
+
+    2026-10-08: this used to look for "## 🔴 hard deadlines" / "## 🗓️" headings that no
+    longer exist, so both fields were EMPTY every morning and the brief planned from stale
+    daily-note tasks alone. The keys are kept for compatibility (compose_templated reads
+    `hard_deadlines`); `hard_deadlines` now holds the open rows. Fail-soft and LOUD: an
+    unreadable list is reported as UNKNOWN, never as an empty plan."""
+    try:
+        ta = _vault_module("today_actions")
+        d = datetime.date.fromisoformat(today) if today else datetime.datetime.now(TZ).date()
+        text = _read(ACTION_ITEMS)
+        if not text:
+            return {"hard_deadlines": "UNKNOWN — Action Items.md could not be read", "this_week": ""}
+        return {"hard_deadlines": ta.build(text, d), "this_week": ""}
+    except Exception as e:  # noqa: BLE001
+        _log(f"action items unavailable: {type(e).__name__}: {e}")
+        return {"hard_deadlines": f"UNKNOWN — could not extract open tasks ({type(e).__name__})",
+                "this_week": ""}
+
+
+def vault_sync() -> dict:
+    """Is the VPS vault copy receiving changes? Only 'sync_broken' is ever mentioned (his
+    call, 2026-10-08: a closed laptop is not a problem)."""
+    try:
+        return _vault_module("done_facts").freshness()
+    except Exception as e:  # noqa: BLE001
+        return {"state": "unknown", "why": f"{type(e).__name__}"}
+
+
+def sleep_state(row: dict) -> str:
+    """"none" | "partial" | "final" for the night in this metrics row. Only an Air night can
+    be partial; Apple and /sleep nights arrive whole."""
+    if not row.get("sleep_total_h"):
+        return "none"
+    if row.get("sleep_source") != "air":
+        return "final"
+    gap = _fnum(row, "wake_gap_min")
+    return "final" if gap is not None and gap <= WAKE_GAP_MAX_MIN else "partial"
+
+
+def _clock(ts: str) -> str | None:
+    """'2026-10-13T11:26:00Z' -> '7:26 AM' (Eastern); None when unparseable."""
+    try:
+        t = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            return None
+        return t.astimezone(TZ).strftime("%-I:%M %p")
+    except (TypeError, ValueError):
+        return None
+
+
+def _avg7(column: str, before: str):
+    """Mean of the last 7 dated values of a metrics column strictly before `before`."""
+    try:
+        with CSVP.open(newline="") as fh:
+            vals = [v for r in csv.DictReader(fh)
+                    if r.get("date", "") < before and (v := _fnum(r, column)) is not None]
+    except OSError:
+        return None
+    return sum(vals[-7:]) / len(vals[-7:]) if vals[-7:] else None
+
+
+def gather_facts(today: str, yesterday: str) -> dict:
+    trow = _row_for(today)
+    yrow = _row_for(yesterday)
+    state = sleep_state(trow)
+    sleep_present = state != "none"
+
+    sleep = {}
+    if sleep_present:
+        for k in ("sleep_total_h", "sleep_core_h", "sleep_deep_h", "sleep_rem_h",
+                  "sleep_awake_h", "resting_hr", "hrv_ms", "hrv_rmssd_ms", "spo2_avg",
+                  "respiratory_rate"):
+            v = _fnum(trow, k)
+            if v is not None:
+                sleep[k] = v
+        if trow.get("sleep_source"):
+            sleep["source"] = trow["sleep_source"]
+        for k, col in (("bedtime", "sleep_start"), ("woke", "sleep_end")):
+            c = _clock(trow.get(col, ""))
+            if c:
+                sleep[k] = c
+        if state == "partial":
+            # still syncing: the brief must call it "so far", never low sleep (2026-10-13)
+            sleep["partial"] = True
+        avg = _avg7("sleep_total_h", today)
+        if avg is not None:
+            sleep["avg7_h"] = round(avg, 1)
+
+    # Activity (his call, 2026-10-08): steps + Active Zone Minutes once the Fitbit Air is in
+    # use; Apple's active kcal / exercise minutes only on days without Air data.
+    activity = {}
+    air_day = _fnum(yrow, "steps_air") is not None or _fnum(yrow, "azm") is not None
+    for k in (("steps", "azm") if air_day else ("steps", "active_kcal", "exercise_min")):
+        v = _fnum(yrow, k)
+        if v is not None:
+            activity[k] = int(v)
+    # The rest of yesterday from the band (his call, 2026-10-13: include steps and other data
+    # from the previous day).
+    if air_day:
+        for k, col, nd in (("distance_km", "distance_air_km", 1), ("kcal_burned", "total_kcal_air", 0),
+                           ("workouts", "exercise_air_count", 0), ("workout_min", "exercise_air_min", 0)):
+            v = _fnum(yrow, col)
+            if v is not None and v > 0:
+                activity[k] = round(v, nd) if nd else int(v)
+    st7 = _avg7("steps", today)
+    if st7 is not None and "steps" in activity:
+        activity["steps_avg7"] = int(round(st7))
+    # The band misses steps when it is off the wrist (charging): when it saw far fewer than
+    # the phone, ask him rather than silently trusting either (his call).
+    sa, sx = _fnum(yrow, "steps_apple"), _fnum(yrow, "steps_air")
+    if sa and sx is not None and sx < 0.6 * sa and sa - sx > 2000:
+        activity["band_gap"] = {"band_steps": int(sx), "phone_steps": int(sa)}
+    # In use = the band synced in the last 36 h (fb_last_sync is the DEVICE's last sync, not
+    # the run time). If he stops wearing it, the brief offers /sleep again (review M6).
+    air_in_use = False
+    try:
+        ls = trow.get("fb_last_sync") or yrow.get("fb_last_sync") or ""
+        if ls:
+            age = datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.fromisoformat(ls.replace("Z", "+00:00"))
+            air_in_use = age.total_seconds() < 36 * 3600
+    except ValueError:
+        pass
+    air_in_use = air_in_use or air_day
+
+    ai = gather_action_items(today)
+    inbox, inbox_status = gather_inbox_checked(today)
+    return {
+        "date": today,
+        "sleep_synced": sleep_present,
+        "sleep_state": state,
+        "air_in_use": air_in_use,
+        "sleep": sleep,
+        "yesterday_activity": activity,
+        "schedule": gather_schedule(today),
+        "tasks": gather_tasks(today),
+        "health_yesterday": gather_health_yesterday(yesterday),
+        "training_today": gather_training(today),
+        "inbox": inbox,
+        "inbox_status": inbox_status,
+        "vault_sync": vault_sync(),
+        "board": gather_board(),
+        "open_loops": gather_open_loops(),
+        "hard_deadlines": ai["hard_deadlines"],
+        "this_week": ai["this_week"],
+    }
+
+
+# ----------------------------------------------------------------------------- compose: shared sleep block
+def _sleep_lines(s: dict, synced: bool, air: bool = False) -> list[str]:
+    """The sleep + recovery bullet lines — shared by the morning brief AND the
+    later sleep-follow-up (so both render identically). Returns the lines (or a
+    'didn't sync yet' note when sleep isn't in the archive)."""
+    if not (synced and s):
+        if air:   # his call, 2026-10-08: with the band, don't ask him to type sleep in
+            return ["_(Your Fitbit hasn't synced last night's sleep yet — open the Fitbit app on your phone.)_"]
+        return ["_(Apple Watch sleep hasn't synced yet — `/sleep <hrs>` to log manually.)_"]
+    out = []
+    tot = s.get("sleep_total_h")
+    partial = bool(s.get("partial"))
+    if partial and tot is not None:
+        # a night still syncing is never "low sleep" (2026-10-13)
+        line = f"⏳ *{tot:.1f}h so far*"
+    else:
+        flag = "✅" if (tot or 0) >= 7 else "⚠️"
+        line = f"{flag} Slept *{tot:.1f}h*" if tot is not None else "Sleep:"
+    if s.get("bedtime") and s.get("woke") and not partial:
+        line += f" · {s['bedtime']} → {s['woke']}"
+    if "avg7_h" in s:
+        line += f"  _(7-day avg {s['avg7_h']:.1f}h)_"
+    out.append(line)
+    extras = []
+    for k, lab, fmt in (("sleep_deep_h", "deep", "{:.1f}h"), ("sleep_rem_h", "REM", "{:.1f}h"),
+                        ("sleep_core_h", "light", "{:.1f}h")):
+        if k in s and not partial:
+            extras.append(f"{lab} " + fmt.format(s[k]))
+    for k, lab, fmt in (("resting_hr", "RHR", "{:.0f}"),
+                        # different measures, never shown as the same number (2026-10-08)
+                        ("hrv_rmssd_ms", "HRV", "{:.0f}ms (RMSSD)"),
+                        ("hrv_ms", "HRV", "{:.0f}ms (SDNN)"),
+                        ("spo2_avg", "SpO2", "{:.0f}%"),
+                        ("respiratory_rate", "breathing", "{:.1f}/min")):
+        if k == "hrv_ms" and "hrv_rmssd_ms" in s:
+            continue
+        if k in s:
+            extras.append(f"{lab} " + fmt.format(s[k]))
+    if extras:
+        out.append("   " + " · ".join(extras))
+    if partial:
+        out.append("   _Fitbit may still be syncing last night — I'll send an update if the total changes._")
+    elif tot is not None and tot < 7:
+        out.append("   _Under your 7h floor — guard sleep tonight._")
+    return out
+
+
+def _activity_lines(a: dict) -> list[str]:
+    """Yesterday's numbers as one fixed line (empty when there are none)."""
+    bits = []
+    if "steps" in a:
+        st = f"*{a['steps']:,}* steps"
+        if a.get("steps_avg7"):
+            st += f" _(7-day avg {a['steps_avg7']:,})_"
+        bits.append(st)
+    if "azm" in a:
+        bits.append(f"{a['azm']} zone min")
+    if "distance_km" in a:
+        bits.append(f"{a['distance_km']:.1f} km")
+    if "kcal_burned" in a:
+        bits.append(f"{a['kcal_burned']:,} kcal burned")
+    if "active_kcal" in a:
+        bits.append(f"{a['active_kcal']} active kcal")
+    if "exercise_min" in a:
+        bits.append(f"{a['exercise_min']} exercise min")
+    if a.get("workouts"):
+        w = f"{a['workouts']} workout" + ("s" if a["workouts"] > 1 else "")
+        if a.get("workout_min"):
+            w += f" ({a['workout_min']} min)"
+        bits.append(w)
+    return ["🚶 Yesterday: " + " · ".join(bits)] if bits else []
+
+
+def health_block(facts: dict) -> list[str]:
+    """The fixed numbers block — written by code, so the numbers are always there and never
+    reworded (his ask, 2026-10-13). Rendered under the composed brief and in the follow-up."""
+    out = _sleep_lines(facts.get("sleep") or {}, facts.get("sleep_synced"), facts.get("air_in_use", False))
+    act = _activity_lines(facts.get("yesterday_activity") or {})
+    if act:
+        out += [""] + act
+    return out
+
+
+# ----------------------------------------------------------------------------- compose: templated (always works)
+def compose_templated(facts: dict) -> str:
+    now = _now()
+    parts = [f"🌅 *Morning, Sparsh.* {now.strftime('%a %b %-d')}.", ""]
+    parts += health_block(facts)
+
+    if facts["schedule"]:
+        parts += ["", "*Today*"] + [f"• {r}" for r in facts["schedule"]]
+    if facts["tasks"]:
+        parts += ["", "*Due today*"] + [f"• {t}" for t in facts["tasks"]]
+
+    # The open rows from today_actions ("- [TODAY] <when> — <what>"), already filtered for
+    # done. Show today's first, the What cell (not the When), and keep the ⬜ step of a row
+    # whose When starts with ✅ (2026-10-08 review: the old ✅ filter dropped "… · ⬜ X still to do").
+    hd_src = facts["hard_deadlines"]
+    today_rows, week_rows = [], []
+    for ln in hd_src.split("\n"):
+        m = re.match(r"^- \[(TODAY|WEEK)\]\s*(.*)$", ln)
+        if not m or "STALE" in ln:
+            continue
+        when, _, what = m.group(2).partition(" — ")
+        text = re.sub(r"\*\*|\s+", " ", (what or when)).strip()
+        if "⬜" in when and "⬜" not in text:
+            text += " · " + re.sub(r"\*\*", "", when[when.index("⬜"):]).strip()
+        (today_rows if m.group(1) == "TODAY" else week_rows).append(f"• {text[:110]}")
+    hd = (["• I couldn't read your task list this morning"] if hd_src.startswith("UNKNOWN") else []) \
+        + today_rows + week_rows
+    if hd:
+        parts += ["", "*This week*"] + hd[:4]
+
+    parts += ["", "_(plain brief — rich compose was unavailable this morning)_"]
+    return "\n".join(parts).strip()
+
+
+# ----------------------------------------------------------------------------- compose: rich (OpenAI, retryable)
+def _env(key: str) -> str | None:
+    v = os.environ.get(key)
+    if v:
+        return v
+    try:
+        for ln in ENV_FILE.read_text().splitlines():
+            if ln.startswith(f"{key}="):
+                return ln.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _anthropic_key() -> str | None:
+    return _env("ANTHROPIC_API_KEY")
+
+
+# The brief shares the open-loops list and the send ledger with the check-in loop
+# (scripts/assistant/). BRIEF_INCLUDES_LOOPS=False removes the loops from the brief again.
+BRIEF_INCLUDES_LOOPS = True
+MAX_BRIEF_LOOPS = 4
+
+
+def _assistant_module(name: str):
+    here = Path(__file__).resolve().parent
+    for cand in (here.parent / "assistant", here / "assistant", SCRIPTS / "assistant"):
+        if (cand / f"{name}.py").exists():
+            if str(cand) not in sys.path:
+                sys.path.insert(0, str(cand))
+            break
+    return __import__(name)
+
+
+def gather_open_loops(now: datetime.datetime | None = None) -> list:
+    """Open loops that are due for a look today (or have a date today/tomorrow), most
+    urgent first, at most MAX_BRIEF_LOOPS. [] when there are none OR the list cannot be
+    read: the brief must go out either way. Each: {id, title, who, next_step, due}."""
+    if not BRIEF_INCLUDES_LOOPS:
+        return []
+    try:
+        L = _assistant_module("loops")
+        n = now or _now()
+        end_today = n.replace(hour=23, minute=59).isoformat()
+        tomorrow = (n.date() + datetime.timedelta(days=1)).isoformat()
+        out = []
+        for lid, lp in L.open_loops(L.load()):
+            if lp["next_check_at"] <= end_today or (lp.get("due") and lp["due"] <= tomorrow):
+                out.append({"id": lid, "title": lp["title"], "who": lp.get("who") or "",
+                            "next_step": lp.get("next_step") or "", "due": lp.get("due") or ""})
+        return out[:MAX_BRIEF_LOOPS]
+    except Exception as e:  # noqa: BLE001
+        _log(f"gather_open_loops failed: {type(e).__name__}: {e}")
+        return []
+
+
+def loops_mentioned(text: str, open_loops: list) -> list:
+    """Ledger topics for the loops the brief actually talked about (it names the person
+    or the thread). The check-in loop will not raise those topics again today."""
+    low = (text or "").lower()
+    hit = []
+    for lp in open_loops or []:
+        who, title = (lp.get("who") or "").lower(), (lp.get("title") or "").lower()
+        key = re.split(r"\s+[—:-]\s+", title)[0].strip()         # "acme — tax form …" -> "acme"
+        if (len(who) >= 3 and who in low) or (len(key) >= 3 and key in low):
+            hit.append(f"loop:{lp['id']}")
+    return hit
+
+
+def _record_sent(topic: str, text: str, topics: list | None = None) -> None:
+    """Put a confirmed send in the shared ledger (scripts/assistant/outbox.py). The brief is
+    a digest: never budgeted, but recorded, so the check-in loop knows the morning brief
+    has gone out (that is what ends quiet hours) and what it already said. Best-effort:
+    a ledger problem must never cost him the brief."""
+    try:
+        outbox = _assistant_module("outbox")
+        outbox.record_quiet("digest", topic, text, topics=topics or None)
+    except Exception as e:  # noqa: BLE001
+        _log(f"outbox record failed: {type(e).__name__}: {e}")
+
+
+def send_message(text: str) -> bool:
+    """Send the brief straight to Telegram via the Bot API — so NO Hermes agent layer
+    can hijack, rewrite, or drop it (the obsidian-vault-write hijack on 2026-06-08).
+    Tries Markdown, falls back to plain text. Returns True on a confirmed send."""
+    import urllib.parse
+    token = _env("TELEGRAM_BOT_TOKEN")
+    if not token:
+        _log("send_message: no TELEGRAM_BOT_TOKEN")
+        return False
+    for pm in ("Markdown", None):
+        payload = {"chat_id": CHAT_ID, "text": text}
+        if pm:
+            payload["parse_mode"] = pm
+        try:
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data=urllib.parse.urlencode(payload).encode())
+            with urllib.request.urlopen(req, timeout=20) as r:
+                if json.loads(r.read()).get("ok"):
+                    _log(f"send_message: sent ({pm or 'plain'})")
+                    return True
+        except Exception as e:  # noqa: BLE001
+            _log(f"send_message ({pm}) failed: {e}")
+    return False
+
+
+# ── inbox + board facts ──────────────────────────────────────────────────────
+# The brief was composing from schedule + tasks + sleep only, so it was confidently
+# stale: it repeated tasks that were already done and missed an important email. The
+# model was fine; it was being handed a to-do list scraped from a daily note.
+TRIAGE_JSON = Path.home() / ".hermes" / "health" / "email_triage.json"
+_VAULT = Path(os.environ.get("HERMES_VAULT", "/home/hermes/vault"))
+_LOGGED_FIELDS = ("kcal", "protein_g", "water_l", "weight", "lifted")
+
+
+def gather_health_yesterday(yday: str) -> dict:
+    """Yesterday's logged health, and — the useful half — what he did NOT log.
+
+    His call: the brief names what went unlogged yesterday and offers to log it from a
+    quick reply. The agent can only offer that if it knows which
+    fields are blank, so report the gaps explicitly rather than omitting them.
+    """
+    note = _VAULT / "04 - Daily Notes" / f"{yday}.md"
+    if not note.is_file():
+        return {}
+    fm, seen = {}, False
+    for ln in note.read_text().splitlines():
+        if ln.strip() == "---":
+            if seen:
+                break
+            seen = True
+            continue
+        if seen and ":" in ln:
+            k, _, v = ln.partition(":")
+            fm[k.strip()] = v.strip().strip('"')
+    logged = {k: fm.get(k) for k in _LOGGED_FIELDS if (fm.get(k) or "").strip()}
+    missing = [k for k in _LOGGED_FIELDS if not (fm.get(k) or "").strip()]
+    return {"date": yday, "logged": logged, "not_logged": missing,
+            "sleep_hours": fm.get("sleep_hours") or None}
+
+
+def gather_training(today: str) -> dict:
+    """Which session the split calls for today, from 07 - Health/Training Plan.md."""
+    plan = _VAULT / "07 - Health" / "Training Plan.md"
+    if not plan.is_file():
+        return {}
+    try:
+        day = datetime.datetime.strptime(today, "%Y-%m-%d").strftime("%a")  # Mon/Tue/...
+    except Exception:  # noqa: BLE001
+        return {}
+    for ln in plan.read_text().splitlines():
+        if ln.strip().startswith("|") and f"| {day} " in ln:
+            cells = [c.strip() for c in ln.strip("|").split("|")]
+            if len(cells) >= 2 and cells[1]:
+                return {"day": day, "session": cells[1]}
+    return {"day": day, "session": None}
+
+
+
+
+
+def gather_inbox() -> list:
+    """Today's email triage, already classified by the 06:40 job (no freshness check —
+    use gather_inbox_checked)."""
+    try:
+        d = json.loads(TRIAGE_JSON.read_text())
+    except Exception:  # noqa: BLE001
+        return []
+    return _inbox_items(d)
+
+
+def _inbox_items(d: dict) -> list:
+    out = []
+    for it in d.get("items") or []:
+        out.append({k: it.get(k) for k in
+                    ("category", "company", "summary", "action", "done_evidence", "note", "urgency",
+                     "status_change", "matched_application") if it.get(k)})
+    return out
+
+
+def gather_inbox_checked(today: str = "") -> tuple:
+    """(items, status). status is "ok", "failed: …", "stale: …" or "missing".
+
+    2026-10-08: a failed triage used to leave YESTERDAY's JSON in place, and the brief
+    served those items as this morning's inbox. Items are only used when the triage ran
+    today (Eastern date) and did not fail."""
+    try:
+        d = json.loads(TRIAGE_JSON.read_text())
+    except Exception:  # noqa: BLE001
+        return [], "missing"
+    if d.get("failed"):
+        return [], f"failed: {str(d['failed'])[:80]}"
+    try:
+        ran = datetime.datetime.fromisoformat(str(d.get("generated_at"))).astimezone(TZ).date()
+    except (TypeError, ValueError):
+        return [], "stale: no timestamp"
+    want = datetime.date.fromisoformat(today) if today else datetime.datetime.now(TZ).date()
+    if ran != want:
+        return [], f"stale: last ran {ran.isoformat()}"
+    return _inbox_items(d), "ok"
+
+
+# Board facts are switched off in this configuration: the brief gets none, so it
+# cannot bring roles up. Flip this back to True to re-enable.
+BRIEF_INCLUDES_BOARD = False
+
+
+def gather_board() -> dict:
+    """Live job board — what is open, what is new, what he has ALREADY applied to."""
+    if not BRIEF_INCLUDES_BOARD:
+        return {}
+    try:
+        sys.path.insert(0, str(Path.home() / ".hermes" / "scripts" / "internship"))
+        from board_facts import board_facts
+        return board_facts()
+    except Exception as e:  # noqa: BLE001 - a brief without a board section is fine
+        _log(f"gather_board failed: {type(e).__name__}: {e}")
+        return {}
+
+
+# Prompt structure follows a set of prompt-hardening findings from an earlier agent
+# build (kept as AGENT-PROMPT-HARDENING.md). Four of them apply directly to a
+# composition prompt:
+#   #1 anti-hallucination clause ("highest value") — forbid explicitly AND say what to
+#      do instead; a confident invention is worse than reporting the gap.
+#   #2 negative examples do more work than positive ones — the ❌ block below is doing
+#      the heavy lifting on tone, not the prose description above it.
+#   #3 grounding facts are injected at RUNTIME, never left to a template — see
+#      _system_prompt(), which stamps the real weekday/date/timezone.
+#   #6 the rules that must not be broken go LAST; recency measurably improves adherence.
+_STYLE = (
+    "You are Sparsh's personal assistant, writing his morning message on Telegram. "
+    "You have already been through his calendar, inbox and health logs. "
+    "Now tell him about it the way a sharp chief-of-staff would over coffee.\n\n"
+
+    "WRITE LIKE A PERSON.\n"
+    "• Prose and short paragraphs. A bullet list only for a genuine list (3+ roles, "
+    "several meetings) — never as the default shape.\n"
+    "• First person, because you did the work: 'I went through your inbox — one thing "
+    "stood out.' Saying what turned out to be noise is information too.\n"
+    "• No fixed section order, no headers like 'Due today'. Lead with whatever actually "
+    "matters most this morning. A quiet day reads short and calm.\n"
+    "• Offer to act. He can reply to this message, so phrase a gap as something he can "
+    "answer in one line: 'you didn't log food yesterday — tell me roughly what you ate "
+    "and I'll put it in.'\n"
+    "• CONNECT THINGS. The facts come from different systems and should land as one "
+    "picture. An assessment deadline and newly-opened roles are the same conversation. "
+    "Six hours of sleep and a training day are the same conversation. Say the link out "
+    "loud instead of listing both.\n\n"
+
+    "WHAT YOU HAVE — skip anything empty, and never announce that something is empty:\n"
+    "• `schedule` — today's calendar.\n"
+    "• `inbox` — already-triaged email. Lead with a status_change or urgency=high: an "
+    "assessment invite, an interview request, a rejection, a real person waiting. An item "
+    "with `done_evidence` and no `action` is ALREADY HANDLED — mention it as news at most, "
+    "never as something to do. If `inbox_status` is not \"ok\", say once, plainly, that the "
+    "inbox check didn't run this morning — never present old items as today's.\n"
+    "• `vault_sync` — ONLY if `state` is \"sync_broken\", say once that your copy of his "
+    "vault may be behind because sync is having trouble. Otherwise never mention it.\n"
+    "• `board` — normally EMPTY (board facts are switched off), so do not bring up "
+    "roles, applications or applying at all. Only if `board` is non-empty, name 2-4 "
+    "specific roles from `top_targets`, preferring `new_last_2_days`.\n"
+    "• `health_yesterday` — `not_logged` is what he never recorded. Mention it lightly "
+    "and offer to log it. Do not moralise.\n"
+    "• `training_today` — what his split calls for. If it is a rest day, say so.\n"
+    "• `yesterday_activity.azm` = Fitbit Active Zone Minutes. If `yesterday_activity.band_gap` is "
+    "present, the band saw far fewer steps than the phone — ask once, lightly, whether he took "
+    "it off (charging?) rather than treating either number as the truth. `sleep.hrv_rmssd_ms` "
+    "and `sleep.hrv_ms` are DIFFERENT measures (RMSSD vs SDNN): never compare one with the "
+    "other. If sleep has not synced and `air_in_use` is true, tell him to open the Fitbit app "
+    "— do not ask him to log sleep by hand.\n"
+    "• `sleep` / `yesterday_activity` — the exact numbers (sleep, stages, RHR, HRV, steps, "
+    "zone minutes, distance, calories) are printed in a fixed block UNDER your message "
+    "automatically. Do not list them again. Mention one only when it matters: genuinely low "
+    "sleep (floor 7h), a clear trend, or a link to today's plan. If `sleep.partial` is true the "
+    "night is still syncing from the band — the total is only what has arrived so far, so never "
+    "call it short or low sleep.\n"
+    "• `open_loops` — threads you are keeping track of for him that are due for a look today: "
+    "someone he is waiting on, a step he owes, a plan with a condition. If there are any, work "
+    "the one or two that matter into the message by naming the person or the thread and the "
+    "`next_step` on file. You have NOT checked his inbox for these this morning, so never say "
+    "whether anyone has or has not replied; say it is due for a look and what the plan is. "
+    "Ask at most ONE question in the whole message.\n"
+    "• `tasks`, `hard_deadlines`, `this_week` — the plan. `hard_deadlines` is the OPEN "
+    "rows of his THIS WEEK list (finished rows already removed; ⬜ = a step still to do). "
+    "Rows tagged [TODAY] are today's work; [WEEK] rows are later this week — mention one only "
+    "if it connects to today; a row marked STALE is carry-over, not today's plan. If it says "
+    "UNKNOWN, say you couldn't read his task list rather than implying there is nothing to do.\n\n"
+
+    "• TENSE AND PREDICTIONS. Report what the facts say happened, in the tense they say it. "
+    "Never predict what a person will do or when ('she should reply by 10', 'that's arriving "
+    "shortly'), and never turn something that already happened into something still to come.\n\n"
+    "❌ NEVER WRITE LIKE THIS — these are real failures from earlier versions:\n"
+    "❌ '**Due today**\\n• Applications ×5\\n• Health logging' — a form being filled in.\n"
+    "❌ 'Applications — 5 submissions: Acme → Globex → Initech ×2 → Hooli' — a stale "
+    "list copied out of `tasks`; two of those were already applied to.\n"
+    "❌ 'Review practice problems before the Acme OA' as a checklist line, when the real "
+    "news is that the OA invite ARRIVED. Lead with what happened, not with the chore.\n"
+    "❌ 'No sync detected. Log manually: /sleep <hrs> to record.' — machine output. Say "
+    "'your sleep didn't sync last night — how many hours did you get?'\n"
+    "❌ 'Focus: Submit 5 applications before the weekend.' — a label with a colon. Just say "
+    "the thing.\n"
+    "❌ Announcing empty sections ('No events today', 'Nothing in your inbox').\n\n"
+
+    "Telegram plain-markdown renders *bold* and _italic_ — sparingly, for a company name "
+    "or a deadline, never decoration. 120-250 words; longer only if the day earns it. "
+    "End with the single thing that matters most today, in one line, as a person "
+    "would say it.\n\n"
+
+    # ── these two go LAST on purpose (hardening finding #6: recency) ──────────
+    "TWO RULES THAT OVERRIDE EVERYTHING ABOVE:\n"
+    "1. NEVER state a fact, number, company, role, deadline or email that is not in the "
+    "facts you were given. If something is missing or empty, say what you actually know "
+    "or leave it out — a confident invention is far worse than a gap. If the facts "
+    "contradict each other, say so plainly rather than picking one.\n"
+    "2. NEVER suggest applying to a company that appears in `board.applied_recent` or "
+    "`board.live_pipeline`. He has already done those, and suggesting them is the "
+    "fastest way to make him stop trusting this message. `tasks` can be days old and is "
+    "NOT authoritative about the job search — `board` is. If a task names a company the "
+    "board shows as applied, drop it silently and use a real target instead."
+)
+
+
+def _system_prompt() -> str:
+    """Grounding facts stamped at RUNTIME (hardening finding #3).
+
+    A date that lives only inside a template is lost the moment the prompt is built
+    another way, and a model without one falls back to its training-era 'now'. Local
+    zone, not UTC — utcnow() rolls the day over early in western timezones.
+    """
+    now = _now()
+    return (f"Today is {now:%A, %B %-d, %Y} ({now:%H:%M} {now.tzname()}). "
+            f"Resolve any relative date against that and always use the correct year.\n\n"
+            + _STYLE)
+
+
+def compose_rich(facts: dict) -> str | None:
+    if NO_LLM:
+        return None
+    key = _anthropic_key()
+    if not key:
+        _log("compose_rich: no ANTHROPIC_API_KEY")
+        return None
+
+    user = json.dumps(facts, ensure_ascii=False, indent=2)
+    # Anthropic: system is a top-level field (not a message role), the token
+    # budget is max_tokens, and the reply text is content[0].text.
+    body = json.dumps({
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": 2000,
+        "system": _system_prompt(),
+        "messages": [{"role": "user",
+                      "content": f"Compose today's brief from these facts:\n{user}"}],
+    }).encode("utf-8")
+
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            req = urllib.request.Request(
+                ANTHROPIC_URL, data=body,
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"})
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read())
+            # Cut off at max_tokens still returns HTTP 200 with valid-looking
+            # text; a mid-sentence brief would be sent with nothing to catch it.
+            if data.get("stop_reason") == "max_tokens":
+                last_err = "truncated at max_tokens"
+                _log(f"compose_rich: attempt {attempt} truncated at max_tokens")
+                continue
+            # the text block by TYPE (a thinking block may come first on newer models)
+            out = next((b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"), "").strip()
+            if out:
+                _log(f"compose_rich: ok (attempt {attempt}, {len(out)} chars)")
+                out = verify_brief(out, facts)
+                if out is None:
+                    _log("compose_rich: too much of the brief was unsupported -> templated")
+                    return None
+                block = health_block(facts)
+                return out + ("\n\n" + "\n".join(block) if block else "")
+            last_err = "empty content"
+        except Exception as e:  # noqa: BLE001
+            last_err = str(e)
+            _log(f"compose_rich: attempt {attempt} failed: {last_err}")
+    _log(f"compose_rich: giving up after 3 tries ({last_err}) -> templated")
+    return None
+
+
+# ----------------------------------------------------------------------------- verify the brief's claims
+# The brief is model prose and, until 2026-11-16, nothing checked it. Two dry runs that week
+# produced "Dana should reply around 10:40" and "Dana's replying this morning… that's
+# arriving shortly" from a fact that said she HAD replied at 10:40. Unlike the check-in's
+# two-sentence messages, a brief legitimately converts and rounds numbers (6.68 h -> "6h 41m"),
+# so a strict digit check would reject every brief. Instead:
+#   1. names: a Capitalised word that appears nowhere in the facts marks its sentence;
+#   2. a second, independent model pass lists sentences the facts do not support (it sees
+#      only the facts and the text, and must quote each sentence exactly);
+#   3. CODE removes exactly those sentences. More than MAX_STRIPPED means the brief is not
+#      trustworthy and the plain templated brief is sent instead.
+# Every removal is logged. If the checker itself fails, the brief is sent as written and the
+# log says it was not verified.
+BRIEF_VERIFY = True
+MAX_STRIPPED = 3
+_NAME_OK = {"i", "i'm", "i'll", "i've", "morning", "today", "tonight", "tomorrow", "yesterday", "rem",
+            "rhr", "hrv", "spo2", "push", "pull", "legs", "am", "pm", "et", "ok", "ppl"}
+
+VERIFY_SYS = (
+    "You check a short morning message against the FACTS it was written from (JSON). List every "
+    "sentence in the MESSAGE that states something the FACTS do not support:\n"
+    "- a person doing, saying, sending or replying something that is not in the facts;\n"
+    "- a PREDICTION of what someone will do or when (\"she should reply by 10\", \"that's arriving "
+    "shortly\"), unless the facts state that plan;\n"
+    "- an event, appointment, deadline, amount or time that is not in the facts;\n"
+    "- a past event described as still to come, or the reverse.\n"
+    "These are FINE and must not be listed: unit conversions and rounding (6.68 h = 6h 41m), "
+    "comparisons computed from numbers in the facts, plain encouragement or advice, questions, and "
+    "offers to log something.\n"
+    "Return ONLY JSON: {\"unsupported\": [{\"sentence\": \"<the sentence copied EXACTLY from the "
+    "message>\", \"why\": \"<short>\"}]}. An empty list is the usual answer.")
+
+
+def _sentences(text: str) -> list:
+    return [x.strip() for x in re.split(r"(?<=[.!?])\s+|\n+", text) if x.strip()]
+
+
+def ungrounded_name_sentences(text: str, facts_text: str) -> list:
+    """Sentences containing a Capitalised word (not opening the sentence) found nowhere in the facts."""
+    low = facts_text.lower()
+    bad = []
+    for sent in _sentences(text):
+        for m in re.finditer(r"(?<!^)(?<![.!?]\s)\b[A-Z][a-z]{2,}\b", sent):
+            w = m.group(0).lower()
+            if w not in _NAME_OK and w not in low and w.rstrip("s") not in low:
+                bad.append((sent, f"'{m.group(0)}' is not in the facts"))
+                break
+    return bad
+
+
+def verify_brief(text: str, facts: dict, call=None):
+    """The brief with unsupported sentences removed; None when too much was unsupported
+    (caller falls back to the templated brief). Never raises."""
+    if not BRIEF_VERIFY:
+        return text
+    try:
+        facts_text = json.dumps(facts, ensure_ascii=False)
+        flagged = ungrounded_name_sentences(text, facts_text)
+        try:
+            if call is None:
+                llm = _assistant_module("llm")
+                call = lambda s, u: llm.call(s, u, purpose="brief-verify", model=llm.HAIKU, max_tokens=700)  # noqa: E731
+            reply = call(VERIFY_SYS, f"FACTS\n{facts_text}\n\nMESSAGE\n{text}")
+            obj = json.loads(reply[reply.index("{"): reply.rindex("}") + 1]) if reply else None
+            if obj is None:
+                _log("verify_brief: the checker gave no answer; brief NOT verified beyond names")
+            else:
+                flagged += [(str(x.get("sentence", "")), str(x.get("why", ""))) for x in obj.get("unsupported", [])
+                            if isinstance(x, dict)]
+        except Exception as e:  # noqa: BLE001
+            _log(f"verify_brief: checker failed ({type(e).__name__}: {e}); brief NOT verified beyond names")
+        out, removed = text, 0
+        for sent, why in flagged:
+            sent = sent.strip()
+            if len(sent) >= 12 and sent in out:          # only an exact quote is ever removed
+                out = out.replace(sent, "", 1)
+                removed += 1
+                _log(f"verify_brief: removed [{why}] {sent[:160]}")
+            elif sent:
+                _log(f"verify_brief: flagged but not found verbatim, kept [{why}] {sent[:120]}")
+        if removed > MAX_STRIPPED:
+            return None
+        out = re.sub(r"[ \t]{2,}", " ", out)
+        out = re.sub(r"\n[ \t]+", "\n", out)
+        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+        return out or None
+    except Exception as e:  # noqa: BLE001
+        _log(f"verify_brief: failed open ({type(e).__name__}: {e})")
+        return text
+
+
+# ----------------------------------------------------------------------------- compose: sleep follow-up
+def compose_followup(facts: dict, brief_steps, brief_sleep_h=None) -> str:
+    """The short 'sleep just landed' follow-up — sent later in the morning when the
+    brief had to go out before the night synced in full (it ends when you wake), or with a
+    total that has since moved by SLEEP_CORRECTION_H or more. Also corrects yesterday's
+    step total if the morning re-sync filled it in materially higher than the brief had."""
+    head = "😴 *Sleep synced.*"
+    if brief_sleep_h is not None:
+        head = f"😴 *Sleep updated* — the full night is in _(the brief had {brief_sleep_h:.1f}h)_."
+    parts = [head, ""]
+    parts += _sleep_lines(facts["sleep"], facts["sleep_synced"], facts.get("air_in_use", False))
+    cur = facts["yesterday_activity"].get("steps")
+    if cur is not None and brief_steps is not None and cur > brief_steps + 500:
+        parts += ["", f"📊 Yesterday's steps updated to *{cur:,}* "
+                      f"_(brief had {brief_steps:,} — data was still syncing)._"]
+    return "\n".join(parts).strip()
+
+
+# ----------------------------------------------------------------------------- main
+def main() -> int:
+    if not DRY_RUN:
+        _refresh()
+    now = _now()
+    today = now.strftime("%Y-%m-%d")
+    yesterday = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    is_weekend = now.strftime("%a") in ("Sat", "Sun")
+    cutoff = WEEKEND_CUTOFF if is_weekend else WEEKDAY_CUTOFF
+
+    # --dry-run / --force always compose+deliver the FULL brief immediately.
+    if DRY_RUN or FORCE:
+        facts = gather_facts(today, yesterday)
+        brief = compose_rich(facts) or compose_templated(facts)
+        if DRY_RUN:
+            print(brief)
+            return 0
+        if send_message(brief):
+            _record_sent("morning-brief", brief, loops_mentioned(brief, facts.get("open_loops")))
+            st = _load_state()
+            st.update({"last_brief_date": today, "brief_had_sleep": facts.get("sleep_state") == "final",
+                       "brief_sleep_h": (facts.get("sleep") or {}).get("sleep_total_h"),
+                       "brief_steps": facts["yesterday_activity"].get("steps")})
+            _save_state(st)
+            send_morning_card(facts.get("sleep_state") or "none")
+            print(WAKE_GATE_SKIP)
+        else:
+            print(brief)
+        return 0
+
+    state = _load_state()
+    trow = _row_for(today)
+    night = sleep_state(trow)
+
+    # ---- Case A: the brief hasn't gone out today yet ----
+    if state.get("last_brief_date") != today:
+        # Wait for a FINISHED night (2026-10-13: a mid-night Fitbit stub is not one), or the cutoff.
+        if not (night == "final" or now.time() >= cutoff):
+            print(WAKE_GATE_SKIP)   # still waiting for sleep to land / the cutoff
+            return 0
+        facts = gather_facts(today, yesterday)
+        brief = compose_rich(facts) or compose_templated(facts)
+        # Deliver DIRECTLY via Bot API (no agent layer can hijack/drop it). Only mark
+        # the day done on a confirmed send, so a failure re-fires on the next tick.
+        if send_message(brief):
+            _record_sent("morning-brief", brief, loops_mentioned(brief, facts.get("open_loops")))
+            # brief_had_sleep = it had the FINISHED night; brief_sleep_h = the total it showed
+            state.update({"last_brief_date": today, "brief_had_sleep": night == "final",
+                          "brief_sleep_h": (facts.get("sleep") or {}).get("sleep_total_h"),
+                          "brief_steps": facts["yesterday_activity"].get("steps")})
+            _save_state(state)
+            send_morning_card(night)
+            print(WAKE_GATE_SKIP)
+        else:
+            print(brief)
+        return 0
+
+    # ---- Case B: one follow-up once the finished night is in ----
+    # Sent when the brief went out without the finished night and the total moved by
+    # SLEEP_CORRECTION_H or more (or it had none), or when even the "finished" total it had
+    # has since moved that far. Fixes the race where the brief fires at the cutoff before the
+    # night lands, and the mid-night stub (a partial total shown for a full night).
+    if night == "final" and state.get("sleep_followup_date") != today:
+        cur = _fnum(trow, "sleep_total_h")
+        had = state.get("brief_sleep_h")
+        # only an Air night grows after the brief; Apple / /sleep keep their old behaviour
+        delta = (abs(cur - float(had)) if trow.get("sleep_source") == "air" and had is not None
+                 and cur is not None else None)
+        moved = delta is not None and delta >= SLEEP_CORRECTION_H
+        # last call: a "so far" brief whose finished night settled a little differently
+        settled = (not state.get("brief_had_sleep") and delta is not None
+                   and delta >= SLEEP_SETTLE_H and now.time() >= LAST_CALL)
+        if (not state.get("brief_had_sleep") and (had is None or moved)) or (state.get("brief_had_sleep") and moved) or settled:
+            facts = gather_facts(today, yesterday)
+            _fu = compose_followup(facts, state.get("brief_steps"), had)
+            if send_message(_fu):
+                _record_sent("sleep-followup", _fu)
+                state["sleep_followup_date"] = today
+                _save_state(state)
+                # the card sent with the brief shows the old night: send it again, finished
+                send_morning_card("final", "🔄 *Updated morning card* · the full night")
+            print(WAKE_GATE_SKIP)
+            return 0
+
+    print(WAKE_GATE_SKIP)   # nothing to do this tick
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

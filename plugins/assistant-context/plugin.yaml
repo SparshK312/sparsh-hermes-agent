@@ -1,0 +1,7 @@
+name: assistant-context
+version: 0.1.0
+description: "Continuity for the proactive assistant: stamps when he last wrote (so the nudge budget knows whether he is replying) and hands the chat agent the follow-ups Hermes sent that he has not answered yet, plus his top open loops. Independent of chat-session resets."
+author: "Sparsh (Hermes assistant rebuild, Nov 2026)"
+hooks:
+  - pre_gateway_dispatch
+  - pre_llm_call

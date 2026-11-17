@@ -1,0 +1,6 @@
+name: spend-guard
+version: 0.1.0
+description: "Hard ceiling on what the chat agent can spend: when today's or this month's API spend is over the limit, an inbound Telegram message is answered with a fixed notice (no model call) instead of starting a turn. He can lift it for the day by replying 'override limit'."
+author: "Sparsh (Hermes cost guard, Nov 2026)"
+hooks:
+  - pre_gateway_dispatch

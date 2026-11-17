@@ -1,0 +1,202 @@
+{
+  "_comment": "Cron entries to APPEND into ~/.hermes/cron/jobs.json on the VPS. Do NOT replace the existing file — the daily-note-prefill and internship-watcher jobs must be preserved. Append these entries inside the `jobs` array and update `updated_at`. DESIGN: these are CONTEXT-AWARE AGENT jobs — each `script` reads today's logged state from the vault and prints a compact STATE block to stdout; Hermes injects that as context and the LLM composes the Telegram message per the job's `prompt` (so it adapts — e.g. drops the weigh-in line if weight is logged, nags only about missing items). When a nudge is moot (e.g. lunch already logged) the script prints {\"wakeAgent\": false} as its final line, which makes run_job skip the LLM entirely (no turn, nothing sent). If you change a job's `prompt` here you must also update it in the live jobs.json. For a truly $0 self-delivered job see scripts/cron/hae_sync.sh and fitness_report.sh.",
+  "_timezone_comment": "cron `expr` is evaluated in the Hermes-configured timezone: HERMES_TIMEZONE env → config.yaml `timezone:` → else SERVER-LOCAL (UTC on the VPS). The `created_at` -04:00 offsets below are cosmetic and do NOT set the schedule tz. REQUIRED on the VPS: set `timezone: America/New_York` in ~/.hermes/config.yaml, or these fire at the wrong wall-clock time (a `0 13` 'lunch' job would hit at 09:00 Eastern under UTC).",
+  "_script_path_note": "Hermes' cron dispatcher refuses scripts outside ~/.hermes/scripts/ (sandbox: 'resolved script path is outside the allowed scripts directory'). The repo scripts are mirrored into that root by scripts/deploy.sh on every deploy, with a 'health_' prefix to avoid collision with bundled Hermes scripts. The script paths here reference the mirrored copies, NOT the repo paths.",
+  "_apply_procedure": "See docs/DEPLOY.md → 'Adding cron entries'. Use the deploy script's merge helper rather than hand-editing.",
+  "jobs_to_append": [
+    {
+      "id": "b3c7e9f1a4d2",
+      "name": "health-lunch-check",
+      "prompt": "Compose a short lunch-log nudge from the [lunch-nudge state] block above (you are only invoked when lunch is NOT logged yet). Remind him to log lunch — describe it, send a photo, or `/log-food`. Note where he stands vs target using kcal_so_far / protein_so_far_g vs the targets. Suggest one easy, protein-dense option. End with `/today` for running totals. Markdown, terse, no fluff. Use ONLY the facts in the state block.",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/health_lunch_check.sh",
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 13 * * *",
+        "display": "0 13 * * *"
+      },
+      "schedule_display": "0 13 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-05-26T13:30:00-04:00",
+      "next_run_at": null,
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "/home/hermes/vault"
+    },
+    {
+      "id": "c8d4a2b1e5f9",
+      "name": "health-evening-summary-nudge",
+      "prompt": "Compose Sparsh's terse evening check-in from the [evening-nudge state] block above. Use ONLY the facts in the state block. (A day with nothing logged never reaches you: the script stays silent.) Nudge ONLY about items listed in `missing` (dinner / water) — never mention things already done. If kcal_so_far or protein_so_far_g is a number short of target, note the gap in one line; if it says 'not logged', do not invent a gap. Vitamins: unless `vitamins` says taken, ask 'Vitamins today?' as a question — never say he didn't take them. Always close with the non-negotiable: bed by midnight. Markdown, no fluff. If `missing` is nothing, vitamins are taken and macros are at/near target, send just one line: 'You're set for the day — bed by midnight.'",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/health_evening_summary.sh",
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 21 * * *",
+        "display": "0 21 * * *"
+      },
+      "schedule_display": "0 21 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-05-26T13:30:00-04:00",
+      "next_run_at": null,
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "/home/hermes/vault"
+    },
+    {
+      "id": "d9e4f1a2c6b8",
+      "name": "health-coach",
+      "prompt": null,
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/coach.sh",
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "5 18 * * 0,3",
+        "display": "5 18 * * 0,3"
+      },
+      "schedule_display": "5 18 * * 0,3",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-06-15T18:00:00-04:00",
+      "next_run_at": null,
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "/home/hermes/vault"
+    },
+    {
+      "id": "e1a7c3d5f9b2",
+      "name": "health-meal-rescue",
+      "prompt": null,
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/coach_meal.sh",
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 15 * * *",
+        "display": "0 15 * * *"
+      },
+      "schedule_display": "0 15 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-06-15T18:00:00-04:00",
+      "next_run_at": null,
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "/home/hermes/vault"
+    },
+    {
+      "id": "f2b8d4e6a0c3",
+      "name": "health-workout-rescue",
+      "prompt": null,
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/coach_workout.sh",
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 20 * * *",
+        "display": "0 20 * * *"
+      },
+      "schedule_display": "0 20 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": false,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-06-15T18:00:00-04:00",
+      "next_run_at": null,
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "/home/hermes/vault",
+      "_paused": "2026-10-17: paused. The band now shows activity in the morning card + weekly review."
+    },
+    {
+      "name": "health-monthly",
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 10 1 * *",
+        "display": "0 10 1 * *"
+      },
+      "script": "/home/hermes/.hermes/scripts/health_monthly.sh",
+      "deliver": "telegram",
+      "prompt": "",
+      "enabled": true,
+      "_note": "2026-10-17: last month's calendar card + the coach's monthly check-in. The script sends both and prints the wake gate."
+    }
+  ]
+}

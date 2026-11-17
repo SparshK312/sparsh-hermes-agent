@@ -1,0 +1,26 @@
+# HAE ingest listener — Phase 3 wearable bridge.
+# Install: copy to /etc/systemd/system/hae-ingest.service on the VPS, then
+#   systemctl daemon-reload && systemctl enable --now hae-ingest.service
+# Reads HAE_INGEST_* from /home/hermes/.hermes/hae-ingest.env (chmod 600).
+# Reachability: the listener binds 0.0.0.0:8789 but is only reachable over the
+# tailnet — ufw is default-deny on the public interface + `ufw allow in on
+# tailscale0`. See 07 - Health/Phase 3 - Wearable Bridge Plan.md.
+[Unit]
+Description=HAE ingest listener (Phase 3 wearable bridge)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=hermes
+Group=hermes
+EnvironmentFile=/home/hermes/.hermes/hae-ingest.env
+ExecStart=/usr/bin/python3 /home/hermes/.hermes/scripts/hae_ingest.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/hermes/.hermes/health
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

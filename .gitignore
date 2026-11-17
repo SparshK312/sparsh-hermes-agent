@@ -1,0 +1,62 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.key
+# Local-only personal files
+internship_profile.txt
+secrets/
+
+# Personal system prompt — kept OUT of the public repo.
+# deploy.sh scp's it to the VPS; the committed config/SOUL.public.md is the
+# generic template that CI + fresh clones use.
+config/SOUL.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+.venv-tests/
+env/
+.tox/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Node / npm (if any tooling lands)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Logs + scratch
+*.log
+logs/
+tmp/
+scratch/
+
+# Local-only Hermes state
+state/
+*.sqlite
+*.db
+
+# Local-only personal file
+scripts/internship/fit_rubric.md

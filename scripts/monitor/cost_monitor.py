@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""Hermes cost monitor — Anthropic spend guardrail.
+
+Reads ~/.hermes/state.db (Hermes' own per-session token accounting), computes
+estimated Anthropic API spend for *today* and *month-to-date*, and fires a
+Telegram alert via `hermes send` when a threshold is crossed. Dedupes via a
+small JSON state file so each alert is sent at most once per day / per month —
+never a notification cannon.
+
+Pure stdlib (sqlite3/json/os/subprocess/datetime) so it runs under system
+python3 in cron with no venv. The cron wrapper prints {"wakeAgent": false},
+so this never wakes the agent — it just sends text.
+
+Cost is computed from token columns × current Anthropic per-MTok pricing rather
+than the DB's estimated_cost_usd field (which can be 0 / provider-dependent).
+Reasoning tokens bill as output. Cache reads/writes priced at Anthropic rates.
+
+Usage:
+  cost_monitor.py            # normal threshold check (for cron)
+  cost_monitor.py --test     # force a sample alert to verify Telegram delivery
+  cost_monitor.py --dry-run  # compute + print, never send, never touch state
+"""
+import sqlite3
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime
+
+STATE_DB = os.path.expanduser("~/.hermes/state.db")
+ALERT_STATE = os.path.expanduser("~/.hermes/cost_monitor_state.json")
+HERMES = os.path.expanduser("~/.local/bin/hermes")
+TELEGRAM_TARGET = "telegram"  # home channel
+
+# Thresholds (USD). RECALIBRATED 2026-08-10 — the old set (5 / 75 / 150) rested on an
+# estimate of "~$1.60/day, ~$50/mo" that never materialised. Measured: ~$0.18/day and
+# $1.88 month-to-date, with July's full month at $14.83. A runaway therefore had to reach
+# ~28x normal daily spend before the alarm made a sound; the guardrail was disarmed by drift.
+#
+# Anchors: the spend is self-funded, target ~$40/mo with a $50 hard ceiling (Hermes
+# Multi-Model & Dashboard
+# Plan). Daily catches a same-day loop; MTD warns past half the target and escalates just
+# under the ceiling. Raise these if steady-state genuinely rises.
+DAILY_LIMIT = 2.0
+# The hard ceilings live in plugins/spend-guard (DAILY_HARD_USD / MONTHLY_HARD_USD); repeated here
+# only so the cost log can print them. test_monitors pins the two files to the same numbers.
+DAILY_HARD = 5.0
+MONTHLY_HARD = 60.0
+MTD_WARN = 25.0
+MTD_URGENT = 45.0
+
+# Anthropic pricing per MILLION tokens: (input, output, cache_read, cache_write)
+PRICING = {
+    "haiku": (1.0, 5.0, 0.10, 1.25),
+    "sonnet": (3.0, 15.0, 0.30, 3.75),
+    "opus": (5.0, 25.0, 0.50, 6.25),
+}
+DEFAULT_PRICE = (3.0, 15.0, 0.30, 3.75)  # unknown model → assume sonnet-ish (conservative)
+
+
+def price_for(model):
+    m = (model or "").lower()
+    for key, val in PRICING.items():
+        if key in m:
+            return val
+    return DEFAULT_PRICE
+
+
+def session_cost(model, inp, out, cr, cw, reas):
+    pi, po, pcr, pcw = price_for(model)
+    inp, out, cr, cw, reas = (x or 0 for x in (inp, out, cr, cw, reas))
+    return (inp * pi + (out + reas) * po + cr * pcr + cw * pcw) / 1_000_000
+
+
+def load_state():
+    try:
+        with open(ALERT_STATE) as f:
+            return json.load(f)
+    except Exception:
+        return {"daily": {}, "mtd": {}}
+
+
+def save_state(state):
+    tmp = ALERT_STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, ALERT_STATE)
+
+
+def _ledger(topic: str, text: str) -> None:
+    """Note a sent alert in the shared send ledger (scripts/assistant/outbox.py). Alerts
+    are never budgeted; this only keeps the ledger equal to what he received. Best-effort."""
+    try:
+        import os as _os
+        import subprocess as _sp
+        from pathlib import Path as _P
+        here = _P(__file__).resolve().parent
+        for d in (here.parent / "assistant", here / "assistant", _P.home() / ".hermes" / "scripts" / "assistant"):
+            if (d / "outbox.py").exists():
+                _sp.run([sys.executable, str(d / "outbox.py"), "record", "--kind", "alert",
+                         "--topic", topic, "--text", text[:1500]], timeout=15, env=dict(_os.environ))
+                return
+    except Exception as e:  # noqa: BLE001
+        print(f"ledger record failed: {e}", file=sys.stderr)
+
+
+def send(subject, body):
+    try:
+        subprocess.run(
+            [HERMES, "send", "-t", TELEGRAM_TARGET, "-q", "-s", subject, body],
+            check=True, timeout=30,
+        )
+        _ledger("cost-monitor", f"{subject}\n{body}")
+        return True
+    except Exception as e:
+        print(f"send failed: {e}", file=sys.stderr)
+        return False
+
+
+def compute():
+    now = datetime.now()  # VPS local time
+    sod = datetime(now.year, now.month, now.day).timestamp()
+    som = datetime(now.year, now.month, 1).timestamp()
+    con = sqlite3.connect(f"file:{STATE_DB}?mode=ro", uri=True)
+    # Only count real Anthropic spend. Pre-migration sessions ran on free Codex
+    # (gpt-5.4-mini) and cost $0 — including them would price free usage at Claude
+    # rates and false-alarm. Anthropic spend == Claude-model sessions.
+    rows = con.execute(
+        "SELECT model,input_tokens,output_tokens,cache_read_tokens,"
+        "cache_write_tokens,reasoning_tokens,started_at,estimated_cost_usd "
+        "FROM sessions WHERE started_at >= ? "
+        "AND (lower(model) LIKE 'claude%' "
+        "OR lower(coalesce(billing_provider,'')) = 'anthropic')", (som,)
+    ).fetchall()
+    con.close()
+
+    def cost_of(r):
+        # Trust Hermes' own per-session estimate (more complete than the raw token
+        # columns for Anthropic — e.g. cached/system-prompt input isn't fully in
+        # input_tokens). Fall back to token-math only if the estimate is missing.
+        est = r[7]
+        if est and est > 0:
+            return est
+        return session_cost(*r[:6])
+
+    daily = sum(cost_of(r) for r in rows if r[6] and r[6] >= sod)
+    mtd = sum(cost_of(r) for r in rows)
+    d_direct, m_direct = direct_spend(now)
+    return now, daily + d_direct, mtd + m_direct
+
+
+SPEND_LOG = os.path.join(os.environ.get("HERMES_ASSISTANT_DIR", os.path.expanduser("~/.hermes/assistant")),
+                         "spend.jsonl")
+
+
+def direct_spend(now):
+    """(today, month-to-date) USD spent by the assistant scripts that call the API directly
+    through scripts/assistant/llm.py (the check-in loop, the open-loops extraction). state.db
+    only knows the chat agent's sessions, so until 2026-11-16 this monitor could not see any
+    direct-API script. Still NOT counted: the older direct callers that have their own
+    clients (coach_engine, the morning brief, email_triage, fit_pass, daily_prefill).
+    A missing file is zero; an unreadable line is skipped and announced in the log."""
+    day, month = now.strftime("%Y-%m-%d"), now.strftime("%Y-%m")
+    d = m = 0.0
+    try:
+        with open(SPEND_LOG) as f:
+            for i, ln in enumerate(f, 1):
+                try:
+                    row = json.loads(ln)
+                    usd = float(row["usd"])
+                    if str(row["day"]).startswith(month):
+                        m += usd
+                        if row["day"] == day:
+                            d += usd
+                except Exception:
+                    if ln.strip():
+                        print(f"spend.jsonl line {i} unreadable; skipped", file=sys.stderr)
+    except FileNotFoundError:
+        pass
+    return d, m
+
+
+COST_LOG = os.path.join(os.environ.get("HERMES_VAULT", "/home/hermes/vault"), "09 - Systems", "Hermes", "Cost Report.md")
+COST_LOG_DAYS = 30
+
+
+def cost_rows(now, days=COST_LOG_DAYS):
+    """One dict per local day, newest first: chat / scheduled / other / assistant scripts /
+    total, the number of chat sessions and the dearest single session that day."""
+    from datetime import timedelta
+    start = datetime(now.year, now.month, now.day) - timedelta(days=days - 1)
+    con = sqlite3.connect(f"file:{STATE_DB}?mode=ro", uri=True)
+    rows = con.execute(
+        "SELECT source, started_at, coalesce(actual_cost_usd, estimated_cost_usd, 0) FROM sessions "
+        "WHERE started_at >= ?", (start.timestamp(),)).fetchall()
+    con.close()
+    out = {}
+    for i in range(days):
+        d = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+        out[d] = {"day": d, "chat": 0.0, "scheduled": 0.0, "other": 0.0, "scripts": 0.0, "chat_sessions": 0, "max_session": 0.0}
+    for source, started, usd in rows:
+        d = datetime.fromtimestamp(started).strftime("%Y-%m-%d")
+        if d not in out:
+            continue
+        key = "chat" if source == "telegram" else ("scheduled" if source == "cron" else "other")
+        out[d][key] += usd or 0.0
+        if key == "chat":
+            out[d]["chat_sessions"] += 1
+            out[d]["max_session"] = max(out[d]["max_session"], usd or 0.0)
+    try:
+        with open(SPEND_LOG) as f:
+            for ln in f:
+                try:
+                    row = json.loads(ln)
+                    if row["day"] in out:
+                        out[row["day"]]["scripts"] += float(row["usd"])
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    for r in out.values():
+        r["total"] = r["chat"] + r["scheduled"] + r["other"] + r["scripts"]
+    return sorted(out.values(), key=lambda r: r["day"], reverse=True)
+
+
+def render_cost_log(now, rows):
+    mtd = sum(r["total"] for r in rows if r["day"].startswith(now.strftime("%Y-%m")))
+    lines = ["---", "type: tracker", "category: systems", "status: active",
+             f"last_updated: {now.strftime('%Y-%m-%d')}", "tags: [hermes, cost]", "---", "",
+             "# Hermes Cost Report", "",
+             "> **Machine-written once a day by `scripts/monitor/cost_monitor.py` on the VPS; do not edit.** "
+             "Estimated Anthropic spend per day in USD. *Chat* = your Telegram conversations; *Scheduled* = agent "
+             "cron jobs; *Scripts* = the check-in loop, open-loops extraction and brief fact-check; *Other* = "
+             "command-line test runs. Not counted: the older scripts with their own API clients (coach check-in, "
+             "morning brief text, email reader).",
+             f"> Limits: one message = 30 model steps; **${DAILY_HARD:.0f} a day** and **${MONTHLY_HARD:.0f} a month** "
+             f"pause the chat agent (reply \"override limit\"); alerts at ${DAILY_LIMIT:.0f} a day and "
+             f"${MTD_WARN:.0f} / ${MTD_URGENT:.0f} a month.", "",
+             f"**Month to date: ${mtd:.2f}**", "",
+             "| Day | Total | Chat | Scheduled | Scripts | Other | Chat sessions | Dearest session |",
+             "|---|---|---|---|---|---|---|---|"]
+    for r in rows:
+        if r["total"] < 0.005 and r["day"] != now.strftime("%Y-%m-%d"):
+            continue
+        lines.append(f"| {r['day']} | **${r['total']:.2f}** | ${r['chat']:.2f} | ${r['scheduled']:.2f} | "
+                     f"${r['scripts']:.2f} | ${r['other']:.2f} | {r['chat_sessions']} | ${r['max_session']:.2f} |")
+    return "\n".join(lines) + "\n"
+
+
+def write_cost_log(now, force=False):
+    """Rewrite the vault cost log once a day (the 23:00 run), or when forced. A vault file
+    that changes hourly would cost a sync version every hour for no benefit."""
+    if not force and now.hour != 23:
+        return False
+    text = render_cost_log(now, cost_rows(now))
+    os.makedirs(os.path.dirname(COST_LOG), exist_ok=True)
+    tmp = COST_LOG + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.replace(tmp, COST_LOG)
+    return True
+
+
+def main():
+    test = "--test" in sys.argv
+    dry = "--dry-run" in sys.argv
+
+    if test:
+        ok = send("🧪 Hermes cost monitor",
+                  "Test alert — the cost monitor is wired up and can reach Telegram.")
+        print("test send:", "ok" if ok else "FAILED")
+        return
+
+    now, daily, mtd = compute()
+    try:
+        if write_cost_log(now, force="--write-log" in sys.argv):
+            print("cost log written")
+    except Exception as e:  # the alerts below must still run
+        print(f"cost log failed: {e}", file=sys.stderr)
+    day_key = now.strftime("%Y-%m-%d")
+    mon_key = now.strftime("%Y-%m")
+    print(f"{now.isoformat(timespec='seconds')}  today=${daily:.2f}  MTD=${mtd:.2f}")
+
+    if dry:
+        return
+
+    state = load_state()
+    state.setdefault("daily", {})
+    state.setdefault("mtd", {})
+    fired = []
+
+    # Daily spike — once per day
+    if daily > DAILY_LIMIT and "spike" not in state["daily"].get(day_key, []):
+        if send("⚠️ Hermes daily spend spike",
+                f"Today's estimated Anthropic spend is ${daily:.2f} "
+                f"(alert at ${DAILY_LIMIT:.0f}). Steady-state is ~$0.20/day — "
+                f"check for a stuck/looping session."):
+            state["daily"].setdefault(day_key, []).append("spike")
+            fired.append("daily-spike")
+
+    # Month-to-date urgent — once per month (takes priority over warn)
+    if mtd > MTD_URGENT and "urgent" not in state["mtd"].get(mon_key, []):
+        if send("🚨 Hermes spend — urgent",
+                f"Month-to-date Anthropic spend is ${mtd:.2f} "
+                f"(urgent at ${MTD_URGENT:.0f}). That's at the $50 self-funded ceiling — "
+                f"check what is driving it."):
+            state["mtd"].setdefault(mon_key, []).append("urgent")
+            fired.append("mtd-urgent")
+    # Month-to-date warning — once per month
+    elif mtd > MTD_WARN and "warn" not in state["mtd"].get(mon_key, []):
+        if send("⚠️ Hermes spend — heads up",
+                f"Month-to-date Anthropic spend is ${mtd:.2f} "
+                f"(warning at ${MTD_WARN:.0f}). Past half the ~$40/mo self-funded target."):
+            state["mtd"].setdefault(mon_key, []).append("warn")
+            fired.append("mtd-warn")
+
+    # Prune old state (keep current month only)
+    state["daily"] = {k: v for k, v in state["daily"].items() if k.startswith(mon_key)}
+    state["mtd"] = {k: v for k, v in state["mtd"].items() if k == mon_key}
+    save_state(state)
+    print("fired:", fired or "none")
+
+
+if __name__ == "__main__":
+    main()

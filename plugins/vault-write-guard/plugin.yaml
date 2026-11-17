@@ -1,0 +1,6 @@
+name: vault-write-guard
+version: 0.1.0
+description: "Force health logging through vault_log.py — blocks direct patch/write_file/execute_code on Food Log + Workouts (always) and on Daily Notes when the edit touches a health/macro field. Reads, terminal, and non-health writes always pass. Fail-open."
+author: "Sparsh (Hermes logging-reliability fix)"
+hooks:
+  - pre_tool_call

@@ -1,0 +1,27 @@
+# Hermes ops + health dashboard (Phase 1).
+# Install (root, one-time):
+#   cp /home/hermes/.hermes/scripts/dashboard/hermes-dashboard.service /etc/systemd/system/  # or scp this file
+#   systemctl daemon-reload && systemctl enable --now hermes-dashboard.service
+#   ufw allow in on tailscale0 to any port 8790
+# Reachability: binds 0.0.0.0:8790 but only reachable over the tailnet (ufw
+# default-deny on the public iface + the allow-rule above). Same posture as
+# hae-ingest. READ-ONLY: opens state.db mode=ro and only reads the vault.
+[Unit]
+Description=Hermes ops + health dashboard (read-only, tailnet-only)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=hermes
+Group=hermes
+Environment=HERMES_VAULT=/home/hermes/vault
+Environment=DASHBOARD_PORT=8790
+ExecStart=/usr/bin/python3 /home/hermes/.hermes/scripts/dashboard/serve.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

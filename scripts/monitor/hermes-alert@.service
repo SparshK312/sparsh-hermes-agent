@@ -1,0 +1,12 @@
+[Unit]
+Description=Alert that %i failed
+Documentation=https://github.com/SparshK312/sparsh-hermes-agent
+# Templated so each unit's OnFailure reports on ITSELF. The previous single
+# handler hardcoded hermes-watchdog.service, so a db-snapshot failure produced
+# "nothing looks wrong: watchdog=success, gateway=active" — an all-clear
+# pointing at the wrong unit.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hermes_watchdog.sh --alert-unit %i
+TimeoutStartSec=60

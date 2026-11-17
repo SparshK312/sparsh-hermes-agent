@@ -1,0 +1,838 @@
+#!/usr/bin/env python3
+"""
+coach_engine.py — shared coaching engine for the Phase 4b AI coach.
+
+The deterministic + IO layer every coaching trigger reuses (the report's
+architecture: metrics engine -> compose w/ structured output + validator ->
+send -> memory write-back -> message budget). Keeping it in one module means the
+weekly review, the midday under-eating rescue, the missed-workout rescue, and the
+pre-workout preview all share the same grounded evidence packet and guardrails.
+
+Pure stdlib (urllib) so it runs on system python. Compute the numbers HERE in
+code; hand the model a compact evidence packet so it never invents metrics.
+"""
+from __future__ import annotations
+
+import datetime
+import json
+import os
+import re
+import sys
+import urllib.request
+import urllib.parse
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from muscle_volume import parse_workouts, LANDMARKS, ORDER, VAULT, _norm  # noqa: E402
+
+HOME = Path.home()
+ENV_FILE = HOME / ".hermes" / ".env"
+DAILY_DIR = VAULT / "04 - Daily Notes"
+HEALTH = VAULT / "07 - Health"
+WORKOUTS = HEALTH / "Workouts"
+CSVP = HEALTH / "Metrics" / "metrics.csv"
+STATE = HOME / ".hermes" / "health" / "coach_state.json"   # message budget / dedup
+TZ = ZoneInfo("America/New_York")
+CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+
+# Migrated off OpenRouter 2026-08-26 — one vendor (Anthropic). gpt-5.5 was the
+# judgment tier here, so this maps to Sonnet rather than Haiku.
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+COACH_MODEL = "claude-sonnet-4-6"
+
+# Locked targets (Profile.md baseline)
+DEFAULT_SESSIONS_PER_WEEK = 3
+
+
+def planned_sessions_per_week() -> int:
+    """`sessions_per_week:` from the Training Plan's frontmatter. It was a hard-coded 4
+    (the old Upper/Lower plan), so after a move to Push/Pull/Legs every
+    3-session week would have read as a consistency risk. The plan is the one source;
+    a missing or unreadable value falls back to DEFAULT_SESSIONS_PER_WEEK."""
+    try:
+        txt = (HEALTH / "Training Plan.md").read_text(encoding="utf-8")
+        m = re.search(r"(?m)^sessions_per_week:\s*(\d+)\s*$", txt.split("---")[1])
+        n = int(m.group(1)) if m else 0
+        return n if 1 <= n <= 7 else DEFAULT_SESSIONS_PER_WEEK
+    except Exception:  # noqa: BLE001
+        return DEFAULT_SESSIONS_PER_WEEK
+
+
+TARGETS = {"kcal": 2500, "protein_g": 150, "water_l": 2.5, "sleep_h": 7.0,
+           "training_days_per_week": planned_sessions_per_week()}
+UNDEREAT_KCAL = 1500
+
+
+# ---------------------------------------------------------------- env / io
+def env(key: str) -> str | None:
+    v = os.environ.get(key)
+    if v:
+        return v
+    try:
+        for ln in ENV_FILE.read_text().splitlines():
+            if ln.startswith(f"{key}="):
+                return ln.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def now() -> datetime.datetime:
+    return datetime.datetime.now(TZ)
+
+
+def read(path: Path, limit: int | None = 4000) -> str:
+    try:
+        txt = path.read_text(encoding="utf-8")
+        return txt if limit is None else txt[:limit]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def daily_fm(date: str) -> dict:
+    """Top-level frontmatter of a daily note as {key: str}."""
+    try:
+        txt = (DAILY_DIR / f"{date}.md").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return {}
+    parts = txt.split("---")
+    if len(parts) < 3:
+        return {}
+    fm = {}
+    for ln in parts[1].splitlines():
+        if ":" in ln and not ln.startswith((" ", "\t", "#")):
+            k, v = ln.split(":", 1)
+            fm[k.strip()] = v.strip()
+    return fm
+
+
+def meals_logged(date: str) -> set:
+    """Meal types present in a day's food log (breakfast/lunch/dinner/snack)."""
+    try:
+        txt = (HEALTH / "Food Log" / f"{date}.md").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return set()
+    return {m.lower() for m in re.findall(r"^##\s+.*·\s*(\w+)", txt, re.M)}
+
+
+def _f(d: dict, k: str):
+    try:
+        return float(d.get(k))
+    except (TypeError, ValueError):
+        return None
+
+
+def has_value(d: dict, k: str) -> bool:
+    """True only if the frontmatter key exists AND carries a parseable number.
+
+    The whole nudge layer used `_f(fm, k) or 0`, which makes a BLANK field
+    indistinguishable from a logged zero. Once logging lapsed, that
+    read as "0 kcal, 0L water" — i.e. maximum urgency — so lunch-check,
+    meal-rescue, water-check and dinner-check fired every single day
+    with confident numbers that were never measured. Absence is not zero."""
+    return _f(d, k) is not None
+
+
+def logging_dark_days(max_days: int = 400) -> int:
+    """Consecutive days ending TODAY with no food logged at all (0 = logged today).
+
+    Lets the nudges tell "he ate nothing" (act on it) from "he isn't tracking"
+    (a different problem, and one that daily calorie alarms actively worsen).
+
+    The cap was 30, which SATURATED the counter: once a lapse hit 30 days the value
+    never changed again, and since 30 is not a checkpoint and 30 % 14 != 0 the
+    re-engagement nudge fell permanently silent — the exact "quiet becomes abandoned"
+    failure the fortnightly tail exists to prevent. 400 keeps it climbing for over a
+    year; the scan costs ~0.9 ms per 30 days and short-circuits on the first logged day."""
+    today = now().date()
+    for i in range(max_days):
+        d = (today - datetime.timedelta(days=i)).isoformat()
+        if meals_logged(d) or has_value(daily_fm(d), "kcal"):
+            return i
+    return max_days
+
+
+def intake_is_tracked(date: str | None = None) -> bool:
+    """Did he log ANY food today? If not, today's kcal/protein are unknown, not zero,
+    and no nudge may assert a numeric shortfall."""
+    date = date or now().date().isoformat()
+    return bool(meals_logged(date)) or has_value(daily_fm(date), "kcal")
+
+
+def _avg(xs):
+    xs = [x for x in xs if x is not None]
+    return round(sum(xs) / len(xs), 1) if xs else None
+
+
+def _dates(days: int, end: datetime.date | None = None) -> list[str]:
+    end = end or now().date()
+    return [(end - datetime.timedelta(days=i)).isoformat() for i in range(days)]
+
+
+# ---------------------------------------------------------------- last lift (unbounded)
+def last_lift_days_ago() -> int | None:
+    """Days since the most recent workout file, with NO window bound.
+
+    Returns None only when he has never logged a workout at all — which is a
+    genuinely different state from "hasn't lifted in a while" and must not be
+    conflated with it (see build_evidence + coach.run_workout_rescue)."""
+    import glob
+    latest = None
+    for fpath in glob.glob(str(WORKOUTS / "*.md")):
+        try:
+            d = datetime.date.fromisoformat(Path(fpath).stem)
+        except ValueError:
+            continue                      # not a YYYY-MM-DD workout file
+        if latest is None or d > latest:
+            latest = d
+    return None if latest is None else (now().date() - latest).days
+
+
+# ---------------------------------------------------------------- per-lift progression
+def lift_progression(days: int) -> list[dict]:
+    """Per-exercise top-set trend over the window: last vs previous session."""
+    import glob
+    hist: dict[str, list[tuple[str, float]]] = {}
+    today = now().date()
+    start = today - datetime.timedelta(days=days - 1)
+    for fpath in sorted(glob.glob(str(WORKOUTS / "*.md"))):
+        date_s = Path(fpath).stem
+        try:
+            d = datetime.date.fromisoformat(date_s)
+        except ValueError:
+            continue
+        if not (start <= d <= today):
+            continue
+        txt = read(Path(fpath), limit=20000)
+        fm = txt.split("---")[1] if txt.count("---") >= 2 else txt
+        cur, weights = None, []
+
+        def flush():
+            if cur and weights:
+                hist.setdefault(_norm(cur), []).append((date_s, max(weights)))
+        for ln in fm.split("\n"):
+            m = re.match(r"^  - name:\s*(.+)$", ln)
+            if m:
+                flush()
+                cur, weights = m.group(1).strip(), []
+            else:
+                wm = re.search(r"weight_lb:\s*([\d.]+)", ln)
+                if cur and wm:
+                    try:
+                        weights.append(float(wm.group(1)))
+                    except ValueError:
+                        pass
+        flush()
+    out = []
+    for lift, sessions in hist.items():
+        sessions.sort()
+        last = sessions[-1][1]
+        prev = sessions[-2][1] if len(sessions) >= 2 else None
+        status = "new" if prev is None else ("up" if last > prev else "down" if last < prev else "flat")
+        out.append({"lift": lift, "last_top_lb": last, "prev_top_lb": prev, "status": status})
+    return out
+
+
+# ---------------------------------------------------------------- metrics.csv (recovery)
+def _metrics_rows() -> list[dict]:
+    import csv
+    if not CSVP.exists():
+        return []
+    with CSVP.open(newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+BASELINE_MIN_DAYS = 7
+
+
+def recovery_baseline() -> dict:
+    """Today's HRV / resting HR against a 28-day baseline FROM THE SAME SOURCE.
+
+    2026-10-08 (Fitbit Air): the Air reports HRV as nightly RMSSD (`hrv_rmssd_ms`), Apple as
+    daytime SDNN (`hrv_ms`) — different measures — and the two devices estimate resting HR
+    differently. A baseline mixing them would read the change of device as a change in
+    recovery for ~4 weeks. So each comparison uses one source only, and says
+    "baseline building" until it has BASELINE_MIN_DAYS same-source days."""
+    rows = _metrics_rows()
+    if not rows:
+        return {}
+    today = now().date().isoformat()
+    past = [r for r in rows if r.get("date", "") < today][-28:]
+    last = rows[-1]
+    out = {}
+
+    def vs(col, cur, same=lambda r: True):
+        base_vals = [v for r in past if same(r) and (v := _f(r, col)) is not None]
+        if len(base_vals) < BASELINE_MIN_DAYS:
+            return None, f"baseline building ({len(base_vals)}/{BASELINE_MIN_DAYS} days)"
+        return sum(base_vals) / len(base_vals), None
+
+    rmssd = _f(last, "hrv_rmssd_ms")
+    if rmssd is not None:
+        base, why = vs("hrv_rmssd_ms", rmssd)
+        out["hrv_rmssd_ms"] = rmssd
+        out["hrv_measure"] = "RMSSD (Fitbit Air, nightly)"
+        out["hrv_vs_baseline_pct"] = round((rmssd - base) / base * 100) if base else None
+        if why:
+            out["hrv_baseline_note"] = why
+    else:
+        sdnn = _f(last, "hrv_ms")
+        if sdnn is not None:
+            base, why = vs("hrv_ms", sdnn)
+            out["hrv_ms"] = sdnn
+            out["hrv_measure"] = "SDNN (Apple Watch)"
+            out["hrv_vs_baseline_pct"] = round((sdnn - base) / base * 100) if base else None
+            if why:
+                out["hrv_baseline_note"] = why
+
+    rhr = _f(last, "resting_hr")
+    if rhr is not None:
+        src = last.get("rhr_source") or "apple"
+        base, why = vs("resting_hr", rhr, lambda r: (r.get("rhr_source") or "apple") == src)
+        out["resting_hr"] = rhr
+        out["rhr_source"] = src
+        out["rhr_vs_baseline_bpm"] = round(rhr - base) if base else None
+        if why:
+            out["rhr_baseline_note"] = why
+    return out
+
+
+# ---------------------------------------------------------------- nutrition pace (midday rescue)
+def todays_intake() -> dict:
+    """How much has been eaten SO FAR today (partial-day, for the midday rescue)."""
+    fm = daily_fm(now().date().isoformat())
+    return {
+        "kcal": _f(fm, "kcal") or 0,
+        "protein_g": _f(fm, "protein_g") or 0,
+        "meals": sorted(meals_logged(now().date().isoformat())),
+    }
+
+
+def intake_pace(n: datetime.datetime | None = None) -> dict:
+    """Expected vs actual intake by this point of the eating day (07:00–23:00 window)."""
+    n = n or now()
+    intake = todays_intake()
+    win_start, win_end = 7.0, 23.0
+    h = n.hour + n.minute / 60
+    frac = max(0.0, min(1.0, (h - win_start) / (win_end - win_start)))
+    exp_kcal = round(TARGETS["kcal"] * frac)
+    exp_prot = round(TARGETS["protein_g"] * frac)
+    return {
+        "time": n.strftime("%H:%M"),
+        "kcal_so_far": int(intake["kcal"]), "kcal_expected_by_now": exp_kcal, "kcal_target": TARGETS["kcal"],
+        "protein_so_far_g": int(intake["protein_g"]), "protein_expected_by_now_g": exp_prot, "protein_target_g": TARGETS["protein_g"],
+        "meals_logged": intake["meals"],
+        "behind_kcal": int(intake["kcal"]) < exp_kcal - 300,
+        "behind_protein": int(intake["protein_g"]) < exp_prot - 25,
+    }
+
+
+# ---------------------------------------------------------------- full evidence packet (weekly/analysis)
+def _workout_dates(dates: list[str]) -> list[str]:
+    """Workout files whose date falls in `dates` (this module's clock, not muscle_volume's)."""
+    return [d for d in dates if (WORKOUTS / f"{d}.md").exists()]
+
+
+def build_evidence(days: int = 7, end: datetime.date | None = None) -> dict:
+    """`end` (default today) aligns the window, e.g. to a calendar month for the monthly
+    check-in. Food / weight / lift counts all use this window."""
+    dates = _dates(days, end)
+    today = now().date().isoformat()
+    kcals, proteins, waters, sleeps, weights = [], [], [], [], []
+    undereat, logged_food_days, no_food_days = 0, 0, 0
+    for d in dates:
+        fm = daily_fm(d)
+        is_today = d == today
+        k = _f(fm, "kcal")
+        if k is not None and not is_today:
+            kcals.append(k); logged_food_days += 1
+            if k < UNDEREAT_KCAL:
+                undereat += 1
+        elif k is None and not is_today:
+            no_food_days += 1
+        if not is_today:
+            p = _f(fm, "protein_g");  proteins.append(p) if p is not None else None
+            w = _f(fm, "water_l");    waters.append(w) if w is not None else None
+        s = _f(fm, "sleep_hours");    sleeps.append(s) if s is not None else None
+        bw = _f(fm, "weight")
+        if bw is not None:
+            weights.append((d, bw))
+
+    vol, _n_mv, unmapped, window, used_dates = parse_workouts(days)
+    # Count sessions on THIS module's clock and window (muscle_volume reads the wall clock and
+    # always ends today, which mis-windowed the monthly check-in and made the tests date-bound).
+    n_workouts = len(_workout_dates(dates))
+    if end is not None and end != now().date():
+        vol = {}                                   # per-muscle volume is today-anchored only
+    under = [m for m in ORDER if 0 < vol.get(m, 0) < LANDMARKS[m][0]]
+    gaps = [m for m in ORDER if vol.get(m, 0) == 0]
+
+    weights.sort()
+    wt_trend = round(weights[-1][1] - weights[0][1], 1) if len(weights) >= 2 else None
+    # days_since_last_lift must NOT be bounded by the evidence window. It used to be
+    # derived from used_dates (window-scoped), so it went None the moment he'd been
+    # idle longer than `days` — i.e. it vanished exactly when the number mattered most.
+    # Downstream, `t.get("days_since_last_lift") or 0` then collapsed None -> 0, and the
+    # missed-workout rescue's `idle >= 2` guard could never be true again. It went dark
+    # after a long logging gap and never fired. Scan the Workouts dir instead: unbounded lookback.
+    days_since_lift = last_lift_days_ago()
+
+    # band window: ends at `end`, or yesterday (the last complete day of steps) by default
+    wear = wearable_evidence(days, end=end or (now().date() - datetime.timedelta(days=1)))
+    band_sleep = ((wear or {}).get("this_period") or {}).get("sleep_avg_h")
+    sleep_avg = band_sleep if band_sleep is not None else _avg(sleeps)
+
+    flags = []
+    if undereat or (kcals and _avg(kcals) and _avg(kcals) < TARGETS["kcal"] - 250):
+        flags.append("under_eating_risk")
+    # 2026-10-17: "fewer than 4 workout FILES" fired every week whenever lifts went unlogged,
+    # so most weekly priorities were "walk into the gym today" — a logging gap read as
+    # a training fact. Missing lift logs are now their own state, not consistency_risk.
+    if n_workouts == 0:
+        flags.append("lifts_not_logged")
+    elif n_workouts < TARGETS["training_days_per_week"] or (days_since_lift or 0) >= 3:
+        flags.append("consistency_risk")
+    if sleep_avg and sleep_avg < TARGETS["sleep_h"] - 0.5:
+        flags.append("sleep_debt")
+
+    if n_workouts:
+        training = {
+            "sessions_done": n_workouts, "planned_per_week": TARGETS["training_days_per_week"],
+            "days_since_last_lift": days_since_lift,
+            "sets_by_muscle": {m: round(vol[m], 1) for m in ORDER if vol.get(m, 0) > 0},
+            "below_MEV": under, "untrained": gaps,
+            "lift_progression": lift_progression(days),
+        }
+    else:
+        # No workout files in the window = NOT LOGGED. Per-muscle "untrained / below MEV"
+        # lists computed from zero logs read as facts ("every muscle group is untrained"),
+        # so they are left out; the coach gets the unknown, stated as one.
+        training = {
+            "sessions_done": 0, "planned_per_week": TARGETS["training_days_per_week"],
+            "days_since_last_logged_lift": days_since_lift,
+            "status": "UNKNOWN: no lifts logged in this window; he may or may not have trained",
+        }
+    return {
+        "window_days": days,
+        "targets": TARGETS,
+        "training": training,
+        "nutrition": {
+            "avg_kcal": _avg(kcals), "avg_protein_g": _avg(proteins),
+            "avg_water_l": _avg(waters),
+            "days_logged": logged_food_days, "days_no_food_logged": no_food_days,
+            "undereating_days": undereat, "undereating_threshold_kcal": UNDEREAT_KCAL,
+        },
+        "recovery": {"avg_sleep_h": _avg(sleeps) if band_sleep is None else round(band_sleep, 2),
+                     **recovery_baseline()},
+        "band": wear,
+        "logging": {"food_days": logged_food_days, "weigh_ins": len(weights),
+                    "lift_sessions": n_workouts, "window_days": days,
+                    "note": "blank = not logged, never zero; coach on the band data when these are 0"},
+        "bodyweight": {
+            "trend_lb_over_window": wt_trend,
+            "latest_lb": weights[-1][1] if weights else None,
+            "target_change_per_week_lb": "see Coach Memory",
+        },
+        "flags": flags,
+    }
+
+
+def session_evidence(date: str) -> dict | None:
+    """Per-session readout for the JUST-FINISHED workout on `date`: split, exercises
+    (name/sets/top weight), total sets, muscles worked (that day), and per-lift vs-last.
+    Returns None if there's no workout file for that date."""
+    wf = WORKOUTS / f"{date}.md"
+    if not wf.exists():
+        return None
+    txt = read(wf, 20000)
+    fm = txt.split("---")[1] if txt.count("---") >= 2 else txt
+
+    def _g(key: str, default: str = "") -> str:
+        m = re.search(rf"^{key}:\s*(.+)$", fm, re.M)
+        return m.group(1).strip() if m else default
+
+    exercises, cur, weights = [], None, []
+    for ln in fm.split("\n"):
+        m = re.match(r"^  - name:\s*(.+)$", ln)
+        if m:
+            if cur:
+                exercises.append({"name": cur, "sets": len(weights), "top_lb": max(weights) if weights else None})
+            cur, weights = m.group(1).strip(), []
+        else:
+            wm = re.search(r"weight_lb:\s*([\d.]+)", ln)
+            if cur and wm:
+                try:
+                    weights.append(float(wm.group(1)))
+                except ValueError:
+                    pass
+    if cur:
+        exercises.append({"name": cur, "sets": len(weights), "top_lb": max(weights) if weights else None})
+
+    vol, n, unmapped, window, used = parse_workouts(1)   # today's muscle volume
+    muscles = {m: round(vol[m], 1) for m in ORDER if vol.get(m, 0) > 0}
+    prog = {p["lift"]: p for p in lift_progression(90)}  # wide window → each lift's previous session
+    return {
+        "date": date, "split": _g("split", "Workout"), "total_sets": _g("total_sets", "0"),
+        "duration_min": _g("duration_min", ""), "exercises": exercises,
+        "muscles_worked": muscles, "lift_vs_last": prog, "unmapped": sorted(unmapped),
+    }
+
+
+def wearable_evidence(days: int = 7, end: datetime.date | None = None) -> dict | None:
+    """The band's half of the packet (health_cards.wearable_evidence): sleep, rhythm,
+    steps, zone minutes, auto-detected sessions, the week's recovery vs his band, each
+    against the period before. None (never a crash) if the module or data is missing."""
+    try:
+        import health_cards as HC
+        end = end or (now().date() - datetime.timedelta(days=1))   # last complete day
+        return HC.wearable_evidence(end=end, days=days)
+    except Exception as e:  # noqa: BLE001
+        print(f"[coach] wearable evidence unavailable: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+
+def context_docs() -> dict:
+    """The whole of each doc. Until 2026-10-17 each was cut at 4,000 characters: Coach
+    Memory is ~12,600, and its record of past priorities starts at ~7,300, so the coach
+    never saw what it had already told him and repeated the same priority week after week. The cut also dropped Profile's Targets and Sleep sections."""
+    return {
+        "profile": read(HEALTH / "Profile.md", limit=None),
+        "training_plan": read(HEALTH / "Training Plan.md", limit=None),
+        "coach_memory": read(HEALTH / "Coach Memory.md", limit=None),
+    }
+
+
+def recent_priorities(n: int = 6) -> list[str]:
+    """The last n focus/priority lines the coach wrote to Coach Memory, newest first."""
+    txt = read(HEALTH / "Coach Memory.md", limit=None)
+    m = re.search(r"^## Coach-logged \(auto\)\s*$(.*?)(?=^## |\Z)", txt, re.M | re.S)
+    if not m:
+        return []
+    return [ln[2:].strip() for ln in m.group(1).splitlines() if ln.startswith("- (")][:n]
+
+
+# ---------------------------------------------------------------- frontier compose (+ structured/validate)
+def _anthropic_body(system: str, user: str, max_tokens: int) -> bytes:
+    """Anthropic takes `system` as a top-level field, not a message role, and
+    budgets with max_tokens rather than max_completion_tokens."""
+    return json.dumps({
+        "model": COACH_MODEL,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+    }).encode("utf-8")
+
+
+def _anthropic_headers(key: str) -> dict:
+    return {"x-api-key": key, "anthropic-version": "2023-06-01",
+            "content-type": "application/json"}
+
+
+def _extract_json(text: str) -> dict | None:
+    """Parse JSON, tolerating a code fence or leading prose.
+
+    The OpenAI path used response_format={"type":"json_object"} to guarantee a
+    bare object. Anthropic has no equivalent, so the model may wrap the object
+    in ```json fences or a sentence. Same tolerance fit_pass.py already relies
+    on for its Claude branch.
+    """
+    def _as_dict(value):
+        # json.loads("[1,2]") -> list and json.loads("42") -> int both survive a
+        # bare `is not None`, and coach.py then calls .get() on them ->
+        # AttributeError, which skips the deterministic templated fallback.
+        return value if isinstance(value, dict) else None
+
+    try:
+        return _as_dict(json.loads(text))
+    except Exception:  # noqa: BLE001
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end != -1:
+            try:
+                return _as_dict(json.loads(text[start:end + 1]))
+            except Exception:  # noqa: BLE001
+                return None
+    return None
+
+
+def compose_text(system: str, user: str, max_tokens: int = 2000) -> str | None:
+    key = env("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+    body = _anthropic_body(system, user, max_tokens)
+    for _ in range(3):
+        try:
+            req = urllib.request.Request(ANTHROPIC_URL, data=body,
+                                         headers=_anthropic_headers(key))
+            with urllib.request.urlopen(req, timeout=60) as r:
+                raw = json.loads(r.read())
+            # THE exposed truncation case: a reply cut off at max_tokens is still
+            # valid TEXT, so a mid-sentence message would go straight to Telegram
+            # with nothing to detect it. Fail instead and let the caller's
+            # deterministic template take over.
+            if raw.get("stop_reason") == "max_tokens":
+                continue
+            out = raw["content"][0]["text"].strip()
+            if out:
+                return out
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def compose_json(system: str, user: str, max_tokens: int = 2000) -> dict | None:
+    """Frontier call expected to return a JSON object.
+
+    Anthropic has no response_format equivalent, so the object is requested in
+    the system prompt and parsed with fence tolerance instead of guaranteed by
+    the API. A miss returns None, which every caller already handles.
+    """
+    key = env("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+    system_json = system.rstrip() + (
+        "\n\nReturn ONLY a single valid JSON object. No prose, no code fences.")
+    body = _anthropic_body(system_json, user, max_tokens)
+    for _ in range(3):
+        try:
+            req = urllib.request.Request(ANTHROPIC_URL, data=body,
+                                         headers=_anthropic_headers(key))
+            with urllib.request.urlopen(req, timeout=60) as r:
+                payload = json.loads(r.read())
+            if payload.get("stop_reason") == "max_tokens":
+                continue
+            parsed = _extract_json(payload["content"][0]["text"])
+            if parsed is not None:
+                return parsed
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _floats(text: str) -> list[float]:
+    out = []
+    for tok in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+        try:
+            out.append(float(tok.replace(",", "")))
+        except ValueError:
+            pass
+    return out
+
+
+def validate(parsed: dict, grounding) -> tuple[bool, str]:
+    """Reject ungrounded/over-stuffed coaching. `grounding` is everything the model
+    was shown (the evidence packet + context docs) — as a dict or a string. A claimed
+    number is grounded if some grounding number is within rounding tolerance, so the
+    check catches fabricated figures without tripping on float/rounding formatting.
+    Returns (ok, reason)."""
+    if not isinstance(parsed, dict):
+        return False, "not a dict"
+    analysis = parsed.get("analysis") or {}
+    actions = parsed.get("actions") or {}
+    conv = parsed.get("conversation") or {}
+    today_actions = actions.get("today") or []
+    if not analysis.get("primary_bottleneck"):
+        return False, "no bottleneck"
+    if not today_actions or len(today_actions) > 2:
+        return False, f"actions count {len(today_actions)}"
+    if not conv.get("question_for_user"):
+        return False, "no question"
+    gtext = grounding if isinstance(grounding, str) else json.dumps(grounding, default=str)
+    ev_nums = _floats(gtext)
+    claimed = _floats(" ".join(analysis.get("evidence", []) or []))
+
+    def grounded(c: float) -> bool:
+        return any(abs(c - e) <= max(1.0, 0.02 * abs(c)) for e in ev_nums)
+
+    # only meaningful (>=10) numbers; single digits like sets/days are everywhere
+    ungrounded = [c for c in claimed if c >= 10 and not grounded(c)]
+    if ungrounded:
+        return False, f"ungrounded numbers: {[round(x, 1) for x in ungrounded[:5]]}"
+    return True, "ok"
+
+
+FOOD_RE = re.compile(r"\b(food|nutrition|eat|eating|ate|kcal|calorie|calories|protein|meal|meals|fuel|surplus|diet)\b", re.I)
+TRAIN_RE = re.compile(r"\b(gym|lift|lifts|lifting|session|sessions|workout|workouts|train|training|upper [ab]|lower [ab]|push|pull|legs?|leg day)\b", re.I)
+
+
+def validate_checkin(parsed: dict, grounding, ev: dict | None = None) -> tuple[bool, str]:
+    """Validator for the win / focus / action check-in (weekly, mid-week, monthly).
+    With `ev`, the win and focus must come from an area that HAS data this period: no food
+    logged -> no food focus, no lifts logged -> no training focus (however it is worded —
+    "log your food", "nutrition is unmanaged" and "food is a black box" are the same nag)."""
+    if not isinstance(parsed, dict):
+        return False, "not a dict"
+    win, focus = parsed.get("win") or {}, parsed.get("focus") or {}
+    if not isinstance(win, dict) or not isinstance(focus, dict):
+        return False, "win/focus not objects"
+    if not (win.get("title") and focus.get("title") and parsed.get("action")):
+        return False, "missing win/focus/action"
+    if isinstance(parsed.get("action"), list):
+        return False, "action must be ONE action"
+    gtext = grounding if isinstance(grounding, str) else json.dumps(grounding, default=str)
+    ev_nums = _floats(gtext)
+    claimed = _floats(" ".join(str(x) for x in (parsed.get("headline"), win.get("title"), win.get("evidence"),
+                                                focus.get("title"), focus.get("evidence"))))
+
+    def grounded(c: float) -> bool:
+        return any(abs(c - e) <= max(1.0, 0.02 * abs(c)) for e in ev_nums)
+    ungrounded = [c for c in claimed if c >= 10 and not grounded(c)]
+    if ungrounded:
+        return False, f"ungrounded numbers: {[round(x, 1) for x in ungrounded[:5]]}"
+    banned = [w for w in ("MacroFactor", "Hevy", "MyFitnessPal") if w.lower() in json.dumps(parsed).lower()]
+    if banned:
+        return False, f"mentions an app he does not use: {banned}"
+    # His call (2026-10-17): the check-in works whether or not he logs, and logging nags are
+    # cut. The model was TOLD this and still chose "food is invisible — log it" as the focus,
+    # so it is enforced here.
+    for part, d in (("win", win), ("focus", focus)):
+        if LOGGING_FOCUS_RE.search(f"{d.get('title', '')}"):
+            return False, f"the {part} is about logging; pick it from what the data shows"
+    if ev:
+        food_days = (ev.get("logging") or {}).get("food_days", (ev.get("nutrition") or {}).get("days_logged"))
+        lifts = (ev.get("training") or {}).get("sessions_done")
+        for part, d in (("win", win), ("focus", focus)):
+            title = d.get("title", "")
+            if food_days == 0 and FOOD_RE.search(title):
+                return False, (f"the {part} is about food, but no food was logged this period — choose it "
+                               "from the band data (sleep, bedtime, steps, zone minutes, recovery)")
+            if lifts == 0 and TRAIN_RE.search(title):
+                return False, (f"the {part} is about training, but no lifts were logged this period — "
+                               "choose it from the band data; ask about training in question_for_user")
+    return True, "ok"
+
+
+LOGGING_FOCUS_RE = re.compile(r"\b(log|logs|logged|logging|tracking|untracked|invisible|black box)\b", re.I)
+# ("track" / "dark" are left out on purpose: "sleep on track" is a fine win.)
+
+
+# ---------------------------------------------------------------- send + budget + memory
+def send_message(text: str) -> bool:
+    token = env("TELEGRAM_BOT_TOKEN")
+    if not token:
+        print("no TELEGRAM_BOT_TOKEN", file=sys.stderr)
+        return False
+    for pm in ("Markdown", None):
+        payload = {"chat_id": CHAT_ID, "text": text}
+        if pm:
+            payload["parse_mode"] = pm
+        try:
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data=urllib.parse.urlencode(payload).encode())
+            with urllib.request.urlopen(req, timeout=20) as r:
+                if json.loads(r.read()).get("ok"):
+                    return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
+# ---- budget + ledger: scripts/assistant/outbox.py (since 2026-11-16) ----------------
+# This module used to keep its own coach_state.json. That budget FAILED OPEN (a corrupt or
+# unwritable file meant no limit) and nothing but coach.py consulted it. The outbox is the
+# one ledger and the one policy for every unprompted message; these two functions are the
+# same names coach.py has always called.
+DIGEST_CATEGORIES = {"weekly", "monthly"}            # scheduled summaries he expects
+REACTIVE_CATEGORIES = {"session-review", "preview", "chat"}   # answers to something he did
+
+
+def _outbox():
+    """The outbox module, or None when it cannot be imported (a deploy that did not copy
+    scripts/assistant/). None is treated as 'no budget available' = no unprompted sends."""
+    try:
+        d = str(Path(__file__).resolve().parent.parent / "assistant")
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        import outbox  # noqa: PLC0415
+        return outbox
+    except Exception as e:  # noqa: BLE001
+        print(f"[coach] outbox unavailable: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+
+def _kind(category: str) -> str:
+    if category in DIGEST_CATEGORIES:
+        return "digest"
+    if category in REACTIVE_CATEGORIES:
+        return "reactive"
+    return "nudge"
+
+
+def budget_ok(category: str, red_alert: bool = False) -> tuple[bool, str]:
+    """May this unprompted message go out now? Policy lives in outbox.allow(): quiet hours,
+    4 nudges a day, one topic once a day, backoff when he is not replying. `red_alert` is
+    kept for the signature; no caller ever passed it."""
+    ob = _outbox()
+    if ob is None:
+        return False, "outbox unavailable"
+    return ob.allow(_kind(category), category, at=now())
+
+
+def record_send(category: str, text: str = "") -> None:
+    """Record a CONFIRMED send in the ledger."""
+    ob = _outbox()
+    if ob is not None:
+        ob.record_quiet(_kind(category), category, text, at=now())
+
+
+def memory_append(line: str) -> None:
+    """Append a durable coaching fact to Coach Memory under a managed section."""
+    path = HEALTH / "Coach Memory.md"
+    try:
+        txt = path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return
+    stamp = now().strftime("%Y-%m-%d")
+    entry = f"- ({stamp}) {line.strip()}"
+    marker = "## Coach-logged (auto)"
+    if marker in txt:
+        txt = txt.replace(marker, f"{marker}\n{entry}", 1)
+    else:
+        txt = txt.rstrip() + f"\n\n{marker}\n{entry}\n"
+    try:
+        path.write_text(txt, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def memory_refresh(snapshot: str, working: list, leaking: list, window_days: int) -> bool:
+    """Rewrite the coach-OWNED '## Adherence snapshot (auto)' section in Coach Memory from
+    real logged data, bump `last_updated`, and retire the stale '_TBD_' Works placeholder.
+    Leaves every human-authored section (stance, watch flags, the dated Log, Coach-logged)
+    untouched — so the agent keeps its own adherence read current instead of Sparsh fighting
+    its writes. Idempotent: re-running replaces the managed section in place."""
+    path = HEALTH / "Coach Memory.md"
+    try:
+        txt = path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return False
+    stamp = now().strftime("%Y-%m-%d")
+    txt = re.sub(r"^last_updated:.*$", f"last_updated: {stamp}", txt, count=1, flags=re.M)
+    txt = txt.replace(
+        "- _TBD — fill in as adherence data comes in._",
+        "- _Auto-refreshed from logged data — see **Adherence snapshot (auto)** below._")
+
+    sec = ["## Adherence snapshot (auto)",
+           f"*Refreshed {stamp} · last {window_days} days. The coach maintains this from logged data — don't hand-edit; it gets overwritten.*",
+           "", f"**Now:** {snapshot.strip()}", "", "**Working:**"]
+    sec += [f"- {b.strip()}" for b in (working or ["_not enough data yet_"])]
+    sec += ["", "**Leaking:**"]
+    sec += [f"- {b.strip()}" for b in (leaking or ["_nothing flagged_"])]
+    block = "\n".join(sec) + "\n"
+
+    marker = "## Adherence snapshot (auto)"
+    if marker in txt:
+        txt = re.sub(rf"{re.escape(marker)}.*?(?=\n## )", block.rstrip() + "\n", txt, count=1, flags=re.S)
+    elif "## Log" in txt:
+        txt = txt.replace("## Log", block + "\n## Log", 1)
+    else:
+        txt = txt.rstrip() + "\n\n" + block
+    try:
+        path.write_text(txt, encoding="utf-8")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+WAKE_GATE = '{"wakeAgent": false}'
