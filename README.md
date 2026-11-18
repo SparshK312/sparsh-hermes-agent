@@ -1,9 +1,5 @@
 # Sparsh Hermes Agent — Health Layer
 
-> **About this repository.** This is a published snapshot of the private repository I deploy from. Personal data (names, dates, health numbers, account identifiers) is replaced with placeholders or example values, and the reference notes the agent writes from live use stay private because they hold personal logs. History starts at the first snapshot; each later sync is a new commit on top.
-
-> The private repository also holds job-search tooling (a posting board and its nudges). That engine is not part of this snapshot, so a few scripts, `deploy.sh` among them, refer to files that are not here, and a few hooks into it remain as dead code.
-
 A personal assistant I run for myself. It lives in Telegram, runs on a small VPS, and reads and writes my Obsidian vault. I log meals, workouts, water, weight and supplements by text, voice or photo, and it keeps track of things I'm waiting on and checks back on them.
 
 This repo is the layer I built on top of the open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent) runtime: the skills, scripts, plugins, scheduled jobs, deploy tooling and tests. The runtime itself is installed separately.
