@@ -61,3 +61,5 @@ In daily use. Logging, the wearable sync, the open-loops list, the morning brief
 ## License
 
 Personal use. Not yet licensed for redistribution.
+
+Note: for privacy, personal data in this repo has been replaced with placeholders.
