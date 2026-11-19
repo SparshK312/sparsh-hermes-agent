@@ -41,6 +41,7 @@ KINDS = ("waiting_on", "my_move", "conditional_plan")
 STATUSES = ("open", "dormant", "closed")
 DEFAULT_EXPIRY_DAYS = 14
 MAX_ASKS = 2
+PASSIVE_STEP = re.compile(r"\b(nothing owed|no further|await a reply|await response|no action)\b", re.I)
 VIEW_REL = Path("00 - Dashboard") / "Open Loops.md"
 CHECK_HOUR = 10          # a date-only "check after" means that day at 10:00 Eastern
 
@@ -120,6 +121,68 @@ def find_open(data: dict, title: str) -> str | None:
     return None
 
 
+# ----------------------------------------------------------------- one loop per thread
+# 2026-11-18: after three days of real use the list held one thread three times and the
+# tax-form and school-admin threads twice each. Every later log entry about a thread minted a new
+# loop, because the only match was an identical title. A thread is now recognised by its
+# KEY (the part of the title before the first dash or colon, e.g. "Acme R3") and by who
+# it is with, and later entries fold into the loop that is already open.
+_STOP = {"the", "and", "for", "with", "from", "this", "that", "his", "her", "status", "email",
+         "update", "waiting", "follow", "thread", "re"}
+
+
+def _tokens(s: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", (s or "").lower())
+            if (len(t) >= 2 or t.isdigit()) and t not in _STOP}
+
+
+def thread_key(title: str) -> str:
+    """The part of a title that names the thread: text before the first ' — ', ' - ' or ':'."""
+    return re.split(r"\s+[—–-]\s+|:\s", (title or "").strip(), maxsplit=1)[0].strip()
+
+
+def same_thread(lp: dict, key: str, who: str = "", by_who: bool = False) -> bool:
+    """Is the open loop `lp` the thread named by `key`? Deliberately narrow. Every word of
+    the key must be in the loop's title or who. A key of two or more words ("Acme R3",
+    "Globex / tax form") is enough on its own. A one-word key ("Globex") is several threads at one
+    company, so it never matches by itself; with `by_who` (the tagged lane, where the entry
+    names the person exactly) it matches when the person is the same too."""
+    want = _tokens(key)
+    if not want:
+        return False
+    have = _tokens(lp["title"]) | _tokens(lp.get("who", ""))
+    if not want <= have:
+        return False
+    if len(want) >= 2:
+        return True
+    w, lw = _tokens(who), _tokens(lp.get("who", ""))
+    return by_who and bool(w) and bool(w & lw)
+
+
+def find_thread(data: dict, key: str, who: str = "", by_who: bool = False) -> list[str]:
+    """Ids of the OPEN/DORMANT loops that are this thread, most recently updated first."""
+    hits = [(lp["updated_at"], lid) for lid, lp in data["loops"].items()
+            if lp["status"] != "closed" and same_thread(lp, key, who, by_who)]
+    return [lid for _, lid in sorted(hits, reverse=True)]
+
+
+def merge_into(data: dict, keep: str, others: list[str], why: str,
+               at: datetime.datetime | None = None) -> None:
+    """Fold duplicate loops of one thread into `keep`: their sources and notes move over and
+    they are closed with the reason. Nothing is dropped silently."""
+    k = data["loops"][keep]
+    for lid in others:
+        if lid == keep:
+            continue
+        o = data["loops"][lid]
+        for src in o.get("sources", []):
+            if src not in k["sources"]:
+                k["sources"].append(src)
+        k.setdefault("notes", []).extend(o.get("notes", []))
+        k["opened_at"] = min(k["opened_at"], o["opened_at"])
+        close(data, lid, f"same thread as \"{k['title']}\"; folded into it ({why})", at=at)
+
+
 def add(data: dict, *, title: str, kind: str, who: str = "", next_step: str = "",
         due=None, check_after=None, source: dict | None = None, check: dict | None = None,
         at: datetime.datetime | None = None, expiry_days: int = DEFAULT_EXPIRY_DAYS) -> str:
@@ -131,9 +194,17 @@ def add(data: dict, *, title: str, kind: str, who: str = "", next_step: str = ""
         raise ValueError("a loop needs a title")
     n = at or now()
     existing = find_open(data, title)
+    if not existing:
+        same = find_thread(data, thread_key(title), who)
+        existing = same[0] if same else None
     if existing:
-        update(data, existing, next_step=next_step or None, due=due, check_after=check_after,
-               source=source, at=n)
+        # A passive "nothing owed, await a reply" must not wipe out a concrete next step.
+        keep_step = PASSIVE_STEP.search(next_step or "") and data["loops"][existing]["next_step"] \
+            and not PASSIVE_STEP.search(data["loops"][existing]["next_step"])
+        update(data, existing, next_step=None if keep_step else (next_step or None), due=due,
+               check_after=check_after, source=source, at=n)
+        if who and not data["loops"][existing].get("who"):
+            data["loops"][existing]["who"] = who.strip()[:80]
         return existing
     due_d, chk_d = parse_day(due), parse_day(check_after)
     lid = f"{_slug(title)}-{hashlib.sha1(f'{title}|{_iso(n)}'.encode()).hexdigest()[:5]}"

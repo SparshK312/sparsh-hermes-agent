@@ -48,8 +48,12 @@ ASSERTS = re.compile(r"\b(replied|responded|answered|confirmed|signed|accepted|a
 # Hermes does bookkeeping only (his call): it may offer to look again later or to close a
 # thread, nothing else. Found in the first VPS dry run, 2026-11-16: the model turned "send
 # the drafted email" into "Want me to send it now?", an action Hermes cannot and must not take.
+# 2026-11-18: "want me to check those [earnings] after and loop back?" passed, because any
+# "check …" was allowed. Only checking the SAME thing again is something it can do.
 OFFERS = re.compile(r"\b(want me to|would you like me to|should i|shall i|i can|i could|i'll|i will|"
-                    r"let me|happy to)\s+(?!look|check|keep|close|leave|snooze|note|hold|ask again|remind)", re.I)
+                    r"let me|happy to)\s+(?!look again|look back|check again|check back|check in again|"
+                    r"keep (?:it|this|that|track|tracking|watching|an eye|looking)|close|leave|snooze|"
+                    r"hold|ask again|remind)", re.I)
 _NEGATED = re.compile(r"\b(no|not|nothing|hasn't|haven't|hasn’t|haven’t|isn't|without|yet to|"
                       r"whether|if|has|have|did|any)\b[^.?!]{0,40}$", re.I)
 

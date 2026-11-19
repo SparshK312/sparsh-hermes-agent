@@ -1,7 +1,7 @@
 """assistant-context — what makes "reply and it continues" work.
 
 THE PROBLEM. Hermes's follow-ups are sent by scripts. The chat agent only knows what is in
-its session transcript, and a session ends after 180 idle minutes and at 04:00 every day.
+its session transcript, and a session ends after an idle period (30 minutes since 2026-11-18; it was 180) and at 04:00 every day.
 So when he answers "yeah she replied this morning", the agent has no idea what was asked.
 
 THE FIX. Two hooks, both reading the assistant's own files (scripts/assistant/), never the

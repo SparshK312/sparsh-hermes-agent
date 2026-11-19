@@ -121,7 +121,7 @@ def test_tagged_entry_becomes_a_loop_without_any_model_call(env):
     assert out["tagged"] == 1 and out["model"] == "skipped"
     (lid, lp), = L.open_loops(L.load())
     assert (lp["who"], lp["next_step"], lp["due"]) == ("Dana", "escalate to Lee", "2026-11-18")
-    assert lp["title"] == "Acme: form requested from Dana" and lp["sources"][0]["date"] == "2026-11-16"
+    assert lp["title"] == "Acme — waiting on Dana" and lp["sources"][0]["date"] == "2026-11-16"
 
 
 def test_prose_entries_go_through_one_validated_model_call(env):
@@ -284,3 +284,87 @@ def test_open_rows_of_the_action_items_table_are_read_too(env):
     # a missing file is announced, not fatal
     (ai / "Action Items.md").unlink()
     assert X.action_item_entries(tmp / "vault", set(), TODAY) == []
+
+
+# ------------------------------------------------------------------ one loop per thread (2026-11-18)
+def test_a_tagged_entry_folds_into_the_open_thread_and_merges_its_twins(env):
+    """Three days of real use left one thread on the list three times: every later entry
+    about it minted a new loop. The tagged entry now moves the thread it is about."""
+    X, L, tmp = env
+    d = L.load()
+    a = L.add(d, title="Globex R3 — status email to recruiter", kind="my_move", next_step="send the status email",
+              due="2026-11-18", at=T(day=14))
+    b = L.add(d, title="Globex R3 status: waiting on recruiter response", kind="waiting_on", who="Globex",
+              next_step="chase on Friday", at=T(day=13))
+    other = L.add(d, title="Globex — expense claim", kind="waiting_on", who="Sam", at=T(day=14))
+    # the store's own add() folds a same-key title too, so `b` already landed in `a`
+    assert b == a and len(d["loops"]) == 2
+    d["loops"]["twin"] = dict(d["loops"][a], title="Globex R3 — waiting on recruiter response", who="Globex",
+                              sources=[{"date": "2026-11-13", "scope": "x"}], notes=[], asks=[],
+                              updated_at="2026-11-12T12:00-05:00")       # older: the newer loop is the keeper
+    d["loops"][a]["asks"] = ["2026-11-15T10:00-05:00"]
+    L.save(d)
+    write_log(tmp, 16, ("update", "Globex R3", "status email pushed a day; nothing in the inbox "
+                        "⏳ who=Sam; by=2026-11-19; then=send the short status email"))
+    out = X.run(tmp / "vault", today=TODAY, call=lambda s, u: pytest.fail("tagged only: no model call"))
+    assert out["tagged"] == 1
+    d = L.load()
+    open_ = dict(L.open_loops(d))
+    assert set(open_) == {a, other}                                    # one Globex R3 loop, the other thread untouched
+    lp = open_[a]
+    assert (lp["kind"], lp["who"], lp["next_step"], lp["due"]) == ("waiting_on", "Sam", "send the short status email", "2026-11-19")
+    assert lp["title"] == "Globex R3 — status email to recruiter" and lp["asks"] == []
+    assert {"date": "2026-11-13", "scope": "x"} in lp["sources"]       # the twin's history moved over
+    assert d["loops"]["twin"]["status"] == "closed" and "folded into it" in d["loops"]["twin"]["closed_evidence"]
+
+
+def test_a_one_word_key_is_not_a_thread_unless_the_person_matches(env):
+    X, L, tmp = env
+    d = L.load()
+    form = L.add(d, title="Acme — tax form", kind="waiting_on", who="Dana", next_step="escalate to Lee", at=T(day=14))
+    badge = L.add(d, title="Acme — badge pickup", kind="my_move", who="Lee", next_step="collect it", at=T(day=14))
+    assert form != badge                                               # same company, different matters
+    assert L.find_thread(d, "Acme") == [] and L.find_thread(d, "Acme", "Priya", by_who=True) == []
+    assert L.find_thread(d, "Acme", "Dana", by_who=True) == [form]
+    assert L.find_thread(d, "Acme / tax form") == [form]
+    L.save(d)
+    write_log(tmp, 16, ("update", "Acme", "Dana is checking with the tax team ⏳ who=Dana; by=2026-11-20; then=short follow-up"),
+              ("update", "Initech / lease", "asked for the extension in writing ⏳ who=Jo; by=2026-11-21; then=call the office"))
+    X.run(tmp / "vault", today=TODAY, call=lambda s, u: pytest.fail("no model"))
+    d = L.load()
+    assert d["loops"][form]["next_step"] == "short follow-up" and d["loops"][badge]["next_step"] == "collect it"
+    new = [lp for lid, lp in L.open_loops(d) if lid not in (form, badge)]
+    assert [lp["title"] for lp in new] == ["Initech / lease — waiting on Jo"]      # short title, never the whole summary
+
+
+def test_a_passive_wait_never_overwrites_a_concrete_step_of_the_same_thread(env):
+    X, L, tmp = env
+    write_log(tmp, 15, ("update", "Action Items / THIS WEEK", "Wed Nov 18 — Globex R3: send the status email to Sam"),
+              ("update", "Action Items / THIS WEEK", "Waiting, nothing owed — Globex R3, Initech"))
+    X.run(tmp / "vault", today=TODAY, call=reply(
+        {"op": "add", "entry": "E1", "title": "Globex R3 — status email", "kind": "my_move", "who": "Sam",
+         "next_step": "send the status email to Sam", "due": "2026-11-18"},
+        {"op": "add", "entry": "E2", "title": "Globex R3 — waiting on a reply", "kind": "waiting_on", "who": "Globex",
+         "next_step": "Nothing owed; await a reply"},
+        {"op": "add", "entry": "E2", "title": "Initech — application status", "kind": "waiting_on", "who": "Initech",
+         "next_step": "Nothing owed; await a reply"}))
+    rows = sorted((lp["title"], lp["next_step"], lp["kind"]) for _, lp in L.open_loops(L.load()))
+    assert rows == [("Globex R3 — status email", "send the status email to Sam", "my_move"),
+                    ("Initech — application status", "Nothing owed; await a reply", "waiting_on")]
+
+
+def test_a_close_must_cite_an_entry_about_that_loop(env):
+    """A loop about one company's assessment was closed with another company's signed offer
+    as its evidence: verbatim, finished, newer, and about something else entirely."""
+    X, L, tmp = env
+    d = L.load()
+    oa = L.add(d, title="Initech — online assessment", kind="my_move", next_step="sit the assessment", at=T(day=12))
+    offer = L.add(d, title="Acme — written offer", kind="waiting_on", who="Dana", at=T(day=12))
+    L.save(d)
+    write_log(tmp, 15, ("update", "Acme", "written offer received from Dana and signed"))
+    out = X.run(tmp / "vault", today=TODAY, call=reply(
+        {"op": "close", "loop": oa, "entry": "E1", "evidence": "written offer received"},
+        {"op": "close", "loop": offer, "entry": "E1", "evidence": "written offer received"}))
+    d = L.load()
+    assert out["closed"] == 1 and d["loops"][oa]["status"] == "open" and d["loops"][offer]["status"] == "closed"
+    assert any("does not mention this loop" in r for r in out["rejected"])

@@ -261,6 +261,35 @@ def test_a_failed_inbox_search_is_could_not_check_never_nothing_found(C, monkeyp
     assert C.mail_from("Dana", datetime.date(2026, 11, 16)) == ("checked_none", {})
 
 
+def test_a_company_name_does_not_match_its_newsletters_and_receipts(C, monkeypatch):
+    """2026-11-18: a loop waiting on a company matched that company's product mail and asked
+    whether the recruiter thread was settled. Only a person, or hiring mail, counts."""
+    R = C.relevant_mail
+    assert not R("Globex", "Globex Health <health-noreply@globex.example.com>", "Your weekly progress report")
+    assert not R("Globex", "Globex Receipts <noreply@globex.example.com>", "Your Tuesday trip")
+    assert not R("Globex", "Globex <globex@globex.example.com>", "20% off this week")       # the company itself
+    assert not R("Globex", "Globex <info@e.globex.example.com>", "What is new this month")
+    assert R("Globex", "Dana Lee <dana.lee@globex.example.com>", "Re: quick update")         # a person
+    assert R("Dana", "dana.lee@globex.example.com", "RE: tax form")                          # bare address, a person
+    assert R("Globex", "Globex Recruiting <no-reply@ats.example.com>", "Thank you for applying")
+    assert R("Globex", "Globex <globex@globex.example.com>", "Your application status")
+    assert R("jobs@globex.example.com", "Globex <jobs@globex.example.com>", "anything at all")  # exact address
+
+    news = {"from": "Globex Health <health-noreply@globex.example.com>", "subject": "Your weekly progress report", "date": "Tue, 17 Nov 2026 14:51:06 -0800"}
+    real = {"from": "Dana Lee <dana.lee@globex.example.com>", "subject": "Re: quick update", "date": "Mon, 16 Nov 2026 10:00:00 -0500"}
+    def fake(found):
+        monkeypatch.setitem(sys.modules, "email_triage", SimpleNamespace(_gapi=lambda *a, **k: "[]", _parse_search=lambda s: list(found)))
+    since = datetime.date(2026, 11, 10)
+    fake([news])
+    assert C.mail_from("Globex", since) == ("checked_none", {})              # the newsletter alone is not a reply
+    fake([news, real])
+    status, info = C.mail_from("Globex", since)
+    assert status == "found" and info["subject"] == "Re: quick update"       # it looks past the newsletter
+    fake([news] * C.MAIL_MAX)
+    status, info = C.mail_from("Globex", since)                              # cap reached: never "nothing"
+    assert status == "could_not_check" and "automated" in info["reason"]
+
+
 def test_no_lift_question_on_a_day_he_already_trained(C):
     sat = T(18, day=21)                                    # 2 days left; only today's session logged
     assert "lift" in [c.topic for c in C.health_candidates(sat, engine(C.tmp, workouts=("2026-11-20",)))]
@@ -366,3 +395,43 @@ def test_gym_question_mentions_what_is_still_on_the_calendar(C):
     assert r["text"] == ("0 of 3 sessions logged this week and 4 days left, today included. "
                          "Still on your calendar today: Haircut at 6:30 PM. Training today?")
     assert C.ground.validate(r["text"], r["text"], "fact")[0]
+
+
+# ------------------------------------------------------------------ found in the first days of real use (2026-11-18)
+def test_it_may_offer_to_look_at_the_same_thing_again_and_nothing_else(C):
+    G = C.ground
+    facts = "thread: Brokerage transfer\nplan on file: buy on Wed Nov 18\nearnings tonight at 7:30 PM"
+    ok = lambda t: G.validate(t, facts, "fact")[0]             # noqa: E731
+    for bad in ("Earnings are tonight at 7:30 PM, want me to check those after and loop back?",
+                "Want me to look into it?", "I can note that for you.", "Should I check the price?"):
+        assert not ok(bad), bad
+    for fine in ("Want me to check again tomorrow?", "Want me to keep track of it?", "I'll look again tonight.",
+                 "Should I keep it open?", "Want me to check back later?"):
+        assert ok(fine), fine
+
+
+def test_inbox_leaves_out_mail_he_already_answered_and_never_talks_about_him(C):
+    mails = [dict(MAILS[1], thread="t2"),
+             {"id": "m4", "thread": "t4", "from": "Sam <sam@globex.example.com>", "subject": "Your application",
+              "date": "Wed, 18 Nov 2026 10:25", "body": "Hi Sparsh, Globex sent an update about your application. We will not be moving forward."}]
+    seen_by_model = []
+
+    def pick(s, u):
+        seen_by_model.append(u)
+        return json.dumps({"pick": 1, "summary": "Globex sent an update about Sparsh's application."})
+    # he replied in thread t2 AFTER the mail arrived, and in t4 BEFORE it (an older message of his)
+    sent = lambda: [{"thread": "t2", "date": "Wed, 18 Nov 2026 12:05"}, {"thread": "t4", "date": "Tue, 17 Nov 2026 09:00"},   # noqa: E731
+                    {"thread": "", "date": "Wed, 18 Nov 2026 12:30"}, {"thread": "t2", "date": "garbage"}]
+    c = C.inbox_candidate(T(13, 35), shadow=False, call=pick, fetch=fetcher(mails), triage_seen=[], sent=sent)
+    assert len(seen_by_model) == 1 and "Forms for Friday" not in seen_by_model[0] and "Your application" in seen_by_model[0]
+    assert c.topic == "mail:m4"
+    assert c.draft == 'New mail from Sam: "Your application". Want me to keep track of it?'      # third-person summary dropped
+    assert "you" in C.INBOX_SYS and "never his name" in C.INBOX_SYS
+    # a failing sent-mail read leaves nothing out
+    C.inbox_state_path(False).unlink()
+
+    def down():
+        raise RuntimeError("gmail down")
+    seen_by_model.clear()
+    C.inbox_candidate(T(13, 35), shadow=False, call=pick, fetch=fetcher(mails), triage_seen=[], sent=down)
+    assert "Forms for Friday" in seen_by_model[0]

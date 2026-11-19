@@ -137,17 +137,34 @@ def _entry_dt(e: dict) -> datetime.datetime:
 # ----------------------------------------------------------------- tagged lane
 def apply_tagged(data: dict, entries: list[dict]) -> tuple[list[str], list[dict]]:
     """Entries carrying the ⏳ tag become loops with no model involved.
-    Returns (hashes handled, the remaining entries for the prose lane)."""
+    Returns (hashes handled, the remaining entries for the prose lane).
+
+    2026-11-18: a tagged entry used to ALWAYS mint a new loop, titled with its whole summary.
+    Three days in, the list held the same thread two and three times, because the entry
+    that moved a thread on ("email SENT, follow up Wed") never touched the loop it moved.
+    Now the entry's scope ("School admin / Dana") is the thread key: it folds into the open loop of
+    that thread (which becomes a wait on the tagged person), other open loops of the same
+    thread are folded in too, and only an unknown thread gets a new loop, with a short title."""
     handled, rest = [], []
     for e in entries:
         m = TAG.search(e["summary"])
         if not m:
             rest.append(e)
             continue
-        title = re.sub(r"\s*⏳.*$", "", e["summary"]).strip(" .;—-") or e["scope"]
-        loops.add(data, title=f"{e['scope']}: {title}"[:120], kind="waiting_on",
-                  who=m["who"].strip(), next_step=m["then"].strip(), due=m["by"],
-                  check_after=m["by"], source=_source(e), at=_entry_dt(e))
+        who, at = m["who"].strip(), _entry_dt(e)
+        same = loops.find_thread(data, e["scope"], who, by_who=True)
+        if same:
+            lid = same[0]
+            loops.update(data, lid, next_step=m["then"].strip(), due=m["by"], check_after=m["by"],
+                         source=_source(e), at=at)
+            lp = data["loops"][lid]
+            lp["kind"], lp["who"] = "waiting_on", who[:80]
+            lp["asks"] = []                              # the thread moved: earlier asks no longer count
+            loops.merge_into(data, lid, same[1:], f"log {e['date']}: {e['scope']}", at=at)
+        else:
+            loops.add(data, title=f"{e['scope']} — waiting on {who}"[:120], kind="waiting_on",
+                      who=who, next_step=m["then"].strip(), due=m["by"],
+                      check_after=m["by"], source=_source(e), at=at)
         handled.append(e["hash"])
     return handled, rest
 
@@ -173,7 +190,7 @@ Return ONLY a JSON object: {"ops": [ ... ]}. Each op cites the ONE entry it come
 RULES
 - Entries whose scope is "Action Items / THIS WEEK" are rows of his live task table, written "When — What — note: …". A dated step he still has to do is a my_move (due = that date). A row that says who he is waiting on and what happens if they stay silent is a waiting_on or conditional_plan. A "Waiting, nothing owed" row lists several names: add ONE waiting_on per name, each with next_step "Nothing owed; await a reply". Appointments and events (a haircut, a hackathon) are not loops.
 - Most entries are NOT loops: finished work, research, purchases, notes. Return no op for them. An empty ops list is a common, correct answer.
-- Prefer updating an existing loop over adding a second loop for the same thread.
+- ONE loop per thread. If a tracked loop is already about the same company or person and the same matter, UPDATE it (new next_step / dates), even when the step changed from his move to a wait. Never add a second loop for a thread that is already tracked, and never add two loops for one thread from the same batch.\n- Titles are short names, "<Company or person> — <matter>", at most 8 words; never a sentence from the entry.
 - Only add a loop when the entry itself states the wait, the owed step, or the condition. Never infer one.
 - Use only names, dates and facts written in the cited entry. If the entry gives no date, use null.
 - Dates in entries are written like "Wed Nov 18": convert using the entry's own date for the year.
@@ -253,11 +270,25 @@ def apply_ops(data: dict, ops, ids: dict, today: datetime.date) -> dict:
                 reject(op, "evidence is not a verbatim piece of the cited entry"); continue
             if not FINISHED.search(e["summary"]):
                 reject(op, "cited entry does not say anything finished"); continue
+            if not _about(lp, e):
+                reject(op, "cited entry does not mention this loop's thread or person"); continue
             loops.close(data, lid, f"log {e['date']} ({e['scope']}): {ev}", at=_entry_dt(e))
             res["closed"] += 1
         else:
             reject(op, "unknown op")
     return res
+
+
+def _about(lp: dict, e: dict) -> bool:
+    """Does the entry mention the loop it is being used to close? 2026-11-18: a loop about one
+    company's assessment was closed with another company's offer as "evidence": every other
+    close check passed, because none of them asked whether the entry was about THIS loop.
+    The thread key or the person must appear in the entry (whole words)."""
+    names = loops._tokens(loops.thread_key(lp["title"])) | loops._tokens(lp.get("who", ""))
+    names = {t for t in names if len(t) >= 3 and not t.isdigit()}
+    if not names:
+        return True                                   # nothing to test against: the other checks stand
+    return bool(names & loops._tokens(e["scope"] + " " + e["summary"]))
 
 
 def parse_reply(reply: str):

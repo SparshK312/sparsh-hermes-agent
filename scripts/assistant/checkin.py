@@ -117,25 +117,79 @@ def searchable(who: str) -> bool:
     return bool(who) and ("@" in who or bool(_NAME.match(who)))
 
 
+# 2026-11-18: a loop waiting on a company matched that company's weekly product digest
+# ("Globex Health <…-noreply@…>: Your weekly progress report") and the draft asked whether
+# the thread he was waiting on was settled.
+# from:"<who>" matches every sender whose name or address contains the word, so a company
+# name pulls in its newsletters, receipts and product mail. A message counts only when a
+# person sent it, or when an automated sender is plainly about hiring.
+MAIL_MAX = 10
+_AUTO_ADDR = re.compile(r"(no[-_.]?reply|do[-_.]?not[-_.]?reply|notif|newsletter|digest|news|marketing|"
+                        r"mailer|updates?|receipts?|billing|invoice|support|alerts?|announce|promo|rewards|"
+                        r"hello|info|team|account|security|store|shop|community|bounce)", re.I)
+_HIRING = re.compile(r"\b(recruit\w*|talent|careers?|hiring|application|applied|applying|candidate|interview\w*|"
+                     r"offer|position|role|intern(ship)?|assessment|next steps?|onboarding|referral|"
+                     r"university|early careers?|campus)\b", re.I)
+
+
+def _addr(frm: str) -> str:
+    m = re.search(r"<([^>]+)>", frm or "")
+    return (m.group(1) if m else (frm or "")).strip().lower()
+
+
+def relevant_mail(who: str, sender: str, subject: str) -> bool:
+    """Is this message plausibly from the party he is waiting on?
+       - `who` is an address: the search already pinned the sender.
+       - a person wrote it (not an automated mailbox, and the display name is not the
+         company's own name): yes.
+       - an automated mailbox or the company itself: only when the sender name or subject is about hiring
+         ("Meta Recruiting", "Your application to…"), never a product or account mail."""
+    if "@" in (who or ""):
+        return True
+    addr, name = _addr(sender), _sender_name(sender)
+    local, _, domain = addr.partition("@")
+    labels = [re.sub(r"[^a-z0-9]", "", x) for x in domain.split(".")[:-1]]
+    flat = re.sub(r"[^a-z0-9]", "", name.lower())
+    # "Globex <globex@globex.example.com>" is the company writing, not a person: the display name carries
+    # the domain's own name. A bare address with no display name is judged on its mailbox.
+    company_sender = "@" not in name and any(
+        len(x) >= 3 and x not in ("com", "mail", "email", "www") and x in flat for x in labels)
+    if not company_sender and not _AUTO_ADDR.search(local):
+        return True
+    return bool(_HIRING.search(f"{name} {subject}"))
+
+
 def mail_from(who: str, since: datetime.date):
     """(status, info). Reads Gmail through the google-workspace script; never writes.
-       found            {date, subject, sender}   newest matching message
-       checked_none     {}                        the search ran and returned nothing
-       could_not_check  {reason}                  not searchable, or the search failed"""
+       found            {date, subject, sender}   newest RELEVANT message (see relevant_mail)
+       checked_none     {}                        the search ran; nothing relevant came back
+       could_not_check  {reason}                  not searchable, the search failed, or the
+                                                  first MAIL_MAX results were all automated
+                                                  mail (more may exist that were not seen)"""
     if not searchable(who):
         return "could_not_check", {"reason": "no name or address to search for"}
     try:
         import email_triage as ET  # noqa: PLC0415  (functions only; main() is never called)
         q = f'from:"{who}" after:{since.strftime("%Y/%m/%d")} -in:sent -in:draft'
-        msgs = ET._parse_search(ET._gapi("gmail", "search", q, "--max", "5", timeout=60))
+        msgs = ET._parse_search(ET._gapi("gmail", "search", q, "--max", str(MAIL_MAX), timeout=60))
     except Exception as e:  # noqa: BLE001
         log(f"mail check failed for {who!r}: {type(e).__name__}: {e}")
         return "could_not_check", {"reason": "the inbox search failed"}
     if not msgs:
         return "checked_none", {}
-    m = msgs[0]
-    return "found", {"date": str(m.get("date") or "")[:31], "subject": str(m.get("subject") or "")[:140],
-                     "sender": str(m.get("from") or m.get("sender") or "")[:80]}
+    skipped = 0
+    for m in msgs:
+        sender = str(m.get("from") or m.get("sender") or "")
+        subject = str(m.get("subject") or "")
+        if relevant_mail(who, sender, subject):
+            if skipped:
+                log(f"mail check for {who!r}: skipped {skipped} automated message(s) before a relevant one")
+            return "found", {"date": str(m.get("date") or "")[:31], "subject": subject[:140], "sender": sender[:80]}
+        skipped += 1
+    log(f"mail check for {who!r}: all {skipped} result(s) were automated mail, none about hiring")
+    if skipped >= MAIL_MAX:      # the cap was reached: older relevant mail may sit behind it
+        return "could_not_check", {"reason": f"only automated mail from {who} in the newest {MAIL_MAX} results"}
+    return "checked_none", {}
 
 
 # A wait with nothing planned ("no further chasing, await response"). First shadow run,
@@ -248,7 +302,10 @@ INBOX_SYS = (
     "confirmations, marketing, social notifications and anything merely informative. Most batches "
     "contain nothing: say so. Return ONLY JSON: {\"pick\": null} or {\"pick\": <number>, "
     "\"summary\": \"<one plain sentence, at most 160 characters, using only words, names, dates and "
-    "numbers that appear in that message; no advice>\"}.")
+    "numbers that appear in that message; no advice>\"}. Write the summary TO him: say 'you' and "
+    "'your', never his name. Say what the message actually tells him (what is asked, what was "
+    "decided, by when), not merely that an update was sent.")
+HIS_NAME = re.compile(r"\bsparsh\b", re.I)
 
 
 def inbox_state_path(shadow: bool) -> Path:
@@ -260,13 +317,42 @@ def _sender_name(frm: str) -> str:
     return name or (frm or "").strip("<> ")
 
 
+def _mail_when(raw: str):
+    try:
+        from email.utils import parsedate_to_datetime  # noqa: PLC0415
+        d = parsedate_to_datetime(raw)
+        return d if d.tzinfo else d.replace(tzinfo=datetime.timezone.utc)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def drop_answered(mails: list[dict], sent: list[dict], when) -> tuple[list[dict], int]:
+    """Leave out mail he has already answered: a message of his own in the SAME Gmail thread,
+    dated after it. (Known gap since the first shadow run: the midday read raised mail he had
+    replied to an hour earlier.) A message with no thread id or an unreadable date is kept:
+    unknown is never read as answered."""
+    latest: dict[str, datetime.datetime] = {}
+    for sm in sent or []:
+        t, d = sm.get("thread") or "", when(sm.get("date") or "")
+        if t and d and (t not in latest or d > latest[t]):
+            latest[t] = d
+    keep = []
+    for m in mails:
+        t, d = m.get("thread") or "", when(m.get("date") or "")
+        if t and d and t in latest and latest[t] > d:
+            continue
+        keep.append(m)
+    return keep, len(mails) - len(keep)
+
+
 def inbox_candidate(n: datetime.datetime, *, shadow: bool, call=None, fetch=None, triage_seen=None,
-                    persist: bool = True):
+                    persist: bool = True, sent=None):
     """A Candidate for the one new message that needs him, or None. Runs once per
     INBOX_HOURS hour per day; every message is looked at once (its id is remembered).
     Read-only on Gmail. Never raises: a failed fetch or call is logged and means None."""
     if n.hour not in INBOX_HOURS:
         return None
+    live_fetch = fetch is None                      # tests inject fetch; they inject `sent` too or get none
     sp = inbox_state_path(shadow)
     try:
         st = json.loads(sp.read_text())
@@ -289,6 +375,15 @@ def inbox_candidate(n: datetime.datetime, *, shadow: bool, call=None, fetch=None
     except Exception as e:  # noqa: BLE001
         log(f"inbox: fetch failed: {type(e).__name__}: {e}")
         return None
+    try:
+        if sent is None and live_fetch:
+            import email_triage as ET2  # noqa: PLC0415
+            sent = lambda: ET2.fetch_sent(2)[0]   # noqa: E731
+        mails, answered = drop_answered(mails, sent() if sent else [], _mail_when)
+        if answered:
+            log(f"inbox: {answered} message(s) left out, already answered in the same thread")
+    except Exception as e:  # noqa: BLE001
+        log(f"inbox: sent-mail check failed ({type(e).__name__}: {e}); nothing left out")
     if len(mails) > INBOX_MAX_MAILS:
         log(f"inbox: CAP {len(mails)} new messages, looking at the newest {INBOX_MAX_MAILS}; the rest wait for the next read")
     batch = mails[:INBOX_MAX_MAILS]
@@ -325,6 +420,8 @@ def inbox_candidate(n: datetime.datetime, *, shadow: bool, call=None, fetch=None
     who = _sender_name(m["from"])
     # status "found": the mail exists, so words like "signed" or "confirmed" may describe it
     ok, why = ground.validate(summary, mail_text, "found") if summary else (False, ["empty"])
+    if ok and HIS_NAME.search(summary):
+        ok, why = False, ["talks about him in the third person"]
     if not ok:                                        # fall back to what the mail literally says
         log(f"inbox: summary rejected ({'; '.join(why)[:160]}); using the subject line")
         summary = ""

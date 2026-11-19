@@ -1,7 +1,7 @@
 ---
 name: log-food
 description: 'THE meal-logging skill for Sparsh. Invoke this for ANY meal/snack/shake input — text descriptions ("had eggs and toast", "lunch was a chicken sandwich", "ate rice and fish"), photos of meals (with or without a caption like "had this for breakfast" / "lunch from the cafeteria"), keyboard taps ("🍽️ Log meal"), or slash commands ("/log_food <desc>", "log a meal", "logged dinner"). For PHOTO input: call vision_analyze first to identify the items, then proceed with template-match + nutrient lookup, log it, and show the breakdown (no confirmation gate). For ALL input types: write canonical record to 07 - Health/Food Log/<date>.md AND increment daily-note frontmatter totals (kcal, protein_g, carbs_g, fat_g). NEVER save a meal to just the ## Notes section of the daily note — that loses macro tracking. The vault is the single source of truth — do NOT use food-tracker''s log_food / get_daily_log / get_summary / set_goals / delete_entry tools (those write to a parallel SQLite DB that drifts from the vault).'
-version: 1.4.0
+version: 1.5.1
 platforms: [linux, macos]
 metadata:
   hermes:
@@ -12,340 +12,82 @@ metadata:
 
 # log-food
 
-## ⚡ How to log — read first, follow EXACTLY, don't improvise
-
-Be fast and consistent: the same meal logs the same way every time. Follow this in order; do not freelance a different path.
-
-1. **The date is GIVEN to you.** The turn context starts with `[Current date — America/New_York] Today = YYYY-MM-DD …` plus recent days (for backfill like "log for Monday"). Use that exact string. **NEVER run `date`, never guess, never put `$(date)` in a path.**
-2. **Resolve items** — pantry first (reuse confirmed macros), then `mcp_food_tracker.search_food` for misses only (steps 1–3 below).
-3. **Log it right away — NO confirmation menu.** Don't show a "press 1/2/3 / ✓ Edit ✗" gate and don't wait for approval. Write it, then **show the per-item breakdown** so Sparsh can eyeball how you calculated it. If he says it's off, you correct it then (reactive).
-4. **Write with `vault_log.py food`, run via `terminal` — the ONE and ONLY write.** It does both writes safely and caches to the pantry (exact command in step 5).
-
-🛑 **Direct vault writes are BLOCKED by a guard.** `patch` / `write_file` / `execute_code` on the daily-note health fields, the Food Log, or Workouts will be **rejected** with a redirect message — do not attempt them; you'll just waste a turn. `read_file`/`search_files` on these are wasteful too. **There is NO manual fallback.** If you ever think "I'll just write/patch the note myself," you are wrong — `vault_log.py` (via `terminal`) is the only way food reaches the vault.
-
-**Corrections** (wrong item / qty / date / time): remove the meal, then re-log it with `food`. The LAST meal: `vault_log.py undo-last-meal`. ANY OTHER meal: `vault_log.py meals --date <date>` to see the numbered list, then `vault_log.py remove-meal --index N --date <date>` (or `--time "1:30 PM"`). Never patch to fix.
-
-## When to Use
-
-Any time the user describes, photographs, or otherwise reports a meal/snack/shake. **Photo-based meal input is first-class — do not route photos to obsidian-vault-write or "save as notes"; route them here.** Examples:
-
-**Text input:**
-- `/log_food 2 eggs, toast, and a banana`
-- "lunch was the chicken bowl at the cafeteria"
-- "had a protein shake — 25g whey in milk"
-- "just finished dinner: salmon, rice, broccoli"
-- "ate rice, fried fish, tortilla, nachos, guac" → multi-item meal
-- "🍽️ Log meal" (keyboard button) → reply asking what they ate, then proceed
-
-**Photo input** (single image or multiple — common at restaurants/cafeterias):
-- Photo + "Had this for breakfast" → analyze image, log breakfast
-- Photo of a plate, no caption → infer meal_type from time of day, ask "log this as <meal_type>?"
-- Two photos: one of menu/sign + one of the plate → use both for identification (sign tells you item names, plate tells you portion)
-- Cafeteria photo → likely a recurring meal; after 2 of these, prompt to save as a template (`cafeteria-breakfast-heavy` etc.)
-
-**Combined input:**
-- "Lunch from the cafeteria" + photo → photo identifies items, caption sets meal_type
-
-Do **not** use for:
-- Plain water — that's `log-water`
-- Supplements without food — that's `log-vitamins`
-- Future / hypothetical meals — only log what was eaten
-- Listing existing templates — that's `meal-templates` (this skill USES templates for matching; doesn't list them)
-- Free-form journal entries about food preferences/cravings (those go to the daily note's ## Notes section via obsidian-vault-write — but ANY mention of having actually eaten something belongs here)
-
-## 🛑 Forbidden tools (architecture-critical)
-
-The vault is canonical. The food-tracker MCP exists ONLY for nutrient lookup. **Do NOT call these MCP tools — they write to / read from a parallel SQLite DB and will silently drift from the vault:**
-
-- ❌ `mcp_food_tracker.log_food` — NEVER call. Writes to MCP's DB, not the vault.
-- ❌ `mcp_food_tracker.get_daily_log` — NEVER call. Read the vault's daily note instead.
-- ❌ `mcp_food_tracker.get_summary` — NEVER call. Aggregate the vault.
-- ❌ `mcp_food_tracker.set_goals` — NEVER call. Targets live in this skill's prose.
-- ❌ `mcp_food_tracker.delete_entry` — NEVER call. Edit the vault.
-
-**Only allowed MCP call:** `mcp_food_tracker.search_food(query=...)` for nutrient resolution in step 3. That's it.
-
-## Step-by-step
-
-### 0. Photo input — vision pre-processing (skip if input is text-only)
-
-If the user attached one or more images:
-
-1. **Call `vision_analyze`** on each image with a prompt like:
-   `"Identify every food/drink item visible. List items with estimated quantity (e.g. '2 sausage links', '1 cup orange juice'). Include any visible menu/sign text. Be specific about portions."`
-2. **Combine** the analyzed items across all images:
-   - A sign + a plate photo → use the sign for item names (e.g., "breakfast sandwich: egg, sausage, roast tomato, English muffin") + the plate for additional items (sausage links, fruit bowl, OJ).
-   - Multiple plate angles → de-duplicate the same items.
-3. **Synthesize an `items[]` list** as if the user had described the meal in text. Now proceed to step 1 with the synthesized list.
-4. **In your breakdown reply (step 7)**, set `source: vision` and add a note like `📸 Identified from photo — tell me if any item's wrong.` so Sparsh can correct mis-identifications after the fact.
-
-**Critical:** Photo-input meals MUST still go through steps 1-7 (template match → nutrient lookup → log → breakdown). Do NOT save photo descriptions to the daily note's ## Notes section and skip the macro write — that loses tracking.
-
-### 1. Extract meal items + meal type
-
-Parse the user's input (text OR vision-synthesized list from step 0) into a structured form:
-- `items[]` — a list of strings, each one food item with quantity if specified
-  - "2 eggs and toast" → `["2 eggs", "1 slice toast"]`
-  - "chicken bowl at cafeteria" → `["chicken bowl"]` (single unknown item — template-match candidate)
-  - Brand shorthand should resolve to the user's default unless they specify otherwise. Example: **"fairlife" = Core Power 26g** in this vault unless the user says 42g / Elite / another flavor.
-- `meal_type` — one of `breakfast`, `lunch`, `dinner`, `snack`, `shake`. Infer from:
-  - Time of day (5–10 AM = breakfast; 11 AM–2 PM = lunch; 5–9 PM = dinner; otherwise snack)
-  - User's explicit word ("lunch was…" → lunch)
-  - If genuinely ambiguous, ask one short question before logging; otherwise infer and log.
-
-### 2. Resolve items against the PANTRY first (reuse — don't re-research)
-
-**Before any web/MCP lookup, check what Sparsh has already logged.** The pantry caches every item he's confirmed (his own numbers), so a repeat is instant and consistent. Make ONE call with all the items:
-
-```
-/usr/bin/python3 /home/hermes/.hermes/scripts/vault/food_pantry.py resolve --item "2 eggs" --item "fairlife" --item "..."
-```
-
-It returns JSON `{"hits": [...], "misses": [...]}`:
-- **hits** = already known. Reuse the returned macros directly (already scaled to the quantity you passed). No lookup. **Keep the quantity and unit in the item string exactly as he said it** (`"200 g rice"`, `"1 cup rice"`, `"2 eggs"`): the pantry stores each unit separately, so grams never answer cups, and a unit it has not seen for that food comes back as a miss (look it up; it is remembered in that unit from then on). A `"match":"fuzzy"` hit (e.g. "fairlife" → "Fairlife Core Power") is still reused — but surface it in the breakdown reply so he can catch a wrong match.
-- **misses** = genuinely new → only THESE go to the template check (2b) / MCP lookup (step 3).
-
-If the call returns `{"error": "pantry-unreadable"}` the food memory file is damaged: treat every item as a miss, log the meal as normal, and tell him in one line that the food memory needs fixing. Do NOT read `pantry.json` by hand — call the script. This one call replaces the dozen `search_food` lookups that used to run for a repeat meal.
-
-### 2b. Try fuzzy-match against saved templates (for whole-meal repeats)
-
-Read `07 - Health/Meal Templates/*.md`. For each, the frontmatter has `name`, `meal_type`, `items`, and macros.
-
-Fuzzy-match strategy (in priority order):
-1. **Exact name match.** User said "chicken bowl" and a template `chicken-bowl` exists → match.
-2. **Item-set overlap.** User's items ≥ 60% overlap with a template's items → strong match.
-3. **Semantic similarity.** User said "cafeteria breakfast" and a `cafeteria-breakfast-light` or `cafeteria-breakfast-heavy` template exists → present BOTH as candidates and let the user pick.
-
-If high-confidence single match → use the template's macros, skip the MCP lookup. Set `source: template:<name>`.
-
-If multiple plausible matches → ask user which one before proceeding.
-
-If no match → proceed to step 3.
-
-**Branded / packaged items:** if an official product nutrition page exists and the brand/product is identifiable (Vector, Lay's, fairlife, restaurant label, etc.), prefer that exact serving macro over a generic USDA proxy. Scale from the stated serving size. If the user later corrects the portion, recompute from the same exact product page instead of swapping to a different database entry.
-
-### 3. Look up macros — ONLY for the pantry misses
-
-**Only look up items the pantry didn't already resolve.** Accuracy matters, so genuinely-new items DO get a real lookup — but do it efficiently: **one good source per item**, not five searches chasing the same thing.
-
-**A NAMED restaurant or chain comes first (added 2026-11-16).** If he says where the food came from ("at a named grill", "from a burrito chain"), do ONE `web_search` for that place's published numbers BEFORE estimating anything: `"<restaurant> <dish> nutrition calories protein"`. Official pages and delivery-app listings (DoorDash, Uber Eats) usually publish calories and protein per item. Use those numbers and say so in the breakdown ("per the restaurant's listing: 45 g protein for the bowl"). If you only find a range or a protein figure, anchor your estimate to it instead of building one from generic ingredients: a chicken bowl was once estimated from generic chicken-breast weights at almost four times the protein the restaurant's own listing gives. If the search finds nothing, estimate, mark it `estimated`, and say the restaurant's numbers were not found. One search, not five.
-
-For each remaining MISS in `items[]`:
-1. Call `mcp_food_tracker.search_food(query=item)` — returns USDA matches with kcal + macros. **This is the only MCP tool you may call. See the Forbidden tools section above.**
-2. Use the best matching canonical entry. If the user gave a quantity (e.g. `2 eggs`), scale it.
-3. For composite / restaurant / cafeteria dishes, try the dish name first, then obvious component queries when the dish itself is too fuzzy (e.g. `pad kra prow pork`, `ground pork`, `fried egg`, `thai chicken wing`, `vegetable spring roll`). Prefer partial canonical coverage over pretending the whole plate is one guessed item.
-4. If a packaged snack/photo shows a readable nutrition label, use the label macros directly before doing any generic lookup. If the label is visible but blurry, prefer the brand/official product page next.
-5. If a sub-item still has no clean match or the query is too ambiguous, fall back to LLM-estimate for that sub-item only, mark `source: estimated`, and flag exactly which part was estimated in the breakdown reply.
-6. (Phase 2) `opennutrition.search_foods(query=item)` for the 300k DB — disabled in Phase 1.
-
-Sum the macros across items.
-
-See `references/portion-size-language-and-home-meals.md` for upward-bias estimation when Sparsh describes a meal as "full plate" / "filling" / "loaded" (especially home-cooked rice + legume combos). See `references/mixed-meal-lookup.md` for the lookup pattern and confirmation wording for mixed meals and packaged snacks. See `references/mexican-restaurant-photo-logging.md` for restaurant-photo handling (enchilada-plate restaurants, chips/salsa exclusions, and photo-first timing). See `references/mexican-office-bowl-photo.md` for an office Mexican bowl photo pattern, including visible beverage-can exclusion and conservative mixed-plate portioning. See `references/office-breakfast-photo-pattern.md` for cafeteria/office breakfast trays with waffles, bacon, eggs, and fruit bowls. See `references/retrospective-day-summary.md` for whole-day "yesterday I had…" recaps that should be bucketed once and logged against the implied date. See `references/travel-weekend-recap.md` for camping / road-trip / off-grid recaps that span multiple days and need per-day bucketing. See `references/branded-packaged-foods.md` for branded/packaged or chain products with an official nutrition page — prefer the official page over generic USDA matches and scale to the stated portion. See `references/date-correction-flow.md` for how to handle explicit date corrections and blank out the mistakenly assigned day when needed. See `references/compound-health-bundles.md` for messages that combine food, supplements, and water in one turn; split the domains and persist each via the right log before replying.
-
-### 3b. Duplicate / correction handling before confirmation
-
-If the user sends a second meal message within a few minutes that materially matches a meal already logged today, do **not** assume it is a fresh meal. Compare the new description/photo against the latest food-log entry:
-- If it looks like the same meal, ask whether it is a **correction** or an **addition**.
-- If the user included a new photo plus the same caption/food description, treat it as a likely correction check, not a new meal by default.
-- If the user explicitly says "log it again", "add another", or similar, proceed as a new entry.
-- If the user re-sends the meal from a different angle or as a follow-up image, default to *same meal* unless they explicitly frame it as an addition.
-
-This guard prevents duplicate counts when the user re-sends the same breakfast from a different angle or wants the estimate revised.
-
-If the user answers with a terse correction like "Nah only 1 meal" / "same meal" / "just one", treat that as a correction signal and do not create a second log.
-
-If the user corrects the *food itself* after a meal was already logged — e.g. "actually it was a grilled chicken sandwich, not a burger" — remove that meal (`undo-last-meal`, or `remove-meal --index N` when it is not the last one) and re-log the corrected version, so the totals are recomputed by the writer. Do **not** leave both versions in unless the user explicitly says it was an addition.
-
-If the user gives a partial portion correction instead of a full rewrite — e.g. "less rice", "only 2 gyozas", "skip the sauce", "remove the salad" — keep the unchanged items and revise only the named components. Re-run the estimate and confirmation with the updated portions rather than asking them to restate the whole meal.
-
-See `references/duplicate-correction-flow.md`, `references/photo-correction-confirmation.md`, `references/post-confirmation-correction.md`, `references/correction-after-estimate.md`, and `references/leftover-carry-over.md` for the session pattern.
-
-
-### 3c. Item names, partial portions, and other things in the same message
-
-**Item names are `<amount> <food>` and nothing else.** The name is what the food memory keys on, so keep it reusable: `"3 chicken leg pieces"`, `"0.5 chicken bowl"`, `"1 fairlife core power vanilla"`. Do NOT put notes in the name: no `(office)`, `(half)`, `x3`, `second half`, `~250g`. Put where it came from in `--source`. Amounts may be decimals or fractions (`0.5`, `1/2`, `half`).
-
-**Only log what he has eaten.** "I ate half, going to eat the other half later" means log HALF now (`0.5 <dish>`) and tell him the rest is not logged yet: "Logged the half you ate. Tell me when you have the rest." Never log food that has not been eaten, and never invent a time for it.
-
-**Times.** Pass `--time` only when he gave a time or it is obvious ("just had lunch" = now). When he recaps a whole day with no times, you may place meals at typical times so the day reads in order, but say so in one line: "Times are my guess since you didn't give any."
-
-**Supplements and water in a food message.** "Water with a supplement stirred in", "took my zinc pill" are not food. Log them with their own commands and include EVERY supplement he named:
-```
-/usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py vitamins --supplements "Zinc, Magnesium" [--date YYYY-MM-DD]
-/usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py water --ml 500 [--date YYYY-MM-DD]
-```
-(`water` takes `--ml` or `--liters`; there is no `--amount`.)
-
-### 4. Log immediately — NO confirmation gate
-
-**Do NOT show a `clarify` menu / "✓ Log · ✎ Edit · ✗ Cancel" / "press 1/2/3" prompt, and do NOT wait for approval.** Sparsh wants it logged right away, with the breakdown shown so he can eyeball it — and he'll tell you to fix it if it looks off. Confirmation is **reactive, not a gate**.
-
-So: resolve the macros (steps 1–3) → write it (step 5) → reply with the **per-item breakdown** (step 7). That's it.
-
-**Corrections are reactive.** If Sparsh follows up ("too much rice", "that was a small", "wrong, only one", "exclude the bacon", "that was for yesterday"), THEN fix it: `vault_log.py undo-last-meal` to pull the just-logged meal (it subtracts the macros), then re-log the corrected version. Two clean calls — never patch. If the meal to fix is NOT the last one logged that day, use `vault_log.py remove-meal --index N` (list them with `vault_log.py meals`) so the later meals stay untouched.
-
-**Only ask if genuinely ambiguous.** If you truly can't tell what the item is or roughly how much (and can't make a sensible estimate), ask ONE short plain-text question, then log. Do not ask just to double-check macros you're already reasonably confident about — that's the gate he doesn't want.
-
-### 5. Write to vault (as soon as the macros are resolved)
-
-**This is the ONLY persistence step. The MCP DB does not count as "logged" — only the vault does.**
-
-**Do the write with the deterministic vault writer — `vault_log.py`. Do NOT hand-edit the YAML** (no `patch` on frontmatter, no `python3 -c`, no heredocs, no `execute_code`): those trip Hermes' approval gate (so you'd nag Sparsh to "approve a command" for every meal), are hard-blocked in cron, and corrupt repeated `key:` lines. ONE command does BOTH writes below safely — it appends the Food Log section + re-sums its totals AND increments the daily-note macros:
-
-```
-/usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py food \
-  --meal-type <breakfast|lunch|dinner|snack|shake> \
-  --kcal <total_kcal> --protein <g> --carbs <g> --fat <g> \
-  --item "<item 1>|<kcal>|<protein>|<carbs>|<fat>" \
-  --item "<item 2>|<kcal>|<protein>|<carbs>|<fat>" \
-  --source "<pantry | template:name | mcp:food-tracker | estimated>" \
-  --coach \
-  [--time "1:30 PM"] [--date YYYY-MM-DD]
-```
-
-- `--kcal/--protein/--carbs/--fat` are the **confirmed meal totals** (they win over the items). The repeated `--item` flags give the per-item breakdown; **pass every item with its macros** — the script caches each one to the pantry, so next time it's an instant hit (this is how reuse builds up). Macros after the name are optional (`--item "guacamole"` is fine for a name-only line, but it won't cache).
-- **`--coach`** appends a 1-line pace/protein nudge from the day's real totals — always pass it; that's his post-log feedback. Relay the whole output verbatim.
-- `--time` defaults to now; `--date` defaults to today (Eastern) — pass it for retrospective / past-midnight logs.
-- It prints `✓ Logged …` + the coach line — **send that as your reply; don't recompute or pad it.**
-
-### 🚫 Speed rules (this skill used to take 60 tool calls for one meal — don't)
-- **Never** `read_file` the daily note or the food log, **never** `search_files` for them, **never** `patch` them, **never** `write_file` them, **never** `execute_code`. `vault_log` owns all of that. Reading/searching/patching the vault by hand is the #1 source of bloat.
-- **Never** use `execute_code` or `python3 -c` to add up macros — pass the `--item` numbers and let `vault_log` sum them, or add them yourself.
-- Don't re-run `search_food` on an item the pantry already resolved, and don't chase one item across multiple web searches. Pantry → at most one lookup per miss → write. That's it.
-
-**Corrections** ("less rice", "actually it was X", "wrong, only one serving"): don't hand-edit. Run `vault_log.py undo-last-meal` to remove the just-logged meal (it subtracts the macros too), then re-log the corrected version with the `food` command above. Two clean calls, no patching.
-
-The file formats below are **reference for what the script produces** — you don't hand-write them.
-
-**A. Append to today's food log:** `07 - Health/Food Log/<date>.md` (create if missing). Create the parent directory `07 - Health/Food Log/` first if it doesn't exist.
-
-File frontmatter (on creation):
-```yaml
----
-type: food-log
-date: YYYY-MM-DD
-total_kcal: 0
-total_protein_g: 0
-total_carbs_g: 0
-total_fat_g: 0
-last_updated: YYYY-MM-DD
----
-
-# Food Log — <Day Mon D, YYYY>
-```
-
-Append a section per meal:
-```markdown
-
-## <H:MM AM/PM> · <meal_type>
-
-**Items:**
-- <item 1>
-- <item 2>
-
-**Macros:** <kcal> kcal · <P>g protein · <C>g carbs · <F>g fat
-**Source:** <template:name | mcp:food-tracker | mcp:opennutrition | estimated>
-```
-
-After appending, recompute the file-level frontmatter totals (`total_kcal`, etc.) by summing all sections.
-
-**B. Update today's daily note frontmatter:** `04 - Daily Notes/<date>.md`.
-
-Read the current values of `kcal`, `protein_g`, `carbs_g`, `fat_g`. Add the new meal's macros. Write back.
-
-```yaml
-# before
-kcal: 1450
-protein_g: 88
-# after a 600 kcal / 35g P meal
-kcal: 2050
-protein_g: 123
-```
-
-If any field is null/empty, treat as 0 and replace with the new value.
-
-### 6. Suggest template creation (optional)
-
-If this meal was logged via `source: mcp:*` OR `source: estimated` (i.e., not from an existing template), and the items list looks like a recurring meal (e.g., user has logged a similar item-set ≥2 times in the past 14 days), prompt:
-
-```
-This looks like a recurring meal. Save as a template?
-[ ✓ Save as <suggested-name> ]  [ ✎ Rename ]  [ ✗ Skip ]
-```
-
-If saved, create `07 - Health/Meal Templates/<slug>.md` with the items, macros, meal_type, and `use_count: 1`. Subsequent matches bump `use_count` and refresh `last_used`.
-
-### 7. Reply — show the breakdown (how you calculated it)
-
-After the `vault_log` write, reply with the **per-item breakdown** so Sparsh can eyeball it, then the day's running total. Show your math — that's the point of skipping the confirm gate:
-
-```
-🍽️ Logged <meal_type> · <H:MM AM/PM>
-  • <item 1> — <X> kcal / <P>g P / <C>g C / <F>g F
-  • <item 2> — <X> kcal / <P>g P / <C>g C / <F>g F
-Total: <total kcal> kcal · <P>g protein · <C>g carbs · <F>g fat  (<source: pantry/mcp/estimated>)
-```
-
-Then relay `vault_log`'s own confirmation line verbatim (the `Today: <kcal>/2500 · <protein>/150g` running total + the `--coach` pace line) — don't recompute it.
-
-- Always list **every item with its macros** — that's the "how I calculated it" he wants, and lets him spot a wrong item/quantity and tell you to fix it.
-- If a target threshold was just crossed (e.g. protein hit 150g) → flag it: `🎯 Protein target hit.`
-
-## Vault-write conventions (follow obsidian-vault-write skill)
-
-- Date format `YYYY-MM-DD` always.
-- Eastern local time.
-- Read-modify-write on the daily note — preserve unrelated frontmatter and body content.
-- Food log file: append-only sections. Never reorder or delete prior entries.
-- Template files: created once, then incremented (`use_count`, `last_used`). Never overwrite the macros after creation without explicit user instruction.
-
-## Do NOT write a Log entry per meal
-
-The Food Log file and the daily note ARE the record. A `log_append.py` entry for every meal buried the vault log under four or five lines a day, so meal logs no longer go there. Only log a genuine correction to a PAST day (a meal moved to another date, a day's totals rebuilt):
-```bash
-python3 /home/hermes/.hermes/scripts/vault/log_append.py update "log-food" "<what was corrected, which date>"
-```
-
-## Pitfalls
-
-1. **Phantom logs.** Only log what he says he actually ATE. A plan ("going to get Chipotle"), a question ("how many calories in…?") or a menu photo with no "had this" is not a meal. When it clearly is a meal, log it straight away (step 4); there is no confirmation step.
-2. **MCP unavailable.** If `food-tracker` or `opennutrition` is down (timeout), fall back gracefully: estimate via LLM and clearly flag `source: estimated (MCP down)`. Do not block the log.
-3. **Duplicate-meal-same-time — now blocked by the writer, don't fight it.** `vault_log.py food` fingerprints each meal (type + item names + all four rounded macros + the `--time` you passed, if any) and refuses an identical one logged within 20 minutes, writing NOTHING and returning `"duplicate": true` with a `↩︎ Already logged…` message. Relay that message as-is; do not retry, do not re-log with a tweaked value to get around it, and do not `--force` on your own initiative. Only pass `--force` if Sparsh explicitly says it was a genuine second serving. This exists because compaction used to re-inject his verbatim message and the same meal got logged twice — he had to audit every log by hand and ask whether a meal had been logged twice.
-4. **Quantity ambiguity.** "Had eggs" — 1 egg? 2? 3? Default to 2 (typical breakfast portion) and show it in the breakdown so he can correct it.
-5. **Restaurant / cafeteria items.** No exact macros. Use LLM-estimate, flag clearly. Encourage saving as a template after a couple of logs to lock in a personal-baseline estimate.
-6. **Whole-day retrospective recaps.** If the user gives a past-day meal dump in one message (e.g. breakfast + dinner + snack from yesterday), bucket everything first, log each meal against the implied date with its own `--time`, and reply with ONE combined breakdown. Do not ask for confirmation per meal.
-
-6a. **Mixed off-grid weekend dumps.** When the message also includes sleep, workouts, travel, weather, or "why I wasn't tracking" context, still keep food logging focused on the eaten items and treat the extra context as inputs for the other specialized skills. Parse the food first, then let workout/sleep logs catch up from the same narrative if needed. Don't ask the user to restate the whole weekend in separate messages.
-
-6a. **Single retro meal / relative date phrasing.** If the user says "last night", "yesterday", "earlier today", or similar and the intended date is unambiguous from context, log against the implied local-date file rather than the current date. Preserve the user's relative phrasing in the meal header only when the exact clock time is unknown; otherwise convert to a normal time header for the food log and use the implied date for the daily-note update.
-
-6b. **Leftover / half-portion carry-over.** If the user says they ate the *other half* or *remaining half* of a meal already logged earlier, treat the new intake as a continuation of that same plate, not a fresh composition.
-- Reuse the earlier meal's item identity and scale the portion to the remaining fraction (usually 50%) unless the user says otherwise.
-- If the earlier meal was already logged today, update today's running totals from the same item breakdown; if it was logged on a prior day, mirror that prior estimate and halve it.
-- Do not ask the user to restate the full dish when the carry-over is explicit (e.g. "this is the second half").
-7. **Sum errors.** Always re-sum the food-log file totals after each meal append. Don't trust an incremental counter that could drift.
-8. **Duplicate / correction ambiguity (beyond the 20-min window).** The writer's fingerprint gate (pitfall 3) only covers a *recent* identical meal. If he re-sends a meal from earlier today — a new photo of the same plate, or the same item list hours later — the gate will NOT catch it, so ask whether it's a correction or an addition. If it's a correction, `undo-last-meal` then re-log; never double-count silently.
-9. **Buffet plate.** Treat as a meal with multiple items; ask user to describe roughly ("rice, paneer, salad, 2 rotis") rather than estimating from "cafeteria lunch" alone. Saved templates ("cafeteria-lunch-normal") are the way to make this fast.
-
-9b. **Correcting one meal out of several.** `undo-last-meal` only ever removes the END of the day's food log. To fix breakfast when lunch and dinner are already logged, do NOT undo backward through the later meals: run `vault_log.py meals --date <date>`, then `vault_log.py remove-meal --index N --date <date>` for the one that is wrong, and re-log just that meal with its original `--time`.
-
-10. **Wrong day / date rollover.** Always resolve against the live Eastern date before writing. If it is past midnight, log to the new date even when the conversation just referenced "today" or the prior meal.
-10b. **Explicit date corrections beat the current day.** If the user says a meal belongs to yesterday / another date, remove it from the wrong day (`remove-meal --index N --date <wrong date>`, which also subtracts it from that day's totals) and re-log it with `--date <right date>`. See `references/date-correction-flow.md`.
-11. **Frontmatter integer vs float.** kcal should be int. protein_g/carbs_g/fat_g should be int (round to nearest gram). water_l is float (1 decimal).
-12. **Time-only corrections.** If he later says the logged meal happened at a different time ("Lunch was at 2:30 pm"), remove that meal (`remove-meal --index N`) and re-log the SAME items and macros with `--time "2:30 PM"`. Do not change the macros unless the food itself changed, and do not leave both entries in.
-13. **Photo → notes-only anti-pattern (observed bug 2026-05-27).** When the user sends a photo with a brief caption ("Had this for breakfast"), the agent's lazy path is: call vision_analyze → save the description to the daily note's `## Notes` section → reply "Saved." → done. **THAT IS WRONG.** The macros never get written, week-summary stays empty, the failure-mode detection breaks. The correct path is: vision_analyze → synthesize items → run THIS skill end-to-end (template match → MCP search → clarify → write to BOTH Food Log file AND daily-note frontmatter `kcal`/`protein_g`/`carbs_g`/`fat_g`). The ## Notes section is for qualitative observations ("food felt heavy", "didn't like the dressing"), not the canonical macro record.
-20. **User-supplied photo reference in a correction.** If the user sends a photo in response to an estimate (e.g., "This is the nutrition sign for the pizza I had — use this instead of your guess"), the photo IS the correction authority. Ask them to read the key values aloud (calories, macros) or call `vision_analyze` immediately to extract them — do NOT re-estimate or ask a clarify menu. The photo is their evidence; trust it. Update the logged meal with the photo-sourced values and flag `source: photo-reference` in the log.
-
-21. **Vision-identified meals get template suggestions.** If a photo-logged meal looks recurring (cafeteria breakfast, regular lunch spot), the template-creation prompt in step 6 should fire more eagerly than for text-logged meals — recurring photographable meals are the strongest template candidates because the user has clear visual context to validate the template once.
-
-15. **Promised photo / incremental meal detail.** If the user says a photo is coming or keeps adding components to the same meal, keep the session open and consolidate into one estimate. Don't lock a partial text-only estimate unless they explicitly say to log the partial meal now.
-
-15b. **Upward bias for restaurant platter estimates.** When a user reports a chain restaurant meal by name without exact portion info (e.g., a shawarma chain's "chicken and rice platter with garlic and tzatziki"), bias the estimate UPWARD, not conservative. A "chicken and rice" read literally might be 530 cal (component sum), but the full platter with sauces and actual portions is typically 700–850 kcal. Include sauce macros in the estimate. Flag `source: estimated (full platter)` so the user can correct down if they ordered a smaller or lighter version. (Learned: underestimating pizza by 45% because I was too conservative on sauce/portion weight.)
-
-15c. **Portion-size language signals upward bias — home-cooked too.** When Sparsh describes a meal with language like "full plate", "filling meal", "heaping", or "loaded", these are NOT neutral descriptions — they signal a substantial serving, above baseline assumptions. Apply upward bias (30–50% portion bump) to home-cooked meals with this language, not just restaurants. Example: "full plate of rice with beans" is NOT "1 cup rice + ½ cup beans" (225 kcal estimate); it is "1.5 cups rice + 1 cup beans" (~640 kcal). Home-cooked rice + legume combos especially tend to be underestimated when component-wise logic is applied to casual serving descriptions. Estimate high first; if the user says the log feels too high after the fact ("that was less than I logged"), undo and re-log with the reduction. Do NOT ask for clarification before logging. See `references/portion-size-language-and-home-meals.md` for the detailed pattern and home-meal defaults. (Learned: a home-cooked rice + beans plate was corrected up roughly fourfold after an initial underestimate.)
-
-16. **Shared chips/salsa/condiments.** If chips, salsa, or table condiments are visible in a restaurant photo, do not count them unless the user explicitly says they ate them.
-17. **Conservative portion bias.** If the user says the estimate feels a little large but otherwise accurate, tighten the portion to the smaller plausible amount rather than re-anchoring at the midpoint. Keep the same food identity unless the user explicitly changes the item list.
-18. **Branded cereals / packaged items miss in MCP — don't chain queries, web-search.** Branded breakfast cereals (Vector, Honey Nut Cheerios, etc.) have ~0 MCP coverage. When MCP misses on a branded/packaged item, DON'T fire multiple MCP queries hoping for a hit — jump straight to `web_search "[Brand] [Product] nutrition facts"` for the official per-serving macros and scale to the stated portion. (Learned 2026-07-02.)
-19. **Vision vs. reported mismatch — ask, don't silently re-log.** If photo analysis returns item set A but the user says they ate item set B, do NOT silently undo + re-log. Ask once ("Photo showed [X], but you said [Y] — logging [Y]?") to surface a misidentification before it diverges the vault from reality. (Learned 2026-07-02.)
-20. **Full restaurant platters vs. component estimates.** When the user reports a chain restaurant meal like a shawarma chain's "chicken and rice platter with garlic and tzatziki sauces" (not just "chicken"), distinguish between: (a) a single component (e.g., just the chicken piece) and (b) the full platter (chicken + rice + sauces). MCP searches and copycat-recipe videos often estimate lower (530 cal) because they assume smaller portions or fewer sauce inclusions. **For a full platter with sauces, bias upward.** A full chicken + rice + sauces platter ≈ 700–850 kcal, 50–65g protein (not 530). Web-search the chain's official nutrition calculator or similar chains' published data first; if unavailable, default to upper-range estimates and flag `source: estimated (full platter)` so the user can correct down if they ordered a smaller version. (Learned 2026-07-14.)
+Log what he ate into the vault, fast and the same way every time. The vault is the only record: `vault_log.py food` (run through `terminal`) writes the Food Log file and the daily-note totals in one go. **If a reference file disagrees with this page (a confirmation step, a menu of buttons, extra searches, hand edits), this page wins.**
+
+## The flow, in order
+
+1. **Date.** The turn context gives it: `[Current date — America/New_York] Today = YYYY-MM-DD …` plus recent days. Use that string. Never run `date`, never guess.
+2. **Items.** Split the message into meals, and each meal into items named `<amount> <food>` and nothing else: `"3 chicken leg pieces"`, `"0.5 chicken bowl"`, `"1 protein shake"`. No notes in the name (no `(office)`, `(half)`, `x3`, `~250g`); where it came from goes in `--source`. Meal type is `breakfast`, `lunch`, `dinner`, `snack` or `shake`: use his word, else the time of day (5–10 AM breakfast, 11 AM–2 PM lunch, 5–9 PM dinner, otherwise snack). If he taps "🍽️ Log meal" with nothing else, ask what he ate.
+3. **Pantry first, ONE call for every item in the message:**
+   ```
+   /usr/bin/python3 /home/hermes/.hermes/scripts/vault/food_pantry.py resolve --item "2 eggs" --item "1 protein shake" --item "..."
+   ```
+   `hits` are his own confirmed numbers, already scaled: reuse them. Keep the unit he said (`200 g rice` and `1 cup rice` are stored separately). A `"match":"fuzzy"` hit is still used, but name it in the reply so he can catch a wrong match; a fuzzy hit whose matched name is a different place, brand or size from what he said is a miss, not a hit. `misses` go to step 4. `{"error": "pantry-unreadable"}`: treat everything as a miss, log normally, tell him in one line. Never read `pantry.json` by hand.
+4. **Look up ONLY the pantry misses, at most one lookup per miss.** Anything the pantry resolved is settled, including restaurant dishes: do not search for it again.
+   - A readable nutrition label in a photo beats any lookup: use its numbers.
+   - A miss that is a named restaurant, chain or branded product: ONE `web_search` for its published numbers (`"<place> <dish> nutrition calories protein"`), use them, and say so. If the search gives only part of the numbers (calories only, a range, a protein figure), anchor your estimate to that figure; never rebuild the dish from generic ingredients (a bowl was once estimated from generic chicken-breast weights at almost four times the protein its restaurant lists).
+   - Any other miss: the `mcp_food_tracker.search_food` tool with `query=<item>`. It is a tool, not a Python module: never import it or call it from `terminal`. For a composite dish with no clean match, look up its obvious components (the one exception to one lookup per miss; at most three).
+   - If that lookup does not give numbers, estimate that item, mark it `estimated`, and say which part was estimated. Do not run more searches, open nutrition PDFs or read cached pages for the same item. Pantry, then one lookup per miss, then write.
+5. **Write. One `terminal` call for the whole message.** One command per meal, chained with `&&` when the message holds several meals, with any supplement and water commands in the same chain:
+   ```
+   /usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py food \
+     --meal-type <breakfast|lunch|dinner|snack|shake> \
+     --kcal <total> --protein <g> --carbs <g> --fat <g> \
+     --item "<amount food>|<kcal>|<protein>|<carbs>|<fat>" \
+     --item "<amount food>|<kcal>|<protein>|<carbs>|<fat>" \
+     --source "<pantry | template:name | mcp:food-tracker | web:<place> | vision | estimated>" \
+     --coach [--time "1:30 PM"] [--date YYYY-MM-DD]
+   ```
+   - Pass every item with its macros (that is what fills the pantry for next time). The totals you pass win over the items.
+   - **Times.** One meal eaten just now: leave `--time` off. **When one message holds several meals, give each its own `--time`**: the time he said, else a typical time for that meal, and say in one line that the times are your guess. Never let two meals in one chain default to now: they would all be stamped the same minute, and two identical ones (two coffees, two shakes) would be treated as one.
+   - `--date` defaults to today; pass it for any other day. Pass `--coach` for today's meals.
+   - Supplements and water are not food; they have their own commands (include every supplement he named):
+     ```
+     /usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py vitamins --supplements "Zinc, Magnesium" [--date YYYY-MM-DD]
+     /usr/bin/python3 /home/hermes/.hermes/scripts/vault/vault_log.py water --ml 500 [--date YYYY-MM-DD]
+     ```
+     (`water` takes `--ml` or `--liters`. There is no `--amount`. A glass with no amount given = 500 ml.)
+   - **If the chain stops partway** (an error, not a `↩︎` line), the commands before it are already written. Fix and re-run only the ones that did not print their `✓` / `💧` / `💊` line. Water is not de-duplicated, so never re-run a water command that already printed.
+6. **Reply** with the per-item breakdown, then relay `vault_log`'s own running-total and coach line as printed (for several meals, only the last one):
+   ```
+   🍽️ Logged <meal_type> · <H:MM AM/PM>
+     • <item> — <kcal> kcal / <P>g P / <C>g C / <F>g F
+   Total: <kcal> kcal · <P>g protein · <C>g carbs · <F>g fat  (<source>)
+   ```
+   For several meals, one combined reply. Keep your working short: do the arithmetic yourself, don't narrate it, and never use `execute_code` or `python3 -c` to add up macros.
+
+## Rules
+
+- **No confirmation step.** Log, then show the breakdown; he corrects afterwards if it is off. Ask ONE short plain question only when you cannot tell what the item is or roughly how much. Never a `clarify` menu. If he says a photo or more detail is coming, wait for it and log once.
+- **Only log what he has eaten.** A plan, a question, or a photo of a menu or sign alone is not a meal. A photo of a plate or packaged food with no caption counts as eaten: log it with the meal type from the time of day and say so. "I ate half, going to eat the other half later" (or "gonna eat the other half as well") means log HALF now (`0.5 <dish>`) and tell him the rest is not logged yet: "Logged the half you ate. Tell me when you have the rest." Never log food that has not been eaten, and never invent a time for it. When he later says he ate the other half, log the same dish at the remaining fraction, reusing the earlier numbers.
+- **The only way food reaches the vault is `vault_log.py`.** Do not `patch`, `write_file`, `execute_code` or `python3 -c` the daily note, the Food Log or the pantry; a guard rejects it. To see a day, use `vault_log.py meals --date <date>` (index, time, type, kcal, protein). Do not read or search the vault files otherwise, with one exception under Corrections.
+- **Only one MCP tool: `search_food`.** Never `log_food`, `get_daily_log`, `get_summary`, `set_goals` or `delete_entry`: they use a separate database that drifts from the vault.
+- **Corrections.** Last meal of that day: `vault_log.py undo-last-meal [--date <date>]`, then re-log it with its original `--time`. Any other meal: `vault_log.py meals --date <date>`, then `vault_log.py remove-meal --index N --date <date>`, then re-log just that meal with its original `--time`. A partial change ("less rice", "only 2") keeps the other items and recomputes from the same source. A time-only change re-logs the same macros with the new `--time`. Wrong day: remove it there and re-log with `--date`. **If the meal's items and macros are not in this conversation, read that day's Food Log file once (read-only) to get them before removing it; that is the one allowed read.**
+- **Duplicates.** The writer refuses an identical meal within 20 minutes and prints `↩︎ Already logged…`: relay that, do not retry or tweak values. Use `--force`, or distinct `--time` values, only when he himself reported the repeat (two coffees, a real second serving). If he re-sends a meal from earlier today (same items, or a new photo of the same plate), ask whether it is a correction or an addition; "same meal" or "only one" means no second log.
+- **Past days.** "Yesterday", "last night", a whole-day recap: bucket into meals and log each against the implied date with its own `--time`, one combined reply. Past midnight, "today" is the new date.
+- **Estimating.**
+  - "Had eggs" = 2. A brand name on its own means his usual product from that brand, and a drink he always takes the same way uses that default, unless he says otherwise.
+  - A named restaurant platter with sauces: use the full platter, not the bare components, and lean high (a shawarma-chain chicken and rice platter is roughly 700–850 kcal, not 530). Mark it `estimated (full platter)`.
+  - "Full plate", "loaded", "heaping", "filling": a large serving, about 30–50% above a standard one, home-cooked included. Do not ask first.
+  - Shared chips, salsa or table condiments in a photo are not counted unless he says he ate them.
+  - If he says an estimate feels a bit large, move to the smaller plausible amount; keep the same foods.
+  - Food lookup tool down: estimate, mark `estimated (MCP down)`, do not block the log.
+- **Numbers.** kcal, protein, carbs and fat are whole numbers; water is litres to one decimal.
+- **No vault log entry per meal.** Only for a correction to a past day: `/usr/bin/python3 /home/hermes/.hermes/scripts/vault/log_append.py update "log-food" "<what was corrected, which date>"`.
+- A threshold just crossed (protein reached 150 g): say so in one line.
+
+## Read a reference only when it applies
+
+Load with `skill_view("log-food", "references/<file>")`. They hold detail and history; where one asks for a confirmation step, a button menu, extra searches or a hand edit, follow this page.
+
+| When | File |
+|---|---|
+| The message has a photo | `photo-input.md` (call `vision_analyze` on each image first, then this flow; never save a photo meal as notes only) |
+| He names a meal, not its items ("the usual", "cafeteria breakfast", "my chicken bowl"), and the pantry misses it | `meal-templates.md` |
+| A correction that the rules above do not settle | `pitfalls-full.md`, `duplicate-correction-flow.md`, `meal-type-correction-flow.md` |
+| A recap covering several days or a trip | `travel-weekend-recap.md` |
+| A branded or packaged product | `branded-packaged-foods.md` |
+| Portion wording you are unsure how to size | `portion-size-language-and-home-meals.md` |
+| What the files on disk look like | `file-formats.md` |
+
+Do **not** use this skill for plain water (`log-water`), supplements with no food (`log-vitamins`), listing saved templates (the `meal-templates` skill), or notes about food he has not eaten (those go in the daily note's Notes via `obsidian-vault-write`).

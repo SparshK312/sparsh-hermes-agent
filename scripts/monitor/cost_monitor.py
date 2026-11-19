@@ -41,7 +41,10 @@ TELEGRAM_TARGET = "telegram"  # home channel
 # Multi-Model & Dashboard
 # Plan). Daily catches a same-day loop; MTD warns past half the target and escalates just
 # under the ceiling. Raise these if steady-state genuinely rises.
-DAILY_LIMIT = 2.0
+# 2026-11-18: 2.0 -> 3.0. Once he started using the chat daily, an ordinary day of logging
+# (three sessions, about $1 each at most) landed at $2.05 and $2.15 and the "spike" alert
+# fired two nights running. $3 is above a normal busy day and still under the $5 hard stop.
+DAILY_LIMIT = 3.0
 # The hard ceilings live in plugins/spend-guard (DAILY_HARD_USD / MONTHLY_HARD_USD); repeated here
 # only so the cost log can print them. test_monitors pins the two files to the same numbers.
 DAILY_HARD = 5.0
@@ -293,8 +296,9 @@ def main():
     if daily > DAILY_LIMIT and "spike" not in state["daily"].get(day_key, []):
         if send("⚠️ Hermes daily spend spike",
                 f"Today's estimated Anthropic spend is ${daily:.2f} "
-                f"(alert at ${DAILY_LIMIT:.0f}). Steady-state is ~$0.20/day — "
-                f"check for a stuck/looping session."):
+                f"(alert at ${DAILY_LIMIT:.0f}; chat pauses at ${DAILY_HARD:.0f}). A normal day is "
+                f"about $0.50 with no chat and up to about $2 with a few logging sessions. "
+                f"The Cost Report in the vault shows which session it was."):
             state["daily"].setdefault(day_key, []).append("spike")
             fired.append("daily-spike")
 
